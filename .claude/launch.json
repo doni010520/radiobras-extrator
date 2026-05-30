@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "radiobras-web",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-X", "utf8", "app.py"],
+      "port": 5000
+    }
+  ]
+}
