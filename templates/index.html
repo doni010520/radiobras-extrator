@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RADIOBRAS · Extrator de Pacientes</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Karla:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #070d1a;
+      --surface:   #0e1625;
+      --border:    #1e2d45;
+      --border-hi: #2a4063;
+      --text:      #c8d8ed;
+      --muted:     #4a6080;
+      --teal:      #00e5c3;
+      --teal-dim:  #00a38b;
+      --teal-glow: rgba(0,229,195,.12);
+      --red:       #ff4d6d;
+      --green:     #00e5a0;
+      --font-head: 'Syne', sans-serif;
+      --font-body: 'Karla', sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    html, body {
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    /* ── grid texture ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 48px 48px;
+      opacity: .25;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── teal radial glow ── */
+    body::after {
+      content: '';
+      position: fixed;
+      top: -20vh;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 70vw;
+      height: 60vh;
+      background: radial-gradient(ellipse, rgba(0,229,195,.06) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .page {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 56px 24px 80px;
+    }
+
+    /* ── header ── */
+    header {
+      width: 100%;
+      max-width: 600px;
+      margin-bottom: 48px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .badge {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+      color: var(--teal);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .badge::before {
+      content: '';
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 8px var(--teal);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: .4; }
+    }
+
+    h1 {
+      font-family: var(--font-head);
+      font-size: clamp(26px, 5vw, 36px);
+      font-weight: 800;
+      color: #e8f4ff;
+      letter-spacing: -.02em;
+      line-height: 1.15;
+    }
+    h1 span { color: var(--teal); }
+
+    .subtitle {
+      font-size: 13px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      letter-spacing: .04em;
+    }
+
+    /* ── card ── */
+    .card {
+      width: 100%;
+      max-width: 600px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .card-section {
+      padding: 28px 32px;
+      border-bottom: 1px solid var(--border);
+    }
+    .card-section:last-child { border-bottom: none; }
+
+    .section-label {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 16px;
+    }
+
+    /* ── date range ── */
+    .date-row {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 12px;
+    }
+    .date-sep {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    input[type="date"] {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+      color-scheme: dark;
+    }
+    input[type="date"]:focus {
+      border-color: var(--teal-dim);
+      box-shadow: 0 0 0 3px var(--teal-glow);
+    }
+
+    /* ── checkboxes ── */
+    .check-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .check-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+      user-select: none;
+    }
+    .check-item:hover { border-color: var(--border-hi); }
+    .check-item input[type="checkbox"] { display: none; }
+    .check-item.checked {
+      border-color: var(--teal-dim);
+      background: rgba(0,229,195,.05);
+    }
+
+    .check-box {
+      width: 16px; height: 16px;
+      border: 1.5px solid var(--border-hi);
+      border-radius: 4px;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color .15s, background .15s;
+    }
+    .checked .check-box {
+      border-color: var(--teal);
+      background: var(--teal);
+    }
+    .check-box svg { display: none; }
+    .checked .check-box svg { display: block; }
+
+    .check-label {
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.3;
+    }
+    .check-label small {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+    }
+
+    /* ── seg pills ── */
+    .seg-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .seg-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+      user-select: none;
+    }
+    .seg-pill input[type="checkbox"] { display: none; }
+    .seg-pill:hover { border-color: var(--border-hi); }
+    .seg-pill.checked {
+      border-color: var(--teal-dim);
+      background: rgba(0,229,195,.07);
+      color: var(--teal);
+    }
+    .seg-pill span {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: .06em;
+    }
+    .seg-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+      transition: background .15s;
+    }
+    .seg-pill.checked .seg-dot { background: var(--teal); }
+
+    /* ── footer actions ── */
+    .card-footer {
+      padding: 24px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      border-top: 1px solid var(--border);
+    }
+    .meta-info {
+      font-size: 12px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+    }
+
+    .btn-gerar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 28px;
+      background: var(--teal);
+      color: #040c15;
+      border: none;
+      border-radius: 8px;
+      font-family: var(--font-head);
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: .02em;
+      cursor: pointer;
+      transition: background .2s, transform .1s, box-shadow .2s;
+      box-shadow: 0 0 0 0 var(--teal-glow);
+    }
+    .btn-gerar:hover {
+      background: #00f5d4;
+      box-shadow: 0 0 20px var(--teal-glow);
+    }
+    .btn-gerar:active { transform: scale(.97); }
+    .btn-gerar:disabled {
+      background: var(--border);
+      color: var(--muted);
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    .btn-icon { font-size: 16px; }
+
+    /* ── overlay ── */
+    .overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: rgba(7,13,26,.88);
+      backdrop-filter: blur(6px);
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 32px;
+    }
+    .overlay.active { display: flex; }
+
+    .spinner-wrap {
+      position: relative;
+      width: 64px; height: 64px;
+    }
+    .spinner {
+      width: 64px; height: 64px;
+      border: 2px solid var(--border);
+      border-top-color: var(--teal);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    .spinner-inner {
+      position: absolute;
+      top: 10px; left: 10px;
+      width: 44px; height: 44px;
+      border: 1.5px solid var(--border);
+      border-bottom-color: var(--teal-dim);
+      border-radius: 50%;
+      animation: spin 1.5s linear infinite reverse;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .overlay-text {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .overlay-step {
+      font-family: var(--font-head);
+      font-size: 18px;
+      font-weight: 700;
+      color: #e8f4ff;
+      transition: opacity .4s;
+    }
+    .overlay-detail {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--teal);
+      letter-spacing: .08em;
+    }
+    .overlay-timer {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* ── error / success toast ── */
+    .toast {
+      display: none;
+      position: fixed;
+      bottom: 28px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 200;
+      padding: 14px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-family: var(--font-mono);
+      min-width: 320px;
+      text-align: center;
+      animation: slideUp .3s ease;
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateX(-50%) translateY(16px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+    .toast.error  { background: #2a0d14; border: 1px solid var(--red); color: var(--red); display: block; }
+    .toast.success{ background: #0a2218; border: 1px solid var(--green); color: var(--green); display: block; }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <div class="badge">SmartRIS · Admin Reports</div>
+    <h1>Pacientes <span>Analítico</span></h1>
+    <p class="subtitle">radiobras.smartris.com.br / admin_reports</p>
+  </header>
+
+  <div class="card">
+
+    <!-- PERÍODO -->
+    <div class="card-section">
+      <div class="section-label">Período</div>
+      <div class="date-row">
+        <div class="field">
+          <label>Início</label>
+          <input type="date" id="date_from" name="date_from" value="2026-05-28" />
+        </div>
+        <div class="date-sep">→</div>
+        <div class="field">
+          <label>Fim</label>
+          <input type="date" id="date_to" name="date_to" value="2026-05-28" />
+        </div>
+      </div>
+    </div>
+
+    <!-- CONVÊNIOS -->
+    <div class="card-section">
+      <div class="section-label">Convênios</div>
+      <div class="check-grid" id="convenios-grid">
+        {% for conv in convenios %}
+        <label class="check-item checked">
+          <input type="checkbox" name="convenios" value="{{ conv }}" checked />
+          <span class="check-box">
+            <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
+              <path d="M1 3.5L3.8 6.5L9 1" stroke="#040c15" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </span>
+          <span class="check-label">
+            {{ conv.split(' - ')[0] }}
+            <small>{{ conv.split(' - ')[1] if ' - ' in conv else '' }}</small>
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- SEGMENTOS -->
+    <div class="card-section">
+      <div class="section-label">Segmentos</div>
+      <div class="seg-row" id="seg-row">
+        {% for seg in segmentos %}
+        <label class="seg-pill checked">
+          <input type="checkbox" name="segmentos" value="{{ seg }}" checked />
+          <span class="seg-dot"></span>
+          <span>{{ seg }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- FOOTER -->
+    <div class="card-footer">
+      <span class="meta-info" id="meta-info">4 convênios · 4 segmentos</span>
+      <button class="btn-gerar" id="btn-gerar" type="button">
+        <span class="btn-icon">⬇</span>
+        Gerar Relatório
+      </button>
+    </div>
+
+  </div><!-- /card -->
+</div><!-- /page -->
+
+<!-- OVERLAY DE CARREGAMENTO -->
+<div class="overlay" id="overlay">
+  <div class="spinner-wrap">
+    <div class="spinner"></div>
+    <div class="spinner-inner"></div>
+  </div>
+  <div class="overlay-text">
+    <div class="overlay-step" id="ov-step">Conectando ao SmartRIS…</div>
+    <div class="overlay-detail" id="ov-detail">aguardando resposta do servidor</div>
+    <div class="overlay-timer" id="ov-timer">0s</div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+  // ── toggle check-item ──
+  document.querySelectorAll('.check-item, .seg-pill').forEach(label => {
+    label.addEventListener('click', () => {
+      const cb = label.querySelector('input[type="checkbox"]');
+      cb.checked = !cb.checked;
+      label.classList.toggle('checked', cb.checked);
+      updateMeta();
+    });
+    // Prevenir duplo toggle do clique no input
+    label.querySelector('input').addEventListener('click', e => e.stopPropagation());
+  });
+
+  function updateMeta() {
+    const nc = document.querySelectorAll('#convenios-grid .check-item.checked').length;
+    const ns = document.querySelectorAll('#seg-row .seg-pill.checked').length;
+    document.getElementById('meta-info').textContent = `${nc} convênio${nc!==1?'s':''} · ${ns} segmento${ns!==1?'s':''}`;
+  }
+
+  // ── loading steps ──
+  const steps = [
+    { step: 'Conectando ao SmartRIS…',      detail: 'iniciando browser headless',       t: 0   },
+    { step: 'Autenticando sessão…',          detail: 'login com credenciais configuradas', t: 8000 },
+    { step: 'Carregando filtros…',           detail: 'lendo tokens de convênio/segmento', t: 18000 },
+    { step: 'Gerando relatório…',            detail: 'POST admin_reports · aguardando…',  t: 32000 },
+    { step: 'Preparando arquivo…',           detail: 'convertendo tabela → Excel (.xlsx)', t: 50000 },
+  ];
+
+  let timerInterval, stepTimeouts = [], elapsed = 0;
+
+  function startOverlay() {
+    document.getElementById('overlay').classList.add('active');
+    elapsed = 0;
+    timerInterval = setInterval(() => {
+      elapsed++;
+      document.getElementById('ov-timer').textContent = `${elapsed}s`;
+    }, 1000);
+    steps.forEach(({ step, detail, t }) => {
+      const id = setTimeout(() => {
+        document.getElementById('ov-step').textContent = step;
+        document.getElementById('ov-detail').textContent = detail;
+      }, t);
+      stepTimeouts.push(id);
+    });
+  }
+
+  function stopOverlay() {
+    document.getElementById('overlay').classList.remove('active');
+    clearInterval(timerInterval);
+    stepTimeouts.forEach(clearTimeout);
+    stepTimeouts = [];
+  }
+
+  function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `toast ${type}`;
+    setTimeout(() => { t.className = 'toast'; }, 6000);
+  }
+
+  // ── form submit ──
+  document.getElementById('btn-gerar').addEventListener('click', async () => {
+    const dateFrom = document.getElementById('date_from').value;
+    const dateTo   = document.getElementById('date_to').value;
+
+    if (!dateFrom || !dateTo) { showToast('Informe o período.', 'error'); return; }
+
+    const selConv = [...document.querySelectorAll('#convenios-grid .check-item.checked input')].map(i => i.value);
+    const selSeg  = [...document.querySelectorAll('#seg-row .seg-pill.checked input')].map(i => i.value);
+
+    if (!selConv.length) { showToast('Selecione ao menos um convênio.', 'error'); return; }
+    if (!selSeg.length)  { showToast('Selecione ao menos um segmento.', 'error'); return; }
+
+    // Converter yyyy-mm-dd → dd/mm/yyyy
+    const fmt = d => d.split('-').reverse().join('/');
+
+    const body = new FormData();
+    body.append('date_from', fmt(dateFrom));
+    body.append('date_to',   fmt(dateTo));
+    selConv.forEach(v => body.append('convenios', v));
+    selSeg.forEach(v  => body.append('segmentos', v));
+
+    document.getElementById('btn-gerar').disabled = true;
+    startOverlay();
+
+    try {
+      const resp = await fetch('/gerar', { method: 'POST', body });
+
+      stopOverlay();
+      document.getElementById('btn-gerar').disabled = false;
+
+      const ct = resp.headers.get('Content-Type') || '';
+
+      if (ct.includes('json')) {
+        const data = await resp.json();
+        if (data.error)   showToast('Erro: ' + data.error, 'error');
+        if (data.warning) showToast(data.warning, 'error');
+      } else {
+        // Arquivo recebido — disparar download
+        const blob = await resp.blob();
+        const cd = resp.headers.get('Content-Disposition') || '';
+        const nameMatch = cd.match(/filename="?([^"]+)"?/);
+        const filename = nameMatch ? nameMatch[1] : 'relatorio.xlsx';
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast(`✓ ${filename} baixado com sucesso`, 'success');
+      }
+    } catch (err) {
+      stopOverlay();
+      document.getElementById('btn-gerar').disabled = false;
+      showToast('Erro de rede: ' + err.message, 'error');
+    }
+  });
+</script>
+</body>
+</html>
