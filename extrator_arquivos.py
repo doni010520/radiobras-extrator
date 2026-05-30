@@ -112,43 +112,11 @@ def _is_logged_out(page) -> bool:
 
 # ── Worklist ──────────────────────────────────────────────────────────────────
 
-def listar_worklist_dia(page, data: str) -> list:
-    """
-    POST /ris/reports_list/get_list via JS fetch (mantem cookies de sessao).
-    data: 'DD/MM/YYYY'
-    Retorna: [{accession, nome, rows_html: [str]}, ...]
-    """
-    dt_inicio = f"{data} 00:00:00"
-    dt_fim = f"{data} 23:59:59"
-
-    raw_html = page.evaluate(
-        """async ([inicio, fim]) => {
-            const body = new URLSearchParams({
-                'busca-por': 'name',
-                'filtro[nome]': '',
-                'filtro[exames]': 'todos',
-                'filtro[tipo_data]': 'study_datetime',
-                'optionsRadios': 'entre',
-                'filtro_data_inicio': inicio,
-                'filtro_data_fim': fim,
-            });
-            const r = await fetch('/ris/reports_list/get_list', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: body.toString(),
-                credentials: 'include'
-            });
-            return await r.text();
-        }""",
-        [dt_inicio, dt_fim],
-    )
-
+def _parse_worklist_html(raw_html: str, by_acc: dict) -> None:
+    """Parseia HTML da worklist e acumula em by_acc (mutação in-place)."""
     soup = BeautifulSoup(raw_html, "lxml")
-    by_acc: dict = {}
-
     for tr in soup.find_all("tr"):
         h = str(tr)
-        # Accession: 8 digitos comecando com 40 (ex.: 40322253)
         acc_m = re.search(r"\b(4\d{7})\b", h)
         if not acc_m:
             continue
@@ -168,7 +136,51 @@ def listar_worklist_dia(page, data: str) -> list:
             by_acc[acc] = {"accession": acc, "nome": nome or acc, "rows_html": []}
         if nome and len(nome) > len(by_acc[acc]["nome"]):
             by_acc[acc]["nome"] = nome
-        by_acc[acc]["rows_html"].append(h)
+        # Evitar duplicar a mesma linha HTML
+        if h not in by_acc[acc]["rows_html"]:
+            by_acc[acc]["rows_html"].append(h)
+
+
+def listar_worklist_dia(page, data: str) -> list:
+    """
+    POST /ris/reports_list/get_list via JS fetch (mantem cookies de sessao).
+    Faz duas queries — study_datetime e realized — e merge os resultados.
+    Isso cobre o caso em que o relatorio analitico usa datetype=realized
+    mas o study_datetime do exame e de outro dia.
+    data: 'DD/MM/YYYY'
+    Retorna: [{accession, nome, rows_html: [str]}, ...]
+    """
+    dt_inicio = f"{data} 00:00:00"
+    dt_fim = f"{data} 23:59:59"
+
+    # Query JS que aceita tipo_data como parametro
+    _JS = """async ([inicio, fim, tipo]) => {
+        const body = new URLSearchParams({
+            'busca-por': 'name',
+            'filtro[nome]': '',
+            'filtro[exames]': 'todos',
+            'filtro[tipo_data]': tipo,
+            'optionsRadios': 'entre',
+            'filtro_data_inicio': inicio,
+            'filtro_data_fim': fim,
+        });
+        const r = await fetch('/ris/reports_list/get_list', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: body.toString(),
+            credentials: 'include'
+        });
+        return await r.text();
+    }"""
+
+    by_acc: dict = {}
+
+    for tipo in ("study_datetime", "realized"):
+        try:
+            raw_html = page.evaluate(_JS, [dt_inicio, dt_fim, tipo])
+            _parse_worklist_html(raw_html, by_acc)
+        except Exception as e:
+            print(f"   [worklist] falha com tipo={tipo}: {e}")
 
     return list(by_acc.values())
 
