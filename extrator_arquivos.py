@@ -16,6 +16,7 @@ from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
+from PIL import Image
 from playwright.sync_api import sync_playwright
 
 from extrator_pacientes_analitico import (
@@ -31,6 +32,10 @@ BATCH_SIZE = 10
 POPUP_WAIT_MS = 10000
 MAX_RETRIES = 2
 FORCE = False
+# Imagens entregaveis sao de alta resolucao (min(w,h) >= 3024 nos dados observados);
+# renders 3D MODELO DIGITAL sao sempre 1920x1080 (min=1080). Descartar abaixo deste
+# limiar elimina os renders 3D de forma deterministica (gap 1920 <-> 3024).
+MIN_DIM_ENTREGAVEL = 2000
 
 EXAME_KEYWORDS = [
     "PANORAMICA", "TELERRADIOGRAFIA", "DOCUMENTACAO", "CEFALOMETR",
@@ -258,11 +263,23 @@ def extrair_tokens(row_html: str) -> dict:
 
 # ── Download de imagens ───────────────────────────────────────────────────────
 
-def baixar_imagens(page, ctx, study_id: str, schedule_id: str, out_dir: str) -> dict:
+def baixar_imagens(
+    page,
+    ctx,
+    study_id: str,
+    schedule_id: str,
+    out_dir: str,
+    seen_hashes: set,
+    start_n: int,
+) -> dict:
     """
     Porta _entrega.py: intercepta viewer/u/image, abre popup reports_doc,
-    salva so as imagens do grupo DOCUMENTACAO COMPLETA.
-    Retorna: {qtd, arquivos, pendencias}
+    salva so as imagens entregaveis do grupo DOCUMENTACAO COMPLETA.
+
+    seen_hashes: set compartilhado no escopo do paciente (dedup global por conteudo).
+    start_n: contador inicial (continua a numeracao ENTREGA_N entre chamadas).
+    Filtra renders 3D por resolucao (min(w,h) < MIN_DIM_ENTREGAVEL).
+    Retorna: {qtd, arquivos, pendencias, next_n}
     """
     captured: list = []  # [(tail, body)]
     pendencias: list = []
@@ -307,7 +324,10 @@ def baixar_imagens(page, ctx, study_id: str, schedule_id: str, out_dir: str) -> 
 
         if not deliver_tails:
             pendencias.append("sem grupo DOCUMENTACAO COMPLETA")
-            return {"qtd": 0, "arquivos": [], "pendencias": pendencias}
+            return {
+                "qtd": 0, "arquivos": [], "pendencias": pendencias,
+                "next_n": start_n, "had_group": False,
+            }
 
         # Abrir popup (form POST target=docpop) para disparar carregamento das imagens
         with ctx.expect_page() as pinfo:
@@ -343,26 +363,38 @@ def baixar_imagens(page, ctx, study_id: str, schedule_id: str, out_dir: str) -> 
     finally:
         ctx.remove_listener("response", on_resp)
 
-    # Salvar imagens entregaveis com dedup por hash
-    seen: set = set()
-    n = 0
+    # Salvar imagens entregaveis: dedup global por conteudo + filtro de resolucao
+    n = start_n
     arquivos: list = []
+    salvos = 0
     for tail, body in captured:
-        if tail in deliver_tails:
-            h = hashlib.md5(body).hexdigest()
-            if h in seen:
-                continue
-            seen.add(h)
-            n += 1
-            fname = f"ENTREGA_{study_id[-8:]}_{n}.jpg"
-            with open(os.path.join(out_dir, fname), "wb") as f:
-                f.write(body)
-            arquivos.append(fname)
+        if tail not in deliver_tails:
+            continue
+        h = hashlib.md5(body).hexdigest()
+        if h in seen_hashes:
+            continue
+        # Filtro deterministico: descartar renders 3D (baixa resolucao)
+        try:
+            w, hgt = Image.open(io.BytesIO(body)).size
+        except Exception:
+            continue  # nao e imagem valida
+        if min(w, hgt) < MIN_DIM_ENTREGAVEL:
+            continue
+        seen_hashes.add(h)
+        n += 1
+        salvos += 1
+        fname = f"ENTREGA_{n}.jpg"
+        with open(os.path.join(out_dir, fname), "wb") as f:
+            f.write(body)
+        arquivos.append(fname)
 
-    if n == 0 and deliver_tails:
-        pendencias.append("imagens nao prontas (grupo encontrado mas sem JPEG capturado)")
+    if salvos == 0 and deliver_tails:
+        pendencias.append("imagens nao prontas (grupo encontrado mas sem JPEG entregavel)")
 
-    return {"qtd": n, "arquivos": arquivos, "pendencias": pendencias}
+    return {
+        "qtd": salvos, "arquivos": arquivos, "pendencias": pendencias,
+        "next_n": n, "had_group": True,
+    }
 
 
 # ── Download de laudos ────────────────────────────────────────────────────────
@@ -379,11 +411,34 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
     sess.headers.update({"User-Agent": "Mozilla/5.0", "Referer": f"{BASE}/reports_list"})
 
     resultados: list = []
+    usados: set = set()
+    seen_tokens: set = set()    # dedup barato: mesmo token = mesmo PDF
+    seen_content: set = set()   # dedup robusto (pan): tokens distintos, mesmo conteudo
+    seen_ceph_keys: set = set()  # dedup ceph por (acc, exame): render e nao-deterministico
+
+    def _nome_unico(base: str) -> str:
+        fname = base
+        idx = 1
+        while fname in usados:
+            idx += 1
+            fname = base.replace(".pdf", f"_{idx}.pdf")
+        usados.add(fname)
+        return fname
 
     # --- Ceph via render Playwright (pagina isolada) ---
     for tok_info in tokens_list:
         exame = tok_info["exame"] or "EXAME"
+        acc = tok_info.get("acc", "")
         for tok in tok_info["ceph"]:
+            if tok in seen_tokens:
+                continue
+            seen_tokens.add(tok)
+            # Um laudo oficial por exame: o render via page.pdf() nao e
+            # byte-deterministico (embute timestamp), entao deduplicamos pela
+            # chave logica (accession, exame) antes de renderizar.
+            ceph_key = (acc, exame)
+            if ceph_key in seen_ceph_keys:
+                continue
             ceph_page = ctx.new_page()
             try:
                 url = f"{BASE}/report_ceph/print_preview/{tok}"
@@ -393,16 +448,17 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
                     "() => { document.querySelectorAll"
                     "('#bg-loading,.loading,#loading').forEach(e => e.remove()); }"
                 )
-                fname = f"LAUDO_{exame}_CEPH.pdf"
-                fpath = os.path.join(out_dir, fname)
-                ceph_page.pdf(path=fpath, format="A4", print_background=True)
-                size = os.path.getsize(fpath)
+                pdf_bytes = ceph_page.pdf(format="A4", print_background=True)
+                size = len(pdf_bytes)
                 if size < 10_000:  # ≈857B = pagina de erro renderizada
-                    os.remove(fpath)
                     resultados.append(
                         {"exame": exame, "arquivo": None, "bytes": size, "status": "NAO_PRONTO"}
                     )
                 else:
+                    seen_ceph_keys.add(ceph_key)  # exame ja entregue; ignora tokens repetidos
+                    fname = _nome_unico(f"LAUDO_{exame}_{acc}_CEPH.pdf")
+                    with open(os.path.join(out_dir, fname), "wb") as f:
+                        f.write(pdf_bytes)
                     resultados.append(
                         {"exame": exame, "arquivo": fname, "bytes": size, "status": "OK"}
                     )
@@ -419,11 +475,19 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
     # --- Laudos comuns via requests GET (cookies da sessao) ---
     for tok_info in tokens_list:
         exame = tok_info["exame"] or "EXAME"
+        acc = tok_info.get("acc", "")
         for tok in tok_info["pan"]:
+            if tok in seen_tokens:
+                continue
+            seen_tokens.add(tok)
             try:
                 r = sess.get(f"{BASE}/report/pdf?studies={tok}", timeout=60)
                 if r.content[:4] == b"%PDF":
-                    fname = f"LAUDO_{exame}_OFICIAL.pdf"
+                    ch = hashlib.md5(r.content).hexdigest()
+                    if ch in seen_content:
+                        continue  # mesmo laudo ja salvo (token diferente, conteudo igual)
+                    seen_content.add(ch)
+                    fname = _nome_unico(f"LAUDO_{exame}_{acc}_OFICIAL.pdf")
                     with open(os.path.join(out_dir, fname), "wb") as f:
                         f.write(r.content)
                     resultados.append(
@@ -492,87 +556,96 @@ def _buscar_na_worklist_por_nome(page, nome: str, acc: str) -> dict | None:
 # ── Processamento por paciente ────────────────────────────────────────────────
 
 def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> dict:
-    """Processa um paciente dentro de uma sessao Playwright ativa."""
+    """
+    Processa UM paciente (agrupado por Cod. Pac) dentro de uma sessao Playwright.
+    Agrega todos os N exames (accessions) do paciente numa unica pasta.
+    """
     nome = pac["nome"]
-    acc = pac["accession"]
-    pasta_nome = f"{slug(nome)}_{acc}"
+    cod = pac["cod_pac"]
+    accessions = pac["accessions"]
+    pasta_nome = f"{slug(nome)}_{cod}"
     out_dir = os.path.join(zip_root, pasta_nome)
     os.makedirs(out_dir, exist_ok=True)
 
     resultado = {
         "nome": nome,
-        "accession": acc,
+        "cod_pac": cod,
+        "accessions": accessions,
         "pasta": pasta_nome,
         "status": "PENDENTE",
         "imagens": {"qtd": 0, "arquivos": []},
         "laudos": [],
         "pendencias": [],
+        "notas": [],
     }
 
-    # Idempotencia: pular se pasta ja completa e FORCE=False
-    if not FORCE and os.path.isdir(out_dir):
-        existing = os.listdir(out_dir)
-        imgs = [f for f in existing if f.startswith("ENTREGA_") and f.endswith(".jpg")]
-        laudos_f = [f for f in existing if f.startswith("LAUDO_")]
-        if imgs and laudos_f:
-            resultado["status"] = "OK"
-            resultado["imagens"] = {"qtd": len(imgs), "arquivos": sorted(imgs)}
-            resultado["laudos"] = [
-                {
-                    "exame": re.sub(r"^LAUDO_|_(OFICIAL|CEPH)\.pdf$", "", f),
-                    "arquivo": f,
-                    "bytes": os.path.getsize(os.path.join(out_dir, f)),
-                    "status": "OK",
-                }
-                for f in sorted(laudos_f)
-            ]
-            return resultado
+    # Localizar todas as linhas (de todas as accessions) do paciente
+    wl_by_acc = {w["accession"]: w for w in worklist}
+    tokens_list: list = []  # cada item: dict de extrair_tokens + 'acc'
+    nao_localizadas: list = []
+    for acc in accessions:
+        wl_pac = wl_by_acc.get(acc)
+        if not wl_pac:
+            # Fallback: busca por nome sem filtro de data (mismatch realized vs study_datetime)
+            wl_pac = _buscar_na_worklist_por_nome(page, nome, acc)
+            if wl_pac:
+                resultado["notas"].append(
+                    f"accession {acc} localizado via fallback por nome"
+                )
+        if not wl_pac:
+            nao_localizadas.append(acc)
+            continue
+        for h in wl_pac["rows_html"]:
+            t = extrair_tokens(h)
+            t["acc"] = acc
+            tokens_list.append(t)
 
-    # Localizar paciente na worklist pelo accession
-    wl_pac = next((w for w in worklist if w["accession"] == acc), None)
-    if not wl_pac:
-        # Fallback: busca por nome sem filtro de data (cobre mismatch realized vs study_datetime)
-        wl_pac = _buscar_na_worklist_por_nome(page, nome, acc)
-        if wl_pac:
-            resultado.setdefault("pendencias", [])
-            resultado["pendencias"].append(
-                "localizado via fallback por nome (study_datetime diferente do dia)"
-            )
-    if not wl_pac:
+    if nao_localizadas:
+        resultado["pendencias"].append(
+            "accessions nao localizadas na worklist: " + ", ".join(nao_localizadas)
+        )
+
+    if not tokens_list:
         resultado["status"] = "ERRO"
-        resultado["pendencias"].append("nao localizado na worklist")
+        resultado["pendencias"].append("nenhuma linha localizada na worklist")
         return resultado
 
-    # Extrair tokens de todas as linhas do paciente
-    tokens_list = [extrair_tokens(h) for h in wl_pac["rows_html"]]
-
-    # Download de imagens — TODOS os exames com token reports_doc
+    # Download de imagens — uma unica chamada reports_doc basta (retorna TODOS os
+    # grupos do paciente). Tentar docs em ordem ate capturar; parar no 1o sucesso.
     docs = [t["doc"] for t in tokens_list if t["doc"]]
+    had_group = False
     if docs:
-        total_imgs = 0
-        todos_arquivos: list = []
+        seen_hashes: set = set()
+        n = 0
+        arquivos: list = []
         img_pendencias: list = []
         for d in docs:
             try:
                 img_res = baixar_imagens(
-                    page, ctx, d["study_id"], d["schedule_id"], out_dir
+                    page, ctx, d["study_id"], d["schedule_id"], out_dir, seen_hashes, n
                 )
-                total_imgs += img_res["qtd"]
-                todos_arquivos.extend(img_res["arquivos"])
-                # "sem grupo" por exame é esperado — não propagar como pendência do paciente
-                for p in img_res.get("pendencias", []):
-                    if "sem grupo" not in p:
-                        img_pendencias.append(p)
             except Exception as e:
                 img_pendencias.append(f"erro imagens (study {d['study_id']}): {e}")
-        resultado["imagens"] = {"qtd": total_imgs, "arquivos": todos_arquivos}
-        if total_imgs == 0:
-            resultado["pendencias"].append("nenhum exame com grupo DOCUMENTACAO COMPLETA")
+                continue
+            n = img_res["next_n"]
+            arquivos.extend(img_res["arquivos"])
+            if img_res.get("had_group"):
+                had_group = True
+            if img_res["qtd"] > 0:
+                break  # reports_doc retorna todos os grupos -> uma chamada basta
+        resultado["imagens"] = {"qtd": n, "arquivos": arquivos}
+        # So e pendencia se HAVIA grupo DOCUMENTACAO COMPLETA mas as imagens nao
+        # foram capturadas. Exames sem grupo (ex.: panoramica avulsa) nao tem
+        # fotos entregaveis -> nao e pendencia.
+        if had_group and n == 0:
+            resultado["pendencias"].append("imagens nao prontas (grupo presente, sem JPEG)")
+        elif not had_group:
+            resultado["notas"].append("exame(s) sem grupo de documentacao (sem fotos entregaveis)")
         resultado["pendencias"].extend(img_pendencias)
     else:
         resultado["pendencias"].append("sem token reports_doc na worklist")
 
-    # Download de laudos
+    # Download de laudos (por accession; nome de arquivo unico)
     try:
         laudos = baixar_laudos(page, ctx, tokens_list, out_dir)
         resultado["laudos"] = laudos
@@ -586,10 +659,15 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> 
     except Exception as e:
         resultado["pendencias"].append(f"erro laudos: {e}")
 
-    # Status final
-    tem_imagem = resultado["imagens"]["qtd"] > 0
-    todos_ok = all(l["status"] == "OK" for l in resultado["laudos"]) if resultado["laudos"] else True
-    if tem_imagem and todos_ok and not resultado["pendencias"]:
+    # Status final — 'notas' NAO contam como pendencia.
+    # Fotos so sao exigidas quando o paciente tem grupo DOCUMENTACAO COMPLETA.
+    laudos = resultado["laudos"]
+    tem_laudo = len(laudos) > 0
+    laudos_ok = all(l["status"] == "OK" for l in laudos) if laudos else False
+    img_ok = (resultado["imagens"]["qtd"] > 0) if had_group else True
+    if not tem_laudo and "sem token reports_doc na worklist" not in resultado["pendencias"]:
+        resultado["pendencias"].append("nenhum laudo disponivel")
+    if img_ok and tem_laudo and laudos_ok and not resultado["pendencias"]:
         resultado["status"] = "OK"
     elif resultado["status"] != "ERRO":
         resultado["status"] = "PENDENTE"
@@ -618,7 +696,10 @@ def _gerar_txt(relatorio: dict) -> str:
     for pac in r["pacientes"]:
         status = pac["status"]
         tag = f"[{status:<8}]"
-        lines.append(f"{tag} {pac['nome']} ({pac['accession']})")
+        cod = pac.get("cod_pac", pac.get("accession", ""))
+        accs = ", ".join(pac.get("accessions", []))
+        ident = f"{cod}" + (f" | exames: {accs}" if accs else "")
+        lines.append(f"{tag} {pac['nome']} ({ident})")
         qtd = pac["imagens"]["qtd"]
         laudos_parts = []
         for lau in pac["laudos"]:
@@ -628,6 +709,8 @@ def _gerar_txt(relatorio: dict) -> str:
         lines.append(f"           {detalhe}")
         for pend in pac.get("pendencias", []):
             lines.append(f"           !! {pend}")
+        for nota in pac.get("notas", []):
+            lines.append(f"           -- {nota}")
     return "\n".join(lines) + "\n"
 
 
@@ -693,18 +776,27 @@ def processar_dia(
                         df = _get_relatorio_analitico(page, convenios, segmentos, data)
                         if df.empty:
                             raise ValueError(f"Nenhum paciente REDE UNNA em {data}.")
+                        cod_col = "Cód. Pac" if "Cód. Pac" in df.columns else df.columns[1]
                         pedido_col = "Pedido" if "Pedido" in df.columns else df.columns[6]
                         nome_col = "Paciente" if "Paciente" in df.columns else df.columns[2]
-                        seen_acc: set = set()
+                        # Agrupar por Cod. Pac (um paciente -> N exames/accessions)
+                        by_cod: dict = {}
                         for _, row in df.iterrows():
+                            cod = str(row[cod_col]).strip()
                             acc = str(row[pedido_col]).strip()
                             nome = str(row[nome_col]).strip()
-                            if acc and acc not in seen_acc:
-                                seen_acc.add(acc)
-                                pacientes.append({"accession": acc, "nome": nome})
-                        pacientes.sort(key=lambda x: x["accession"])
+                            if not cod:
+                                cod = acc  # chave de fallback
+                            if cod not in by_cod:
+                                by_cod[cod] = {"cod_pac": cod, "nome": nome, "accessions": []}
+                            if acc and acc not in by_cod[cod]["accessions"]:
+                                by_cod[cod]["accessions"].append(acc)
+                            if len(nome) > len(by_cod[cod]["nome"]):
+                                by_cod[cod]["nome"] = nome
+                        pacientes.extend(by_cod.values())
+                        pacientes.sort(key=lambda x: x["cod_pac"])
                         _relatorio_carregado = True
-                        log(f"   {len(pacientes)} pacientes unicos.")
+                        log(f"   {len(pacientes)} pacientes unicos (agrupados por Cod. Pac).")
                         lote = pacientes[i: i + BATCH_SIZE]
                         log(f"\n[LOTE 1] 1–{len(lote)} / {len(pacientes)}")
 
@@ -717,18 +809,20 @@ def processar_dia(
                     for pac in lote:
                         resultados.append({
                             "nome": pac["nome"],
-                            "accession": pac["accession"],
-                            "pasta": f"{slug(pac['nome'])}_{pac['accession']}",
+                            "cod_pac": pac["cod_pac"],
+                            "accessions": pac["accessions"],
+                            "pasta": f"{slug(pac['nome'])}_{pac['cod_pac']}",
                             "status": "ERRO",
                             "imagens": {"qtd": 0, "arquivos": []},
                             "laudos": [],
                             "pendencias": [f"falha login/worklist: {e}"],
+                            "notas": [],
                         })
                     i += BATCH_SIZE
                     continue
 
                 for pac in lote:
-                    log(f"  -> {pac['nome']} ({pac['accession']})")
+                    log(f"  -> {pac['nome']} ({pac['cod_pac']})")
                     retries = 0
                     while retries <= MAX_RETRIES:
                         try:
@@ -755,14 +849,16 @@ def processar_dia(
                             if retries > MAX_RETRIES:
                                 resultados.append({
                                     "nome": pac["nome"],
-                                    "accession": pac["accession"],
-                                    "pasta": f"{slug(pac['nome'])}_{pac['accession']}",
+                                    "cod_pac": pac["cod_pac"],
+                                    "accessions": pac["accessions"],
+                                    "pasta": f"{slug(pac['nome'])}_{pac['cod_pac']}",
                                     "status": "ERRO",
                                     "imagens": {"qtd": 0, "arquivos": []},
                                     "laudos": [],
                                     "pendencias": [
                                         f"erro apos {MAX_RETRIES} tentativas: {e}"
                                     ],
+                                    "notas": [],
                                 })
                             else:
                                 time.sleep(3)
