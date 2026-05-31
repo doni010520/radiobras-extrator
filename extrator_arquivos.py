@@ -20,7 +20,6 @@ from playwright.sync_api import sync_playwright
 
 from extrator_pacientes_analitico import (
     BASE_URL as BASE,
-    discover_tokens_and_cookies,
     get_credentials,
     parse_html_to_df,
     post_relatorio,
@@ -86,14 +85,13 @@ def _login_playwright(pw, email: str, password: str):
     page.fill('input[name="username"]', email)
     page.fill('input[name="password"]', password)
     page.click('button[type="submit"], input[type="submit"]')
-    try:
-        page.wait_for_url("**/calendar*", timeout=20000)
-    except Exception:
-        pass
-    page.wait_for_timeout(2500)
+    # Aguarda navegação pós-login: networkidle é mais robusto que wait_for_url
+    # quando o redirect passa por intermediários
+    page.wait_for_load_state("networkidle", timeout=30000)
+    page.wait_for_timeout(1500)
     if "/login" in page.url or "checklogin" in page.url:
         browser.close()
-        raise RuntimeError("Falha no login — verificar credenciais.")
+        raise RuntimeError(f"Falha no login — URL pos-submit: {page.url}")
     return browser, ctx, page
 
 
@@ -139,6 +137,51 @@ def _parse_worklist_html(raw_html: str, by_acc: dict) -> None:
         # Evitar duplicar a mesma linha HTML
         if h not in by_acc[acc]["rows_html"]:
             by_acc[acc]["rows_html"].append(h)
+
+
+def _get_relatorio_analitico(page, convenios: list, segmentos: list, data: str):
+    """
+    Obtém o relatório analítico REDE UNNA reutilizando a sessão Playwright ativa.
+    Navega para admin_reports, lê tokens por-sessão, faz POST e retorna DataFrame.
+    """
+    import time as _time
+    page.goto(f"{BASE}/admin_reports", wait_until="networkidle")
+    _time.sleep(2)
+
+    # Selecionar patients_detailed_report via JS (select usa Chosen/hidden)
+    page.evaluate("""(function(){
+        var s=document.querySelector('select[name="r1"]');
+        if(!s) return;
+        s.value='patients_detailed_report';
+        s.dispatchEvent(new Event('change',{bubbles:true}));
+        if(window.$) $(s).trigger('change');
+    })()""")
+    page.wait_for_load_state("networkidle")
+    _time.sleep(4)
+
+    # Ler tokens de convênio e segmento
+    conv_map = {}
+    for opt in page.query_selector_all('select[name="insurance"] option'):
+        txt = opt.inner_text().strip()
+        val = opt.get_attribute("value") or ""
+        if txt and val:
+            conv_map[txt] = val
+
+    seg_map = {}
+    for opt in page.query_selector_all('select[name="segments"] option'):
+        txt = opt.inner_text().strip()
+        val = opt.get_attribute("value") or ""
+        if txt and val:
+            seg_map[txt] = val
+
+    ins_toks = resolve_tokens(convenios, conv_map, "convenio")
+    seg_toks = resolve_tokens(segmentos, seg_map, "segmento")
+
+    # Capturar cookies da sessão para o POST via requests
+    cookies = {c["name"]: c["value"] for c in page.context.cookies()}
+    html_rel = post_relatorio(cookies, ins_toks, seg_toks, data, data)
+    df, _, _ = parse_html_to_df(html_rel)
+    return df
 
 
 def listar_worklist_dia(page, data: str) -> list:
@@ -398,6 +441,54 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
     return resultados
 
 
+# ── Fallback: busca por nome sem filtro de data ───────────────────────────────
+
+def _buscar_na_worklist_por_nome(page, nome: str, acc: str) -> dict | None:
+    """
+    Fallback para pacientes cujo study_datetime difere da data de realização.
+    Busca pelo primeiro nome do paciente sem filtro de data e localiza a linha
+    que contém o accession específico.
+    Retorna dict {accession, nome, rows_html} ou None.
+    """
+    # Usar apenas o primeiro nome para a busca (mais tolerante a variações)
+    primeiro_nome = nome.split()[0] if nome else ""
+    if not primeiro_nome:
+        return None
+    try:
+        raw = page.evaluate(
+            """async (nome) => {
+                const body = new URLSearchParams({
+                    'busca-por': 'name',
+                    'filtro[nome]': nome,
+                    'filtro[exames]': 'todos',
+                    'filtro[tipo_data]': 'study_datetime',
+                    'optionsRadios': 'todos',
+                });
+                const r = await fetch('/ris/reports_list/get_list', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: body.toString(),
+                    credentials: 'include'
+                });
+                return await r.text();
+            }""",
+            primeiro_nome,
+        )
+    except Exception:
+        return None
+
+    soup = BeautifulSoup(raw, "lxml")
+    rows_html = []
+    for tr in soup.find_all("tr"):
+        h = str(tr)
+        if acc in h:
+            rows_html.append(h)
+
+    if not rows_html:
+        return None
+    return {"accession": acc, "nome": nome, "rows_html": rows_html}
+
+
 # ── Processamento por paciente ────────────────────────────────────────────────
 
 def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> dict:
@@ -439,6 +530,14 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> 
 
     # Localizar paciente na worklist pelo accession
     wl_pac = next((w for w in worklist if w["accession"] == acc), None)
+    if not wl_pac:
+        # Fallback: busca por nome sem filtro de data (cobre mismatch realized vs study_datetime)
+        wl_pac = _buscar_na_worklist_por_nome(page, nome, acc)
+        if wl_pac:
+            resultado.setdefault("pendencias", [])
+            resultado["pendencias"].append(
+                "localizado via fallback por nome (study_datetime diferente do dia)"
+            )
     if not wl_pac:
         resultado["status"] = "ERRO"
         resultado["pendencias"].append("nao localizado na worklist")
@@ -558,31 +657,9 @@ def processar_dia(
     log(f"\n=== processar_dia {data} | {len(convenios)} convenios ===")
     email, password = get_credentials()
 
-    # A: lista de pacientes via relatorio analitico (reutiliza extrator_pacientes_analitico)
-    log("[A] Relatorio analitico REDE UNNA...")
-    conv_map, seg_map, cookies = discover_tokens_and_cookies(email, password)
-    ins_toks = resolve_tokens(convenios, conv_map, "convenio")
-    seg_toks = resolve_tokens(segmentos, seg_map, "segmento")
-    html_rel = post_relatorio(cookies, ins_toks, seg_toks, data, data)
-    df, _, _ = parse_html_to_df(html_rel)
-
-    if df.empty:
-        raise ValueError(f"Nenhum paciente REDE UNNA em {data}.")
-
-    pedido_col = "Pedido" if "Pedido" in df.columns else df.columns[6]
-    nome_col = "Paciente" if "Paciente" in df.columns else df.columns[2]
-
-    seen_acc: set = set()
+    # Pacientes serão carregados dentro da 1ª sessão Playwright (evita 2 logins)
     pacientes: list = []
-    for _, row in df.iterrows():
-        acc = str(row[pedido_col]).strip()
-        nome = str(row[nome_col]).strip()
-        if acc and acc not in seen_acc:
-            seen_acc.add(acc)
-            pacientes.append({"accession": acc, "nome": nome})
-
-    pacientes.sort(key=lambda x: x["accession"])
-    log(f"   {len(pacientes)} pacientes unicos.")
+    _relatorio_carregado = False
 
     # B: processar em lotes
     job_ts = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -595,9 +672,13 @@ def processar_dia(
     i = 0
 
     try:
-        while i < len(pacientes):
-            lote = pacientes[i: i + BATCH_SIZE]
-            log(f"\n[LOTE {i // BATCH_SIZE + 1}] {i + 1}–{i + len(lote)} / {len(pacientes)}")
+        # Primeiro lote carrega também o relatório analítico na mesma sessão
+        while not _relatorio_carregado or i < len(pacientes):
+            if not _relatorio_carregado:
+                lote = []  # ainda não temos pacientes; carrega a lista primeiro
+            else:
+                lote = pacientes[i: i + BATCH_SIZE]
+                log(f"\n[LOTE {i // BATCH_SIZE + 1}] {i + 1}–{i + len(lote)} / {len(pacientes)}")
 
             with sync_playwright() as pw:
                 browser = ctx = page = None
@@ -605,10 +686,34 @@ def processar_dia(
 
                 try:
                     browser, ctx, page = _login_playwright(pw, email, password)
+
+                    # 1ª sessão: carregar relatório analítico antes da worklist
+                    if not _relatorio_carregado:
+                        log("[A] Relatorio analitico REDE UNNA (mesma sessao)...")
+                        df = _get_relatorio_analitico(page, convenios, segmentos, data)
+                        if df.empty:
+                            raise ValueError(f"Nenhum paciente REDE UNNA em {data}.")
+                        pedido_col = "Pedido" if "Pedido" in df.columns else df.columns[6]
+                        nome_col = "Paciente" if "Paciente" in df.columns else df.columns[2]
+                        seen_acc: set = set()
+                        for _, row in df.iterrows():
+                            acc = str(row[pedido_col]).strip()
+                            nome = str(row[nome_col]).strip()
+                            if acc and acc not in seen_acc:
+                                seen_acc.add(acc)
+                                pacientes.append({"accession": acc, "nome": nome})
+                        pacientes.sort(key=lambda x: x["accession"])
+                        _relatorio_carregado = True
+                        log(f"   {len(pacientes)} pacientes unicos.")
+                        lote = pacientes[i: i + BATCH_SIZE]
+                        log(f"\n[LOTE 1] 1–{len(lote)} / {len(pacientes)}")
+
                     worklist = listar_worklist_dia(page, data)
                     log(f"   Worklist: {len(worklist)} accessions")
                 except Exception as e:
-                    log(f"   Falha login/worklist: {e}")
+                    log(f"   Falha login/relatorio/worklist: {e}")
+                    if not _relatorio_carregado:
+                        raise  # sem lista de pacientes, não tem como continuar
                     for pac in lote:
                         resultados.append({
                             "nome": pac["nome"],
