@@ -311,7 +311,7 @@ def baixar_imagens(page, ctx, study_id: str, schedule_id: str, out_dir: str) -> 
                 continue
             seen.add(h)
             n += 1
-            fname = f"ENTREGA_{n}.jpg"
+            fname = f"ENTREGA_{study_id[-8:]}_{n}.jpg"
             with open(os.path.join(out_dir, fname), "wb") as f:
                 f.write(body)
             arquivos.append(fname)
@@ -446,16 +446,30 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> 
 
     # Extrair tokens de todas as linhas do paciente
     tokens_list = [extrair_tokens(h) for h in wl_pac["rows_html"]]
-    doc = next((t["doc"] for t in tokens_list if t["doc"]), None)
 
-    # Download de imagens
-    if doc:
-        try:
-            img_res = baixar_imagens(page, ctx, doc["study_id"], doc["schedule_id"], out_dir)
-            resultado["imagens"] = {"qtd": img_res["qtd"], "arquivos": img_res["arquivos"]}
-            resultado["pendencias"].extend(img_res.get("pendencias", []))
-        except Exception as e:
-            resultado["pendencias"].append(f"erro imagens: {e}")
+    # Download de imagens — TODOS os exames com token reports_doc
+    docs = [t["doc"] for t in tokens_list if t["doc"]]
+    if docs:
+        total_imgs = 0
+        todos_arquivos: list = []
+        img_pendencias: list = []
+        for d in docs:
+            try:
+                img_res = baixar_imagens(
+                    page, ctx, d["study_id"], d["schedule_id"], out_dir
+                )
+                total_imgs += img_res["qtd"]
+                todos_arquivos.extend(img_res["arquivos"])
+                # "sem grupo" por exame é esperado — não propagar como pendência do paciente
+                for p in img_res.get("pendencias", []):
+                    if "sem grupo" not in p:
+                        img_pendencias.append(p)
+            except Exception as e:
+                img_pendencias.append(f"erro imagens (study {d['study_id']}): {e}")
+        resultado["imagens"] = {"qtd": total_imgs, "arquivos": todos_arquivos}
+        if total_imgs == 0:
+            resultado["pendencias"].append("nenhum exame com grupo DOCUMENTACAO COMPLETA")
+        resultado["pendencias"].extend(img_pendencias)
     else:
         resultado["pendencias"].append("sem token reports_doc na worklist")
 
