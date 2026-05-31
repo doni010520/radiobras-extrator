@@ -53,12 +53,13 @@ def discover_tokens_and_cookies(email: str, password: str) -> tuple[dict, dict, 
         page.fill('input[name="username"]', email)
         page.fill('input[name="password"]', password)
         page.click('button[type="submit"], input[type="submit"]')
-        page.wait_for_load_state("networkidle")
+        page.wait_for_load_state("networkidle", timeout=30000)
+        page.wait_for_timeout(1500)
 
         # Verificar login
         if "/login" in page.url or "checklogin" in page.url:
             browser.close()
-            raise RuntimeError("Falha no login — verificar credenciais.")
+            raise RuntimeError(f"Falha no login — URL pos-submit: {page.url}")
         print(f"   Logado. URL atual: {page.url}")
 
         print("[3/5] Navegando para admin_reports...")
