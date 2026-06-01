@@ -10,6 +10,14 @@ env/
 *.xlsx
 _debug_response.html
 
+# Scripts de diagnóstico / runners manuais e seus logs (descartáveis)
+_diag_*.py
+_diag_*.txt
+_salvar_*.py
+_salvar_*.txt
+downloads_*/
+_tmp_*/
+
 # Credenciais
 .env
 *.env
