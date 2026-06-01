@@ -22,8 +22,11 @@ TARGET_CONVENIOS = [
     "REDE UNNA - ITAIGARA",
     "REDE UNNA - PERIPERI",
     "REDE UNNA - LAURO DE FREITAS",
+    "REDE UNNA - CAMAÇARI",
+    "REDE UNNA CAMINHO DAS ÁRVORES - TANCREDO",
+    "REDE UNNA DESCONTO CAMAÇARI",
 ]
-TARGET_SEGMENTOS = ["CENTRO", "ITAIGARA", "LAURO", "PERIPERI"]
+TARGET_SEGMENTOS = ["BRASMED", "CAMAÇARI", "CENTRO", "ITAIGARA", "LAURO", "PERIPERI", "TANCREDO"]
 
 
 def get_credentials():
@@ -202,6 +205,8 @@ def segmento_from_convenio(convenio: str) -> str:
         "LAURO": "LAURO",
         "CAMAÇARI": "CAMAÇARI",
         "BRASMED": "BRASMED",
+        "TANCREDO": "TANCREDO",
+        "ÁRVORES": "TANCREDO",
     }
     upper = convenio.upper()
     for key, seg in mapping.items():

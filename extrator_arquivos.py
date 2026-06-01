@@ -671,6 +671,7 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
     resultado = {
         "nome": nome,
         "cod_pac": cod,
+        "convenio": pac.get("convenio", ""),
         "accessions": accessions,
         "pasta": pasta_nome,
         "status": "PENDENTE",
@@ -862,20 +863,41 @@ def processar_dia(
                 cod_col = "Cód. Pac" if "Cód. Pac" in df.columns else df.columns[1]
                 pedido_col = "Pedido" if "Pedido" in df.columns else df.columns[6]
                 nome_col = "Paciente" if "Paciente" in df.columns else df.columns[2]
+                conv_col = (
+                    "Convênio" if "Convênio" in df.columns
+                    else (df.columns[5] if len(df.columns) > 5 else None)
+                )
+
+                def _conv_unidade(texto: str) -> str:
+                    """Normaliza a célula 'Convênio' para o nome da unidade selecionada
+                    (ex.: 'REDE UNNA - CENTRO / PLANO X' -> 'REDE UNNA - CENTRO')."""
+                    t = (texto or "").strip()
+                    up = t.upper()
+                    for c in convenios:
+                        if c.upper() in up:
+                            return c
+                    return t.split(" / ")[0].strip() or "SEM CONVENIO"
+
                 # Agrupar por Cod. Pac (um paciente -> N exames/accessions)
                 by_cod: dict = {}
                 for _, row in df.iterrows():
                     cod = str(row[cod_col]).strip()
                     acc = str(row[pedido_col]).strip()
                     nome = str(row[nome_col]).strip()
+                    conv = _conv_unidade(str(row[conv_col])) if conv_col else ""
                     if not cod:
                         cod = acc  # chave de fallback
                     if cod not in by_cod:
-                        by_cod[cod] = {"cod_pac": cod, "nome": nome, "accessions": []}
+                        by_cod[cod] = {
+                            "cod_pac": cod, "nome": nome, "accessions": [],
+                            "convenio": conv,
+                        }
                     if acc and acc not in by_cod[cod]["accessions"]:
                         by_cod[cod]["accessions"].append(acc)
                     if len(nome) > len(by_cod[cod]["nome"]):
                         by_cod[cod]["nome"] = nome
+                    if conv and not by_cod[cod].get("convenio"):
+                        by_cod[cod]["convenio"] = conv
                 pacientes.extend(by_cod.values())
                 pacientes.sort(key=lambda x: x["cod_pac"])
                 log(f"   {len(pacientes)} pacientes unicos (agrupados por Cod. Pac).")
@@ -904,6 +926,7 @@ def processar_dia(
                             resultados.append({
                                 "nome": pac["nome"],
                                 "cod_pac": pac["cod_pac"],
+                                "convenio": pac.get("convenio", ""),
                                 "accessions": pac["accessions"],
                                 "pasta": f"{slug(pac['nome'])}_{pac['cod_pac']}",
                                 "status": "ERRO",
@@ -946,6 +969,7 @@ def processar_dia(
                                     resultados.append({
                                         "nome": pac["nome"],
                                         "cod_pac": pac["cod_pac"],
+                                        "convenio": pac.get("convenio", ""),
                                         "accessions": pac["accessions"],
                                         "pasta": f"{slug(pac['nome'])}_{pac['cod_pac']}",
                                         "status": "ERRO",
@@ -995,10 +1019,15 @@ def processar_dia(
                 pasta_path = os.path.join(zip_root, res["pasta"])
                 if not os.path.isdir(pasta_path):
                     continue
+                # Agrupar no ZIP por unidade/convênio: <convenio>/<paciente>/<arquivo>
+                conv_dir = slug(res.get("convenio") or "sem_convenio") or "sem_convenio"
                 for fname in sorted(os.listdir(pasta_path)):
                     fpath = os.path.join(pasta_path, fname)
                     if os.path.isfile(fpath):
-                        zf.write(fpath, arcname=os.path.join(res["pasta"], fname))
+                        zf.write(
+                            fpath,
+                            arcname=os.path.join(conv_dir, res["pasta"], fname),
+                        )
 
         buf.seek(0)
         zip_bytes = buf.getvalue()
