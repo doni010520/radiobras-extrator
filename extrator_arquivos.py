@@ -14,9 +14,10 @@ import time
 import zipfile
 from datetime import datetime
 
+import cv2
+import numpy as np
 import requests
 from bs4 import BeautifulSoup
-from PIL import Image
 from playwright.sync_api import sync_playwright
 
 from extrator_pacientes_analitico import (
@@ -32,10 +33,17 @@ BATCH_SIZE = 10
 POPUP_WAIT_MS = 10000
 MAX_RETRIES = 2
 FORCE = False
-# Imagens entregaveis sao de alta resolucao (min(w,h) >= 3024 nos dados observados);
-# renders 3D MODELO DIGITAL sao sempre 1920x1080 (min=1080). Descartar abaixo deste
-# limiar elimina os renders 3D de forma deterministica (gap 1920 <-> 3024).
-MIN_DIM_ENTREGAVEL = 2000
+
+# Criterio de imagem entregavel: presenca da LOGO RadioBras Digital (VERDE) no canto
+# superior-esquerdo da lamina. Deteccao 100% deterministica por COR, SEM OCR/IA.
+# As radiografias cruas e os renders sao tons de cinza puro (R=G=B) -> fracao de verde
+# = 0; as laminas de entrega tem a logo verde no cabecalho. Calibrado em amostras reais
+# (entregaveis >= 0.0024, cruas <= 0.00001 -> gap de ~240x, corte em 0.0005).
+LOGO_GREEN_MIN_FRAC = 0.0005
+# Dedup perceptual (aHash 8x8): o viewer pode re-codificar a MESMA lamina (md5 difere),
+# entao deduplicamos por similaridade perceptual. Duplicatas dao Hamming=0; laminas
+# distintas (mesmo paciente) diferem por >5 bits -> tolerancia 4 e segura.
+PHASH_DUP_MAX_HAMMING = 4
 
 EXAME_KEYWORDS = [
     "PANORAMICA", "TELERRADIOGRAFIA", "DOCUMENTACAO", "CEFALOMETR",
@@ -233,6 +241,55 @@ def listar_worklist_dia(page, data: str) -> list:
     return list(by_acc.values())
 
 
+# JS: busca get_list por NOME + intervalo do dia (evita teto de resultados amplos)
+_JS_WL_NOME = """async ([nome, inicio, fim, tipo]) => {
+    const body = new URLSearchParams({
+        'busca-por': 'name',
+        'filtro[nome]': nome,
+        'filtro[exames]': 'todos',
+        'filtro[tipo_data]': tipo,
+        'optionsRadios': 'entre',
+        'filtro_data_inicio': inicio,
+        'filtro_data_fim': fim,
+    });
+    const r = await fetch('/ris/reports_list/get_list', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: body.toString(),
+        credentials: 'include'
+    });
+    return await r.text();
+}"""
+
+
+def listar_worklist_por_pacientes(page, data: str, nomes: list) -> list:
+    """
+    Constroi a worklist do dia consultando por NOME de cada paciente + intervalo do dia.
+
+    O endpoint get_list TRUNCA buscas amplas (responde "Muitos exames encontrados.
+    Total: N" e devolve apenas a 1a pagina, ~81 linhas). Para dias com muitos exames
+    isso deixava de fora a maioria dos accessions. Buscar por nome+dia mantem cada
+    resposta pequena (bem abaixo do teto) e garante cobertura completa.
+    data: 'DD/MM/YYYY'. Retorna: [{accession, nome, rows_html: [str]}, ...]
+    """
+    dt_inicio = f"{data} 00:00:00"
+    dt_fim = f"{data} 23:59:59"
+    by_acc: dict = {}
+    vistos: set = set()
+    for nome in nomes:
+        chave = re.sub(r"\s+", " ", nome or "").strip()
+        if not chave or chave.upper() in vistos:
+            continue
+        vistos.add(chave.upper())
+        for tipo in ("study_datetime", "realized"):
+            try:
+                raw_html = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
+                _parse_worklist_html(raw_html, by_acc)
+            except Exception as e:
+                print(f"   [worklist] falha nome={chave} tipo={tipo}: {e}")
+    return list(by_acc.values())
+
+
 # ── Tokens ────────────────────────────────────────────────────────────────────
 
 def extrair_tokens(row_html: str) -> dict:
@@ -261,6 +318,50 @@ def extrair_tokens(row_html: str) -> dict:
     return {"pan": pan, "ceph": ceph, "doc": doc, "exame": exame}
 
 
+# ── Deteccao de imagem entregavel (logo RadioBras) ─────────────────────────────
+
+def tem_logo_radiobras(body: bytes) -> bool:
+    """
+    True se a imagem JPEG tem a logo VERDE RadioBras no canto superior-esquerdo.
+    Sinal deterministico de "imagem no padrao de entrega" (lamina com logo +
+    cabecalho do paciente). Radiografias cruas e renders sao cinza puro (R=G=B):
+    fracao de verde = 0 -> descartados. Apenas a logo introduz verde no cabecalho.
+    100% por cor, SEM OCR/IA.
+    """
+    arr = np.frombuffer(body, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)  # BGR
+    if img is None:
+        return False
+    H, W = img.shape[:2]
+    # ROI = cabecalho superior-esquerdo, onde fica a logo em todas as laminas.
+    roi = img[0: max(1, int(H * 0.18)), 0: max(1, int(W * 0.40))].astype(int)
+    b, g, r = roi[:, :, 0], roi[:, :, 1], roi[:, :, 2]
+    green_mask = ((g - np.maximum(r, b)) > 25) & (g > 60)
+    return float(green_mask.mean()) >= LOGO_GREEN_MIN_FRAC
+
+
+def _ahash(body: bytes):
+    """aHash 8x8 (inteiro 64-bit) para dedup perceptual. None se nao decodificar."""
+    arr = np.frombuffer(body, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return None
+    g = cv2.resize(img, (8, 8), interpolation=cv2.INTER_AREA).astype(np.float64)
+    bits = (g > g.mean()).flatten()
+    h = 0
+    for bdy in bits:
+        h = (h << 1) | int(bdy)
+    return h
+
+
+def _eh_duplicata(h, seen_hashes: set) -> bool:
+    """True se h e perceptualmente igual a algum hash ja visto (Hamming <= limiar)."""
+    for prev in seen_hashes:
+        if bin(h ^ prev).count("1") <= PHASH_DUP_MAX_HAMMING:
+            return True
+    return False
+
+
 # ── Download de imagens ───────────────────────────────────────────────────────
 
 def baixar_imagens(
@@ -274,12 +375,16 @@ def baixar_imagens(
 ) -> dict:
     """
     Porta _entrega.py: intercepta viewer/u/image, abre popup reports_doc,
-    salva so as imagens entregaveis do grupo DOCUMENTACAO COMPLETA.
+    salva TODAS as imagens no padrao de entrega (logo RadioBras + cabecalho).
+
+    O criterio NAO e mais o grupo "DOCUMENTACAO COMPLETA" nem a dimensao: capturamos
+    qualquer JPEG carregado pelo composer e ficamos com os que tem a logo RadioBras
+    (deteccao deterministica via tem_logo_radiobras). Isso pega laminas de panoramica
+    avulsa (ex.: Geovane) e descarta radiografias cruas e renders 3D.
 
     seen_hashes: set compartilhado no escopo do paciente (dedup global por conteudo).
     start_n: contador inicial (continua a numeracao ENTREGA_N entre chamadas).
-    Filtra renders 3D por resolucao (min(w,h) < MIN_DIM_ENTREGAVEL).
-    Retorna: {qtd, arquivos, pendencias, next_n}
+    Retorna: {qtd, arquivos, pendencias, next_n, total_capturadas}
     """
     captured: list = []  # [(tail, body)]
     pendencias: list = []
@@ -298,37 +403,6 @@ def baixar_imagens(
 
     ctx.on("response", on_resp)
     try:
-        # POST reports_doc -> HTML dos grupos
-        doc_html = page.evaluate(
-            """async ([s, sc]) => {
-                const fd = new URLSearchParams();
-                fd.append('study_id', s);
-                fd.append('schedule_id', sc);
-                const r = await fetch('/ris/reports_doc', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: fd.toString(),
-                    credentials: 'include'
-                });
-                return await r.text();
-            }""",
-            [study_id, schedule_id],
-        )
-
-        groups = parse_groups(doc_html)
-        deliver_tails = {
-            k
-            for k, v in groups.items()
-            if re.search(r"DOCUMENTA[CÇ][AÃ]O.*COMPLETA", v, re.I)
-        }
-
-        if not deliver_tails:
-            pendencias.append("sem grupo DOCUMENTACAO COMPLETA")
-            return {
-                "qtd": 0, "arquivos": [], "pendencias": pendencias,
-                "next_n": start_n, "had_group": False,
-            }
-
         # Abrir popup (form POST target=docpop) para disparar carregamento das imagens
         with ctx.expect_page() as pinfo:
             page.evaluate(
@@ -363,22 +437,22 @@ def baixar_imagens(
     finally:
         ctx.remove_listener("response", on_resp)
 
-    # Salvar imagens entregaveis: dedup global por conteudo + filtro de resolucao
+    # Salvar imagens no padrao de entrega: deteccao de logo + dedup perceptual.
+    # seen_hashes guarda aHashes (int) das imagens ja salvas no escopo do paciente.
     n = start_n
     arquivos: list = []
     salvos = 0
+    total_capturadas = 0
     for tail, body in captured:
-        if tail not in deliver_tails:
+        total_capturadas += 1
+        # Criterio deterministico: so entregaveis tem a logo VERDE RadioBras.
+        if not tem_logo_radiobras(body):
             continue
-        h = hashlib.md5(body).hexdigest()
-        if h in seen_hashes:
+        h = _ahash(body)
+        if h is None:
             continue
-        # Filtro deterministico: descartar renders 3D (baixa resolucao)
-        try:
-            w, hgt = Image.open(io.BytesIO(body)).size
-        except Exception:
-            continue  # nao e imagem valida
-        if min(w, hgt) < MIN_DIM_ENTREGAVEL:
+        # Dedup perceptual: o viewer re-codifica a mesma lamina (md5 difere).
+        if _eh_duplicata(h, seen_hashes):
             continue
         seen_hashes.add(h)
         n += 1
@@ -388,12 +462,9 @@ def baixar_imagens(
             f.write(body)
         arquivos.append(fname)
 
-    if salvos == 0 and deliver_tails:
-        pendencias.append("imagens nao prontas (grupo encontrado mas sem JPEG entregavel)")
-
     return {
         "qtd": salvos, "arquivos": arquivos, "pendencias": pendencias,
-        "next_n": n, "had_group": True,
+        "next_n": n, "total_capturadas": total_capturadas,
     }
 
 
@@ -507,46 +578,31 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
 
 # ── Fallback: busca por nome sem filtro de data ───────────────────────────────
 
-def _buscar_na_worklist_por_nome(page, nome: str, acc: str) -> dict | None:
+def _buscar_na_worklist_por_nome(page, nome: str, acc: str, data: str) -> dict | None:
     """
-    Fallback para pacientes cujo study_datetime difere da data de realização.
-    Busca pelo primeiro nome do paciente sem filtro de data e localiza a linha
-    que contém o accession específico.
+    Fallback por accession nao localizado: busca o get_list pelo nome completo do
+    paciente + intervalo do dia (optionsRadios='entre') e localiza a linha com o
+    accession. Nome+dia mantem a resposta abaixo do teto do servidor.
     Retorna dict {accession, nome, rows_html} ou None.
     """
-    # Usar apenas o primeiro nome para a busca (mais tolerante a variações)
-    primeiro_nome = nome.split()[0] if nome else ""
-    if not primeiro_nome:
+    chave = re.sub(r"\s+", " ", nome or "").strip()
+    if not chave:
         return None
-    try:
-        raw = page.evaluate(
-            """async (nome) => {
-                const body = new URLSearchParams({
-                    'busca-por': 'name',
-                    'filtro[nome]': nome,
-                    'filtro[exames]': 'todos',
-                    'filtro[tipo_data]': 'study_datetime',
-                    'optionsRadios': 'todos',
-                });
-                const r = await fetch('/ris/reports_list/get_list', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                    body: body.toString(),
-                    credentials: 'include'
-                });
-                return await r.text();
-            }""",
-            primeiro_nome,
-        )
-    except Exception:
-        return None
-
-    soup = BeautifulSoup(raw, "lxml")
+    dt_inicio = f"{data} 00:00:00"
+    dt_fim = f"{data} 23:59:59"
     rows_html = []
-    for tr in soup.find_all("tr"):
-        h = str(tr)
-        if acc in h:
-            rows_html.append(h)
+    for tipo in ("study_datetime", "realized"):
+        try:
+            raw = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
+        except Exception:
+            continue
+        soup = BeautifulSoup(raw, "lxml")
+        for tr in soup.find_all("tr"):
+            h = str(tr)
+            if acc in h and h not in rows_html:
+                rows_html.append(h)
+        if rows_html:
+            break
 
     if not rows_html:
         return None
@@ -555,14 +611,59 @@ def _buscar_na_worklist_por_nome(page, nome: str, acc: str) -> dict | None:
 
 # ── Processamento por paciente ────────────────────────────────────────────────
 
-def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> dict:
+def _nome_paciente_row(row_html: str) -> str:
+    """
+    Nome do paciente de uma linha da worklist. O 1o <span class="wrap-name"> e o
+    paciente (o 2o e o solicitante). Normalizado para comparacao (uppercase, espacos).
+    """
+    m = re.search(r'class="wrap-name">\s*([^<]+?)\s*</span>', row_html)
+    if not m:
+        return ""
+    return re.sub(r"\s+", " ", m.group(1)).strip().upper()
+
+
+def _expandir_accessions_por_nome(accessions: list, worklist: list) -> tuple:
+    """
+    Fase 1: o relatorio analitico define QUAIS pacientes processar, mas pode OMITIR
+    exames (ex.: panoramica ja 'Impressa' nao faturada). Aqui unimos TODOS os exames
+    do dia (da worklist ja restrita ao dia) que pertencem ao mesmo paciente — casados
+    pelo nome exato na worklist (consistente dentro do dia). Sem vazar datas antigas.
+    Retorna: (accessions_expandidas, accessions_extras).
+    """
+    wl_by_acc = {w["accession"]: w for w in worklist}
+    # Nomes (worklist) dos exames faturados que conseguimos localizar
+    nomes_alvo = set()
+    for acc in accessions:
+        w = wl_by_acc.get(acc)
+        if not w:
+            continue
+        for h in w["rows_html"]:
+            nm = _nome_paciente_row(h)
+            if nm:
+                nomes_alvo.add(nm)
+    if not nomes_alvo:
+        return list(accessions), []
+    # Varre a worklist do dia e adiciona accessions do mesmo paciente
+    extras = []
+    base = set(accessions)
+    for w in worklist:
+        if w["accession"] in base:
+            continue
+        if any(_nome_paciente_row(h) in nomes_alvo for h in w["rows_html"]):
+            extras.append(w["accession"])
+    return list(accessions) + extras, extras
+
+
+def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, data: str) -> dict:
     """
     Processa UM paciente (agrupado por Cod. Pac) dentro de uma sessao Playwright.
     Agrega todos os N exames (accessions) do paciente numa unica pasta.
     """
     nome = pac["nome"]
     cod = pac["cod_pac"]
-    accessions = pac["accessions"]
+    # Fase 1: expandir para todos os exames do dia do paciente (panoramica omitida
+    # pelo analitico, etc.), casando por nome dentro da worklist ja restrita ao dia.
+    accessions, _extras = _expandir_accessions_por_nome(pac["accessions"], worklist)
     pasta_nome = f"{slug(nome)}_{cod}"
     out_dir = os.path.join(zip_root, pasta_nome)
     os.makedirs(out_dir, exist_ok=True)
@@ -587,7 +688,7 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> 
         wl_pac = wl_by_acc.get(acc)
         if not wl_pac:
             # Fallback: busca por nome sem filtro de data (mismatch realized vs study_datetime)
-            wl_pac = _buscar_na_worklist_por_nome(page, nome, acc)
+            wl_pac = _buscar_na_worklist_por_nome(page, nome, acc, data)
             if wl_pac:
                 resultado["notas"].append(
                     f"accession {acc} localizado via fallback por nome"
@@ -599,6 +700,11 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> 
             t = extrair_tokens(h)
             t["acc"] = acc
             tokens_list.append(t)
+
+    if _extras:
+        resultado["notas"].append(
+            "exame(s) do dia incluidos alem do analitico: " + ", ".join(_extras)
+        )
 
     if nao_localizadas:
         resultado["pendencias"].append(
@@ -613,7 +719,6 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> 
     # Download de imagens — uma unica chamada reports_doc basta (retorna TODOS os
     # grupos do paciente). Tentar docs em ordem ate capturar; parar no 1o sucesso.
     docs = [t["doc"] for t in tokens_list if t["doc"]]
-    had_group = False
     if docs:
         seen_hashes: set = set()
         n = 0
@@ -629,18 +734,14 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> 
                 continue
             n = img_res["next_n"]
             arquivos.extend(img_res["arquivos"])
-            if img_res.get("had_group"):
-                had_group = True
             if img_res["qtd"] > 0:
                 break  # reports_doc retorna todos os grupos -> uma chamada basta
         resultado["imagens"] = {"qtd": n, "arquivos": arquivos}
-        # So e pendencia se HAVIA grupo DOCUMENTACAO COMPLETA mas as imagens nao
-        # foram capturadas. Exames sem grupo (ex.: panoramica avulsa) nao tem
-        # fotos entregaveis -> nao e pendencia.
-        if had_group and n == 0:
-            resultado["pendencias"].append("imagens nao prontas (grupo presente, sem JPEG)")
-        elif not had_group:
-            resultado["notas"].append("exame(s) sem grupo de documentacao (sem fotos entregaveis)")
+        # Imagens sao best-effort: capturamos TODAS no padrao de entrega (logo).
+        # Ausencia de imagem entregavel e nota, nao pendencia (o laudo e o entregavel
+        # obrigatorio). Ex.: panoramica sem lamina gerada ainda.
+        if n == 0:
+            resultado["notas"].append("sem imagens no padrao de entrega (logo+cabecalho)")
         resultado["pendencias"].extend(img_pendencias)
     else:
         resultado["pendencias"].append("sem token reports_doc na worklist")
@@ -659,15 +760,14 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str) -> 
     except Exception as e:
         resultado["pendencias"].append(f"erro laudos: {e}")
 
-    # Status final — 'notas' NAO contam como pendencia.
-    # Fotos so sao exigidas quando o paciente tem grupo DOCUMENTACAO COMPLETA.
+    # Status final — 'notas' NAO contam como pendencia. As imagens sao best-effort
+    # (capturamos todas no padrao de entrega); o entregavel OBRIGATORIO e o laudo.
     laudos = resultado["laudos"]
     tem_laudo = len(laudos) > 0
     laudos_ok = all(l["status"] == "OK" for l in laudos) if laudos else False
-    img_ok = (resultado["imagens"]["qtd"] > 0) if had_group else True
     if not tem_laudo and "sem token reports_doc na worklist" not in resultado["pendencias"]:
         resultado["pendencias"].append("nenhum laudo disponivel")
-    if img_ok and tem_laudo and laudos_ok and not resultado["pendencias"]:
+    if tem_laudo and laudos_ok and not resultado["pendencias"]:
         resultado["status"] = "OK"
     elif resultado["status"] != "ERRO":
         resultado["status"] = "PENDENTE"
@@ -740,135 +840,130 @@ def processar_dia(
     log(f"\n=== processar_dia {data} | {len(convenios)} convenios ===")
     email, password = get_credentials()
 
-    # Pacientes serão carregados dentro da 1ª sessão Playwright (evita 2 logins)
+    # Sessao Playwright UNICA para o job inteiro: 1 login (re-login so se cair).
     pacientes: list = []
-    _relatorio_carregado = False
+    resultados: list = []
 
-    # B: processar em lotes
     job_ts = datetime.now().strftime("%Y%m%d%H%M%S")
     zip_root = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), f"_tmp_{job_ts}"
     )
     os.makedirs(zip_root, exist_ok=True)
 
-    resultados: list = []
-    i = 0
-
     try:
-        # Primeiro lote carrega também o relatório analítico na mesma sessão
-        while not _relatorio_carregado or i < len(pacientes):
-            if not _relatorio_carregado:
-                lote = []  # ainda não temos pacientes; carrega a lista primeiro
-            else:
-                lote = pacientes[i: i + BATCH_SIZE]
-                log(f"\n[LOTE {i // BATCH_SIZE + 1}] {i + 1}–{i + len(lote)} / {len(pacientes)}")
+        with sync_playwright() as pw:
+            browser, ctx, page = _login_playwright(pw, email, password)
+            try:
+                # Relatorio analitico REDE UNNA (mesma sessao do login)
+                log("[A] Relatorio analitico REDE UNNA (mesma sessao)...")
+                df = _get_relatorio_analitico(page, convenios, segmentos, data)
+                if df.empty:
+                    raise ValueError(f"Nenhum paciente REDE UNNA em {data}.")
+                cod_col = "Cód. Pac" if "Cód. Pac" in df.columns else df.columns[1]
+                pedido_col = "Pedido" if "Pedido" in df.columns else df.columns[6]
+                nome_col = "Paciente" if "Paciente" in df.columns else df.columns[2]
+                # Agrupar por Cod. Pac (um paciente -> N exames/accessions)
+                by_cod: dict = {}
+                for _, row in df.iterrows():
+                    cod = str(row[cod_col]).strip()
+                    acc = str(row[pedido_col]).strip()
+                    nome = str(row[nome_col]).strip()
+                    if not cod:
+                        cod = acc  # chave de fallback
+                    if cod not in by_cod:
+                        by_cod[cod] = {"cod_pac": cod, "nome": nome, "accessions": []}
+                    if acc and acc not in by_cod[cod]["accessions"]:
+                        by_cod[cod]["accessions"].append(acc)
+                    if len(nome) > len(by_cod[cod]["nome"]):
+                        by_cod[cod]["nome"] = nome
+                pacientes.extend(by_cod.values())
+                pacientes.sort(key=lambda x: x["cod_pac"])
+                log(f"   {len(pacientes)} pacientes unicos (agrupados por Cod. Pac).")
 
-            with sync_playwright() as pw:
-                browser = ctx = page = None
-                worklist = []
+                # Processar em lotes na MESMA sessao (lote = escopo da worklist + log)
+                i = 0
+                while i < len(pacientes):
+                    lote = pacientes[i: i + BATCH_SIZE]
+                    log(f"\n[LOTE {i // BATCH_SIZE + 1}] {i + 1}–{i + len(lote)} / {len(pacientes)}")
 
-                try:
-                    browser, ctx, page = _login_playwright(pw, email, password)
+                    try:
+                        if _is_logged_out(page):
+                            log("    [re-login]")
+                            try:
+                                browser.close()
+                            except Exception:
+                                pass
+                            browser, ctx, page = _login_playwright(pw, email, password)
+                        worklist = listar_worklist_por_pacientes(
+                            page, data, [p["nome"] for p in lote]
+                        )
+                        log(f"   Worklist: {len(worklist)} accessions")
+                    except Exception as e:
+                        log(f"   Falha worklist: {e}")
+                        for pac in lote:
+                            resultados.append({
+                                "nome": pac["nome"],
+                                "cod_pac": pac["cod_pac"],
+                                "accessions": pac["accessions"],
+                                "pasta": f"{slug(pac['nome'])}_{pac['cod_pac']}",
+                                "status": "ERRO",
+                                "imagens": {"qtd": 0, "arquivos": []},
+                                "laudos": [],
+                                "pendencias": [f"falha worklist: {e}"],
+                                "notas": [],
+                            })
+                        i += BATCH_SIZE
+                        continue
 
-                    # 1ª sessão: carregar relatório analítico antes da worklist
-                    if not _relatorio_carregado:
-                        log("[A] Relatorio analitico REDE UNNA (mesma sessao)...")
-                        df = _get_relatorio_analitico(page, convenios, segmentos, data)
-                        if df.empty:
-                            raise ValueError(f"Nenhum paciente REDE UNNA em {data}.")
-                        cod_col = "Cód. Pac" if "Cód. Pac" in df.columns else df.columns[1]
-                        pedido_col = "Pedido" if "Pedido" in df.columns else df.columns[6]
-                        nome_col = "Paciente" if "Paciente" in df.columns else df.columns[2]
-                        # Agrupar por Cod. Pac (um paciente -> N exames/accessions)
-                        by_cod: dict = {}
-                        for _, row in df.iterrows():
-                            cod = str(row[cod_col]).strip()
-                            acc = str(row[pedido_col]).strip()
-                            nome = str(row[nome_col]).strip()
-                            if not cod:
-                                cod = acc  # chave de fallback
-                            if cod not in by_cod:
-                                by_cod[cod] = {"cod_pac": cod, "nome": nome, "accessions": []}
-                            if acc and acc not in by_cod[cod]["accessions"]:
-                                by_cod[cod]["accessions"].append(acc)
-                            if len(nome) > len(by_cod[cod]["nome"]):
-                                by_cod[cod]["nome"] = nome
-                        pacientes.extend(by_cod.values())
-                        pacientes.sort(key=lambda x: x["cod_pac"])
-                        _relatorio_carregado = True
-                        log(f"   {len(pacientes)} pacientes unicos (agrupados por Cod. Pac).")
-                        lote = pacientes[i: i + BATCH_SIZE]
-                        log(f"\n[LOTE 1] 1–{len(lote)} / {len(pacientes)}")
-
-                    worklist = listar_worklist_dia(page, data)
-                    log(f"   Worklist: {len(worklist)} accessions")
-                except Exception as e:
-                    log(f"   Falha login/relatorio/worklist: {e}")
-                    if not _relatorio_carregado:
-                        raise  # sem lista de pacientes, não tem como continuar
                     for pac in lote:
-                        resultados.append({
-                            "nome": pac["nome"],
-                            "cod_pac": pac["cod_pac"],
-                            "accessions": pac["accessions"],
-                            "pasta": f"{slug(pac['nome'])}_{pac['cod_pac']}",
-                            "status": "ERRO",
-                            "imagens": {"qtd": 0, "arquivos": []},
-                            "laudos": [],
-                            "pendencias": [f"falha login/worklist: {e}"],
-                            "notas": [],
-                        })
+                        log(f"  -> {pac['nome']} ({pac['cod_pac']})")
+                        retries = 0
+                        while retries <= MAX_RETRIES:
+                            try:
+                                if _is_logged_out(page):
+                                    log("    [re-login]")
+                                    try:
+                                        browser.close()
+                                    except Exception:
+                                        pass
+                                    browser, ctx, page = _login_playwright(pw, email, password)
+                                    worklist = listar_worklist_por_pacientes(
+                                        page, data, [p["nome"] for p in lote]
+                                    )
+
+                                res = _processar_paciente(page, ctx, pac, worklist, zip_root, data)
+                                resultados.append(res)
+                                log(
+                                    f"    {res['status']} imgs={res['imagens']['qtd']}"
+                                    f" laudos={len(res['laudos'])}"
+                                )
+                                break
+
+                            except Exception as e:
+                                retries += 1
+                                log(f"    tentativa {retries} falhou: {e}")
+                                if retries > MAX_RETRIES:
+                                    resultados.append({
+                                        "nome": pac["nome"],
+                                        "cod_pac": pac["cod_pac"],
+                                        "accessions": pac["accessions"],
+                                        "pasta": f"{slug(pac['nome'])}_{pac['cod_pac']}",
+                                        "status": "ERRO",
+                                        "imagens": {"qtd": 0, "arquivos": []},
+                                        "laudos": [],
+                                        "pendencias": [
+                                            f"erro apos {MAX_RETRIES} tentativas: {e}"
+                                        ],
+                                        "notas": [],
+                                    })
+                                else:
+                                    time.sleep(3)
                     i += BATCH_SIZE
-                    continue
-
-                for pac in lote:
-                    log(f"  -> {pac['nome']} ({pac['cod_pac']})")
-                    retries = 0
-                    while retries <= MAX_RETRIES:
-                        try:
-                            if _is_logged_out(page):
-                                log("    [re-login]")
-                                try:
-                                    browser.close()
-                                except Exception:
-                                    pass
-                                browser, ctx, page = _login_playwright(pw, email, password)
-                                worklist = listar_worklist_dia(page, data)
-
-                            res = _processar_paciente(page, ctx, pac, worklist, zip_root)
-                            resultados.append(res)
-                            log(
-                                f"    {res['status']} imgs={res['imagens']['qtd']}"
-                                f" laudos={len(res['laudos'])}"
-                            )
-                            break
-
-                        except Exception as e:
-                            retries += 1
-                            log(f"    tentativa {retries} falhou: {e}")
-                            if retries > MAX_RETRIES:
-                                resultados.append({
-                                    "nome": pac["nome"],
-                                    "cod_pac": pac["cod_pac"],
-                                    "accessions": pac["accessions"],
-                                    "pasta": f"{slug(pac['nome'])}_{pac['cod_pac']}",
-                                    "status": "ERRO",
-                                    "imagens": {"qtd": 0, "arquivos": []},
-                                    "laudos": [],
-                                    "pendencias": [
-                                        f"erro apos {MAX_RETRIES} tentativas: {e}"
-                                    ],
-                                    "notas": [],
-                                })
-                            else:
-                                time.sleep(3)
-
+            finally:
                 try:
                     browser.close()
                 except Exception:
                     pass
-
-            i += BATCH_SIZE
 
         # C: relatorio
         ok = sum(1 for r in resultados if r["status"] == "OK")
