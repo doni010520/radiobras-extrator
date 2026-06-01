@@ -27,13 +27,19 @@ from extrator_arquivos import processar_dia
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
+# Todas as unidades REDE UNNA existentes no select 'insurance' do SmartRIS
+# (descoberto ao vivo em 01/06/2026 — 7 convênios com "UNNA").
 CONVENIOS = [
     "REDE UNNA - CENTRO",
     "REDE UNNA - ITAIGARA",
     "REDE UNNA - PERIPERI",
     "REDE UNNA - LAURO DE FREITAS",
+    "REDE UNNA - CAMAÇARI",
+    "REDE UNNA CAMINHO DAS ÁRVORES - TANCREDO",
+    "REDE UNNA DESCONTO CAMAÇARI",
 ]
-SEGMENTOS = ["CENTRO", "ITAIGARA", "LAURO", "PERIPERI"]
+# Todos os segmentos (necessário pois o relatório filtra por insurance E segments).
+SEGMENTOS = ["BRASMED", "CAMAÇARI", "CENTRO", "ITAIGARA", "LAURO", "PERIPERI", "TANCREDO"]
 
 # ── Job store (em memória) ────────────────────────────────────────────────────
 _jobs: dict = {}
