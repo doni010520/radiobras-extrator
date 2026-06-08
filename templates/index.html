@@ -514,10 +514,35 @@
           <span class="btn-icon">⬇</span>
           Gerar Relatório
         </button>
+        <button class="btn-gerar" id="btn-ciclo" type="button" title="Baixa do PRORADIS e envia para as GTOs 'Senha Liberada' do OdontoPrev">
+          <span class="btn-icon">🔄</span>
+          Ciclo Completo
+        </button>
       </div>
     </div>
 
   </div><!-- /card -->
+
+  <!-- RELATÓRIO DO CICLO -->
+  <div class="card" id="ciclo-card" style="margin-top:20px;display:none;">
+    <div class="card-section">
+      <div class="section-label">Relatório do ciclo — OdontoPrev</div>
+      <div id="ciclo-resumo" class="meta-info" style="margin-bottom:14px;"></div>
+      <div style="overflow-x:auto;">
+        <table id="ciclo-tabela" style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="text-align:left;color:var(--muted);font-family:var(--font-mono);font-size:11px;">
+              <th style="padding:8px;border-bottom:1px solid var(--border);">GTO</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);">Paciente</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);">Arq.</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);">Situação</th>
+            </tr>
+          </thead>
+          <tbody id="ciclo-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /ciclo-card -->
 </div><!-- /page -->
 
 <!-- OVERLAY DE CARREGAMENTO -->
@@ -609,6 +634,7 @@
   function setButtons(disabled) {
     document.getElementById('btn-gerar').disabled = disabled;
     document.getElementById('btn-arquivos').disabled = disabled;
+    document.getElementById('btn-ciclo').disabled = disabled;
   }
 
   function buildFormData(dateFrom, dateTo, selConv, selSeg) {
@@ -751,6 +777,92 @@
         }
       } catch (err) {
         // falha pontual de rede — continuar polling
+        document.getElementById('ov-log').textContent = 'aguardando…';
+      }
+    }, 5000);
+  });
+
+  // ── Ciclo Completo (baixar do PRORADIS + enviar às GTOs OdontoPrev) ──────────
+  const STATUS_LABEL = {
+    ENVIADO:          ['✓ Enviado',        'var(--green)'],
+    PULADO_JA_TINHA:  ['↷ Já tinha anexos','var(--muted)'],
+    SEM_MATCH:        ['✗ Sem match',      'var(--red)'],
+    AMBIGUO:          ['⚠ Ambíguo',        '#e5b800'],
+    SEM_ARQUIVOS:     ['✗ Sem arquivos',   'var(--red)'],
+    ERRO:             ['✗ Erro',           'var(--red)'],
+    ERRO_UPLOAD:      ['✗ Erro upload',    'var(--red)'],
+    DRY_RUN:          ['• Simulado',       'var(--muted)'],
+    PRONTO:           ['• Pronto',         'var(--teal)'],
+  };
+
+  function renderCiclo(rel) {
+    const card = document.getElementById('ciclo-card');
+    const tbody = document.getElementById('ciclo-tbody');
+    const r = rel.resumo || {};
+    document.getElementById('ciclo-resumo').textContent =
+      `${rel.data} · alvos: ${r.alvos||0} · enviados: ${r.enviados||0} · pulados: ${r.pulados||0}` +
+      ` · sem match: ${r.sem_match||0} · ambíguos: ${r.ambiguos||0} · erros: ${r.erros||0}`;
+    tbody.innerHTML = '';
+    (rel.itens || []).forEach(i => {
+      const [lbl, cor] = STATUS_LABEL[i.status] || [i.status, 'var(--text)'];
+      const nome = i.nome_proradis || i.nome_gto || '';
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        `<td style="padding:8px;border-bottom:1px solid var(--border);font-family:var(--font-mono);">${i.gto}</td>` +
+        `<td style="padding:8px;border-bottom:1px solid var(--border);">${nome}</td>` +
+        `<td style="padding:8px;border-bottom:1px solid var(--border);text-align:center;">${(i.arquivos||[]).length}</td>` +
+        `<td style="padding:8px;border-bottom:1px solid var(--border);color:${cor};" title="${(i.detalhe||'').replace(/"/g,'')}">${lbl}</td>`;
+      tbody.appendChild(tr);
+    });
+    card.style.display = 'block';
+  }
+
+  document.getElementById('btn-ciclo').addEventListener('click', async () => {
+    const { dateFrom, selConv, selSeg } = getSelections();
+    if (!dateFrom) { showToast('Informe o dia.', 'error'); return; }
+    if (!selConv.length) { showToast('Selecione ao menos um convênio.', 'error'); return; }
+
+    setButtons(true);
+    startOverlay('Iniciando ciclo…', 'PRORADIS → OdontoPrev');
+    document.getElementById('ciclo-card').style.display = 'none';
+
+    let jobId = null;
+    try {
+      const resp = await fetch('/ciclo_dia', { method: 'POST', body: buildFormData(dateFrom, dateFrom, selConv, selSeg) });
+      const data = await resp.json();
+      if (data.error) { stopOverlay(); setButtons(false); showToast('Erro: ' + data.error, 'error'); return; }
+      jobId = data.job_id;
+    } catch (err) {
+      stopOverlay(); setButtons(false);
+      showToast('Erro ao iniciar ciclo: ' + err.message, 'error'); return;
+    }
+
+    document.getElementById('ov-step').textContent = 'Processando ciclo…';
+    document.getElementById('ov-detail').textContent = `job ${jobId}`;
+
+    pollInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`/ciclo_dia/status/${jobId}`);
+        const s = await r.json();
+        if (s.log && s.log.length) {
+          const last = s.log[s.log.length - 1];
+          document.getElementById('ov-log').textContent = last.slice(0, 120);
+          const mfase = last.match(/\[(\d)\/3\]\s*(.+)/);
+          if (mfase) document.getElementById('ov-step').textContent = `Fase ${mfase[1]}/3 — ${mfase[2].slice(0,40)}`;
+        }
+        if (s.status === 'done') {
+          clearInterval(pollInterval); pollInterval = null;
+          stopOverlay(); setButtons(false);
+          const rel = s.relatorio || {};
+          renderCiclo(rel);
+          const rr = rel.resumo || {};
+          showToast(`✓ Ciclo concluído — enviados: ${rr.enviados||0}, pulados: ${rr.pulados||0}, erros: ${rr.erros||0}`, 'success');
+        } else if (s.status === 'error') {
+          clearInterval(pollInterval); pollInterval = null;
+          stopOverlay(); setButtons(false);
+          showToast('Erro no ciclo: ' + (s.error || 'desconhecido'), 'error');
+        }
+      } catch (err) {
         document.getElementById('ov-log').textContent = 'aguardando…';
       }
     }, 5000);

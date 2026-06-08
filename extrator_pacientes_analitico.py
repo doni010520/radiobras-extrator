@@ -45,7 +45,9 @@ def discover_tokens_and_cookies(email: str, password: str) -> tuple[dict, dict, 
     Retorna (convenio_map, segmento_map, cookies_dict)
     """
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
         context = browser.new_context()
         page = context.new_page()
 
