@@ -22,8 +22,11 @@ TARGET_CONVENIOS = [
     "REDE UNNA - ITAIGARA",
     "REDE UNNA - PERIPERI",
     "REDE UNNA - LAURO DE FREITAS",
+    "REDE UNNA - CAMAÇARI",
+    "REDE UNNA CAMINHO DAS ÁRVORES - TANCREDO",
+    "REDE UNNA DESCONTO CAMAÇARI",
 ]
-TARGET_SEGMENTOS = ["CENTRO", "ITAIGARA", "LAURO", "PERIPERI"]
+TARGET_SEGMENTOS = ["BRASMED", "CAMAÇARI", "CENTRO", "ITAIGARA", "LAURO", "PERIPERI", "TANCREDO"]
 
 
 def get_credentials():
@@ -42,7 +45,9 @@ def discover_tokens_and_cookies(email: str, password: str) -> tuple[dict, dict, 
     Retorna (convenio_map, segmento_map, cookies_dict)
     """
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
         context = browser.new_context()
         page = context.new_page()
 
@@ -53,12 +58,13 @@ def discover_tokens_and_cookies(email: str, password: str) -> tuple[dict, dict, 
         page.fill('input[name="username"]', email)
         page.fill('input[name="password"]', password)
         page.click('button[type="submit"], input[type="submit"]')
-        page.wait_for_load_state("networkidle")
+        page.wait_for_load_state("networkidle", timeout=30000)
+        page.wait_for_timeout(1500)
 
         # Verificar login
         if "/login" in page.url or "checklogin" in page.url:
             browser.close()
-            raise RuntimeError("Falha no login — verificar credenciais.")
+            raise RuntimeError(f"Falha no login — URL pos-submit: {page.url}")
         print(f"   Logado. URL atual: {page.url}")
 
         print("[3/5] Navegando para admin_reports...")
@@ -201,6 +207,8 @@ def segmento_from_convenio(convenio: str) -> str:
         "LAURO": "LAURO",
         "CAMAÇARI": "CAMAÇARI",
         "BRASMED": "BRASMED",
+        "TANCREDO": "TANCREDO",
+        "ÁRVORES": "TANCREDO",
     }
     upper = convenio.upper()
     for key, seg in mapping.items():

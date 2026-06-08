@@ -328,6 +328,30 @@
       cursor: not-allowed;
       box-shadow: none;
     }
+    .btn-secondary {
+      background: transparent;
+      color: var(--teal);
+      border: 1.5px solid var(--teal-dim);
+      box-shadow: none;
+    }
+    .btn-secondary:hover {
+      background: var(--teal-glow);
+      box-shadow: none;
+    }
+    .btn-secondary:disabled {
+      border-color: var(--border);
+    }
+
+    /* ── job log ── */
+    .overlay-log {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--muted);
+      max-height: 80px;
+      overflow: hidden;
+      text-align: center;
+      line-height: 1.6;
+    }
     .btn-icon { font-size: 16px; }
 
     /* ── overlay ── */
@@ -481,13 +505,44 @@
     <!-- FOOTER -->
     <div class="card-footer">
       <span class="meta-info" id="meta-info">4 convênios · 4 segmentos</span>
-      <button class="btn-gerar" id="btn-gerar" type="button">
-        <span class="btn-icon">⬇</span>
-        Gerar Relatório
-      </button>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <button class="btn-gerar btn-secondary" id="btn-arquivos" type="button">
+          <span class="btn-icon">📁</span>
+          Baixar Arquivos
+        </button>
+        <button class="btn-gerar" id="btn-gerar" type="button">
+          <span class="btn-icon">⬇</span>
+          Gerar Relatório
+        </button>
+        <button class="btn-gerar" id="btn-ciclo" type="button" title="Baixa do PRORADIS e envia para as GTOs 'Senha Liberada' do OdontoPrev">
+          <span class="btn-icon">🔄</span>
+          Ciclo Completo
+        </button>
+      </div>
     </div>
 
   </div><!-- /card -->
+
+  <!-- RELATÓRIO DO CICLO -->
+  <div class="card" id="ciclo-card" style="margin-top:20px;display:none;">
+    <div class="card-section">
+      <div class="section-label">Relatório do ciclo — OdontoPrev</div>
+      <div id="ciclo-resumo" class="meta-info" style="margin-bottom:14px;"></div>
+      <div style="overflow-x:auto;">
+        <table id="ciclo-tabela" style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="text-align:left;color:var(--muted);font-family:var(--font-mono);font-size:11px;">
+              <th style="padding:8px;border-bottom:1px solid var(--border);">GTO</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);">Paciente</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);">Arq.</th>
+              <th style="padding:8px;border-bottom:1px solid var(--border);">Situação</th>
+            </tr>
+          </thead>
+          <tbody id="ciclo-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div><!-- /ciclo-card -->
 </div><!-- /page -->
 
 <!-- OVERLAY DE CARREGAMENTO -->
@@ -500,6 +555,7 @@
     <div class="overlay-step" id="ov-step">Conectando ao SmartRIS…</div>
     <div class="overlay-detail" id="ov-detail">aguardando resposta do servidor</div>
     <div class="overlay-timer" id="ov-timer">0s</div>
+    <div class="overlay-log" id="ov-log"></div>
   </div>
 </div>
 
@@ -507,7 +563,7 @@
 <div class="toast" id="toast"></div>
 
 <script>
-  // ── toggle check-item ──
+  // ── toggle checkboxes ──────────────────────────────────────────────────────
   document.querySelectorAll('.check-item, .seg-pill').forEach(label => {
     label.addEventListener('click', () => {
       const cb = label.querySelector('input[type="checkbox"]');
@@ -515,34 +571,41 @@
       label.classList.toggle('checked', cb.checked);
       updateMeta();
     });
-    // Prevenir duplo toggle do clique no input
     label.querySelector('input').addEventListener('click', e => e.stopPropagation());
   });
 
   function updateMeta() {
     const nc = document.querySelectorAll('#convenios-grid .check-item.checked').length;
     const ns = document.querySelectorAll('#seg-row .seg-pill.checked').length;
-    document.getElementById('meta-info').textContent = `${nc} convênio${nc!==1?'s':''} · ${ns} segmento${ns!==1?'s':''}`;
+    document.getElementById('meta-info').textContent =
+      `${nc} convênio${nc!==1?'s':''} · ${ns} segmento${ns!==1?'s':''}`;
   }
 
-  // ── loading steps ──
-  const steps = [
-    { step: 'Conectando ao SmartRIS…',      detail: 'iniciando browser headless',       t: 0   },
-    { step: 'Autenticando sessão…',          detail: 'login com credenciais configuradas', t: 8000 },
-    { step: 'Carregando filtros…',           detail: 'lendo tokens de convênio/segmento', t: 18000 },
-    { step: 'Gerando relatório…',            detail: 'POST admin_reports · aguardando…',  t: 32000 },
-    { step: 'Preparando arquivo…',           detail: 'convertendo tabela → Excel (.xlsx)', t: 50000 },
+  // ── overlay ────────────────────────────────────────────────────────────────
+  const stepsRelatorio = [
+    { step: 'Conectando ao SmartRIS…',    detail: 'iniciando browser headless',        t: 0     },
+    { step: 'Autenticando sessão…',        detail: 'login com credenciais',             t: 8000  },
+    { step: 'Carregando filtros…',         detail: 'lendo tokens de convênio/segmento', t: 18000 },
+    { step: 'Gerando relatório…',          detail: 'POST admin_reports · aguardando…',  t: 32000 },
+    { step: 'Preparando arquivo…',         detail: 'convertendo tabela → Excel',        t: 50000 },
   ];
 
-  let timerInterval, stepTimeouts = [], elapsed = 0;
+  let timerInterval, stepTimeouts = [], elapsed = 0, pollInterval = null;
 
-  function startOverlay() {
+  function startOverlay(step0, detail0) {
     document.getElementById('overlay').classList.add('active');
+    document.getElementById('ov-step').textContent = step0 || 'Aguardando…';
+    document.getElementById('ov-detail').textContent = detail0 || '';
+    document.getElementById('ov-log').textContent = '';
     elapsed = 0;
+    clearInterval(timerInterval);
     timerInterval = setInterval(() => {
       elapsed++;
       document.getElementById('ov-timer').textContent = `${elapsed}s`;
     }, 1000);
+  }
+
+  function scheduleSteps(steps) {
     steps.forEach(({ step, detail, t }) => {
       const id = setTimeout(() => {
         document.getElementById('ov-step').textContent = step;
@@ -555,6 +618,8 @@
   function stopOverlay() {
     document.getElementById('overlay').classList.remove('active');
     clearInterval(timerInterval);
+    clearInterval(pollInterval);
+    pollInterval = null;
     stepTimeouts.forEach(clearTimeout);
     stepTimeouts = [];
   }
@@ -563,65 +628,244 @@
     const t = document.getElementById('toast');
     t.textContent = msg;
     t.className = `toast ${type}`;
-    setTimeout(() => { t.className = 'toast'; }, 6000);
+    setTimeout(() => { t.className = 'toast'; }, 8000);
   }
 
-  // ── form submit ──
-  document.getElementById('btn-gerar').addEventListener('click', async () => {
-    const dateFrom = document.getElementById('date_from').value;
-    const dateTo   = document.getElementById('date_to').value;
+  function setButtons(disabled) {
+    document.getElementById('btn-gerar').disabled = disabled;
+    document.getElementById('btn-arquivos').disabled = disabled;
+    document.getElementById('btn-ciclo').disabled = disabled;
+  }
 
-    if (!dateFrom || !dateTo) { showToast('Informe o período.', 'error'); return; }
-
-    const selConv = [...document.querySelectorAll('#convenios-grid .check-item.checked input')].map(i => i.value);
-    const selSeg  = [...document.querySelectorAll('#seg-row .seg-pill.checked input')].map(i => i.value);
-
-    if (!selConv.length) { showToast('Selecione ao menos um convênio.', 'error'); return; }
-    if (!selSeg.length)  { showToast('Selecione ao menos um segmento.', 'error'); return; }
-
-    // Converter yyyy-mm-dd → dd/mm/yyyy
+  function buildFormData(dateFrom, dateTo, selConv, selSeg) {
     const fmt = d => d.split('-').reverse().join('/');
-
     const body = new FormData();
     body.append('date_from', fmt(dateFrom));
     body.append('date_to',   fmt(dateTo));
     selConv.forEach(v => body.append('convenios', v));
     selSeg.forEach(v  => body.append('segmentos', v));
+    return body;
+  }
 
-    document.getElementById('btn-gerar').disabled = true;
-    startOverlay();
+  function triggerDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function getSelections() {
+    const dateFrom = document.getElementById('date_from').value;
+    const dateTo   = document.getElementById('date_to').value;
+    const selConv  = [...document.querySelectorAll('#convenios-grid .check-item.checked input')].map(i => i.value);
+    const selSeg   = [...document.querySelectorAll('#seg-row .seg-pill.checked input')].map(i => i.value);
+    return { dateFrom, dateTo, selConv, selSeg };
+  }
+
+  // ── Gerar Relatório (síncrono) ─────────────────────────────────────────────
+  document.getElementById('btn-gerar').addEventListener('click', async () => {
+    const { dateFrom, dateTo, selConv, selSeg } = getSelections();
+    if (!dateFrom || !dateTo) { showToast('Informe o período.', 'error'); return; }
+    if (!selConv.length) { showToast('Selecione ao menos um convênio.', 'error'); return; }
+    if (!selSeg.length)  { showToast('Selecione ao menos um segmento.', 'error'); return; }
+
+    setButtons(true);
+    startOverlay('Conectando ao SmartRIS…', 'iniciando browser headless');
+    scheduleSteps(stepsRelatorio);
 
     try {
-      const resp = await fetch('/gerar', { method: 'POST', body });
-
+      const resp = await fetch('/gerar', { method: 'POST', body: buildFormData(dateFrom, dateTo, selConv, selSeg) });
       stopOverlay();
-      document.getElementById('btn-gerar').disabled = false;
-
+      setButtons(false);
       const ct = resp.headers.get('Content-Type') || '';
-
       if (ct.includes('json')) {
         const data = await resp.json();
-        if (data.error)   showToast('Erro: ' + data.error, 'error');
-        if (data.warning) showToast(data.warning, 'error');
+        showToast((data.error ? 'Erro: ' + data.error : data.warning) || 'Aviso desconhecido.', 'error');
       } else {
-        // Arquivo recebido — disparar download
         const blob = await resp.blob();
         const cd = resp.headers.get('Content-Disposition') || '';
-        const nameMatch = cd.match(/filename="?([^"]+)"?/);
-        const filename = nameMatch ? nameMatch[1] : 'relatorio.xlsx';
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = filename;
-        document.body.appendChild(a); a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        showToast(`✓ ${filename} baixado com sucesso`, 'success');
+        const m = cd.match(/filename="?([^"]+)"?/);
+        const filename = m ? m[1] : 'relatorio.xlsx';
+        triggerDownload(blob, filename);
+        showToast(`✓ ${filename} baixado`, 'success');
       }
     } catch (err) {
-      stopOverlay();
-      document.getElementById('btn-gerar').disabled = false;
+      stopOverlay(); setButtons(false);
       showToast('Erro de rede: ' + err.message, 'error');
     }
+  });
+
+  // ── Baixar Arquivos (assíncrono com polling) ───────────────────────────────
+  document.getElementById('btn-arquivos').addEventListener('click', async () => {
+    const { dateFrom, dateTo, selConv, selSeg } = getSelections();
+    if (!dateFrom || !dateTo) { showToast('Informe o período.', 'error'); return; }
+    if (!selConv.length) { showToast('Selecione ao menos um convênio.', 'error'); return; }
+
+    setButtons(true);
+    startOverlay('Iniciando job…', 'submetendo ao servidor');
+
+    let jobId = null;
+    try {
+      const resp = await fetch('/baixar_dia', {
+        method: 'POST',
+        body: buildFormData(dateFrom, dateTo, selConv, selSeg)
+      });
+      const data = await resp.json();
+      if (data.error) { stopOverlay(); setButtons(false); showToast('Erro: ' + data.error, 'error'); return; }
+      jobId = data.job_id;
+    } catch (err) {
+      stopOverlay(); setButtons(false);
+      showToast('Erro ao iniciar job: ' + err.message, 'error'); return;
+    }
+
+    document.getElementById('ov-step').textContent = 'Processando pacientes…';
+    document.getElementById('ov-detail').textContent = `job ${jobId}`;
+
+    // Polling a cada 5s
+    pollInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`/baixar_dia/status/${jobId}`);
+        const s = await r.json();
+
+        // Mostrar ultima linha do log
+        if (s.log && s.log.length) {
+          const last = s.log[s.log.length - 1];
+          document.getElementById('ov-log').textContent = last.slice(0, 120);
+          // Atualizar step com progresso se tiver numero de paciente
+          const m = last.match(/\[LOTE (\d+)\].*?(\d+)–(\d+)\s*\/\s*(\d+)/);
+          if (m) {
+            document.getElementById('ov-step').textContent =
+              `Lote ${m[1]} — pacientes ${m[2]}–${m[3]} de ${m[4]}`;
+          }
+          const mp = last.match(/-> (.+?) \(/);
+          if (mp) {
+            document.getElementById('ov-detail').textContent = mp[1].slice(0, 50);
+          }
+        }
+
+        if (s.status === 'done') {
+          clearInterval(pollInterval); pollInterval = null;
+          // Resumo
+          const res = s.resumo || {};
+          document.getElementById('ov-step').textContent = 'Baixando ZIP…';
+          document.getElementById('ov-detail').textContent =
+            `OK: ${res.ok_completo || 0}  Pendentes: ${res.com_pendencia || 0}  Erros: ${res.com_erro || 0}`;
+
+          const zr = await fetch(`/baixar_dia/resultado/${jobId}`);
+          if (!zr.ok) {
+            stopOverlay(); setButtons(false);
+            showToast('Erro ao baixar resultado.', 'error'); return;
+          }
+          const blob = await zr.blob();
+          const cd = zr.headers.get('Content-Disposition') || '';
+          const mn = cd.match(/filename="?([^"]+)"?/);
+          const filename = mn ? mn[1] : `arquivos_REDEUNNA.zip`;
+          triggerDownload(blob, filename);
+          stopOverlay(); setButtons(false);
+          showToast(
+            `✓ ${filename} baixado — ${res.pacientes_total || '?'} pacientes` +
+            ` (OK: ${res.ok_completo || 0}, Pend: ${res.com_pendencia || 0})`,
+            'success'
+          );
+
+        } else if (s.status === 'error') {
+          clearInterval(pollInterval); pollInterval = null;
+          stopOverlay(); setButtons(false);
+          showToast('Erro no job: ' + (s.error || 'desconhecido'), 'error');
+        }
+      } catch (err) {
+        // falha pontual de rede — continuar polling
+        document.getElementById('ov-log').textContent = 'aguardando…';
+      }
+    }, 5000);
+  });
+
+  // ── Ciclo Completo (baixar do PRORADIS + enviar às GTOs OdontoPrev) ──────────
+  const STATUS_LABEL = {
+    ENVIADO:          ['✓ Enviado',        'var(--green)'],
+    PULADO_JA_TINHA:  ['↷ Já tinha anexos','var(--muted)'],
+    SEM_MATCH:        ['✗ Sem match',      'var(--red)'],
+    AMBIGUO:          ['⚠ Ambíguo',        '#e5b800'],
+    SEM_ARQUIVOS:     ['✗ Sem arquivos',   'var(--red)'],
+    ERRO:             ['✗ Erro',           'var(--red)'],
+    ERRO_UPLOAD:      ['✗ Erro upload',    'var(--red)'],
+    DRY_RUN:          ['• Simulado',       'var(--muted)'],
+    PRONTO:           ['• Pronto',         'var(--teal)'],
+  };
+
+  function renderCiclo(rel) {
+    const card = document.getElementById('ciclo-card');
+    const tbody = document.getElementById('ciclo-tbody');
+    const r = rel.resumo || {};
+    document.getElementById('ciclo-resumo').textContent =
+      `${rel.data} · alvos: ${r.alvos||0} · enviados: ${r.enviados||0} · pulados: ${r.pulados||0}` +
+      ` · sem match: ${r.sem_match||0} · ambíguos: ${r.ambiguos||0} · erros: ${r.erros||0}`;
+    tbody.innerHTML = '';
+    (rel.itens || []).forEach(i => {
+      const [lbl, cor] = STATUS_LABEL[i.status] || [i.status, 'var(--text)'];
+      const nome = i.nome_proradis || i.nome_gto || '';
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        `<td style="padding:8px;border-bottom:1px solid var(--border);font-family:var(--font-mono);">${i.gto}</td>` +
+        `<td style="padding:8px;border-bottom:1px solid var(--border);">${nome}</td>` +
+        `<td style="padding:8px;border-bottom:1px solid var(--border);text-align:center;">${(i.arquivos||[]).length}</td>` +
+        `<td style="padding:8px;border-bottom:1px solid var(--border);color:${cor};" title="${(i.detalhe||'').replace(/"/g,'')}">${lbl}</td>`;
+      tbody.appendChild(tr);
+    });
+    card.style.display = 'block';
+  }
+
+  document.getElementById('btn-ciclo').addEventListener('click', async () => {
+    const { dateFrom, selConv, selSeg } = getSelections();
+    if (!dateFrom) { showToast('Informe o dia.', 'error'); return; }
+    if (!selConv.length) { showToast('Selecione ao menos um convênio.', 'error'); return; }
+
+    setButtons(true);
+    startOverlay('Iniciando ciclo…', 'PRORADIS → OdontoPrev');
+    document.getElementById('ciclo-card').style.display = 'none';
+
+    let jobId = null;
+    try {
+      const resp = await fetch('/ciclo_dia', { method: 'POST', body: buildFormData(dateFrom, dateFrom, selConv, selSeg) });
+      const data = await resp.json();
+      if (data.error) { stopOverlay(); setButtons(false); showToast('Erro: ' + data.error, 'error'); return; }
+      jobId = data.job_id;
+    } catch (err) {
+      stopOverlay(); setButtons(false);
+      showToast('Erro ao iniciar ciclo: ' + err.message, 'error'); return;
+    }
+
+    document.getElementById('ov-step').textContent = 'Processando ciclo…';
+    document.getElementById('ov-detail').textContent = `job ${jobId}`;
+
+    pollInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`/ciclo_dia/status/${jobId}`);
+        const s = await r.json();
+        if (s.log && s.log.length) {
+          const last = s.log[s.log.length - 1];
+          document.getElementById('ov-log').textContent = last.slice(0, 120);
+          const mfase = last.match(/\[(\d)\/3\]\s*(.+)/);
+          if (mfase) document.getElementById('ov-step').textContent = `Fase ${mfase[1]}/3 — ${mfase[2].slice(0,40)}`;
+        }
+        if (s.status === 'done') {
+          clearInterval(pollInterval); pollInterval = null;
+          stopOverlay(); setButtons(false);
+          const rel = s.relatorio || {};
+          renderCiclo(rel);
+          const rr = rel.resumo || {};
+          showToast(`✓ Ciclo concluído — enviados: ${rr.enviados||0}, pulados: ${rr.pulados||0}, erros: ${rr.erros||0}`, 'success');
+        } else if (s.status === 'error') {
+          clearInterval(pollInterval); pollInterval = null;
+          stopOverlay(); setButtons(false);
+          showToast('Erro no ciclo: ' + (s.error || 'desconhecido'), 'error');
+        }
+      } catch (err) {
+        document.getElementById('ov-log').textContent = 'aguardando…';
+      }
+    }, 5000);
   });
 </script>
 </body>
