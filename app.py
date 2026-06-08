@@ -23,6 +23,7 @@ from extrator_pacientes_analitico import (
     resolve_tokens,
 )
 from extrator_arquivos import processar_dia
+from ciclo_completo import ciclo_dia
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -63,6 +64,25 @@ def _run_job(job_id: str, data: str, convenios: list, segmentos: list) -> None:
     except Exception as exc:
         tb = traceback.format_exc()
         app.logger.error("Erro no job %s:\n%s", job_id, tb)
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
+
+
+def _run_ciclo_job(job_id: str, data: str, convenios: list, segmentos: list) -> None:
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "running"
+
+    def progress(msg: str) -> None:
+        with _jobs_lock:
+            _jobs[job_id].setdefault("log", []).append(str(msg))
+
+    try:
+        relatorio = ciclo_dia(data, convenios, segmentos, progress_cb=progress)
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "done", "relatorio": relatorio})
+    except Exception as exc:
+        tb = traceback.format_exc()
+        app.logger.error("Erro no ciclo %s:\n%s", job_id, tb)
         with _jobs_lock:
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
 
@@ -180,5 +200,42 @@ def baixar_dia_resultado(job_id: str):
     return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/zip")
 
 
+@app.route("/ciclo_dia", methods=["POST"])
+def ciclo_dia_route():
+    date_from = request.form.get("date_from", "").strip()
+    selected_convenios = request.form.getlist("convenios") or CONVENIOS
+    selected_segmentos = request.form.getlist("segmentos") or SEGMENTOS
+
+    if not date_from:
+        return jsonify({"error": "Informe o dia."}), 400
+
+    job_id = str(uuid.uuid4())[:8]
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "log": []}
+
+    threading.Thread(
+        target=_run_ciclo_job,
+        args=(job_id, date_from, selected_convenios, selected_segmentos),
+        daemon=True,
+    ).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/ciclo_dia/status/<job_id>")
+def ciclo_dia_status(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job não encontrado."}), 404
+    resp: dict = {"status": job["status"], "log": job.get("log", [])}
+    if job["status"] == "error":
+        resp["error"] = job.get("error", "")
+    if job["status"] == "done":
+        resp["relatorio"] = job.get("relatorio", {})
+    return jsonify(resp)
+
+
 if __name__ == "__main__":
-    app.run(debug=False, port=5000)
+    # Dev local. Em produção (Docker/EasyPanel) o servidor é o gunicorn.
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(debug=False, host="0.0.0.0", port=port)

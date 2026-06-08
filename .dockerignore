@@ -1,0 +1,25 @@
+# Diagnóstico / runners manuais e saídas locais
+_diag_*
+_salvar_*
+_ciclo_*
+downloads_*/
+chimene_*/
+_tmp_*/
+*.png
+_debug_response.html
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Saídas
+*.xlsx
+
+# Credenciais / git
+.env
+*.env
+.git
+.gitignore

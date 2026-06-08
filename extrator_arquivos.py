@@ -91,7 +91,9 @@ def _login_playwright(pw, email: str, password: str):
     Faz login via Playwright e retorna (browser, ctx, page).
     Usa wait_for_url + wait_for_timeout conforme spec (nao networkidle pos-login).
     """
-    browser = pw.chromium.launch(headless=True)
+    browser = pw.chromium.launch(
+        headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+    )
     ctx = browser.new_context()
     page = ctx.new_page()
     page.goto(f"{BASE}/", wait_until="networkidle")
