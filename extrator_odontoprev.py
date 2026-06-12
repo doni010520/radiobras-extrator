@@ -13,13 +13,25 @@ import os
 import re
 import unicodedata
 
+# Carrega .env em desenvolvimento local (no Render/EasyPanel as vars já vêm do ambiente).
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 BASE = "https://credenciado.odontoprev.com.br"
 LOGIN_URL = f"{BASE}/"
 
 
 def get_credentials_odonto():
-    user = os.environ.get("ODONTOPREV_USER", "***REMOVED***")
-    pwd = os.environ.get("ODONTOPREV_PASSWORD", "***REMOVED***")
+    user = os.environ.get("ODONTOPREV_USER")
+    pwd = os.environ.get("ODONTOPREV_PASSWORD")
+    if not user or not pwd:
+        raise RuntimeError(
+            "Credenciais do OdontoPrev ausentes. Defina ODONTOPREV_USER e "
+            "ODONTOPREV_PASSWORD nas variáveis de ambiente (ou no arquivo .env)."
+        )
     return user, pwd
 
 

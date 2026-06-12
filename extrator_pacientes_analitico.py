@@ -14,6 +14,13 @@ import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
+# Carrega .env em desenvolvimento local (no Render/EasyPanel as vars já vêm do ambiente).
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 BASE_URL = "https://radiobras.smartris.com.br/ris"
 
 # Convênios e segmentos do escopo (nomes exatos como aparecem nos selects)
@@ -30,8 +37,13 @@ TARGET_SEGMENTOS = ["BRASMED", "CAMAÇARI", "CENTRO", "ITAIGARA", "LAURO", "PERI
 
 
 def get_credentials():
-    email = os.environ.get("SMARTRIS_EMAIL", "***REMOVED***")
-    password = os.environ.get("SMARTRIS_PASSWORD", "***REMOVED***")
+    email = os.environ.get("SMARTRIS_EMAIL")
+    password = os.environ.get("SMARTRIS_PASSWORD")
+    if not email or not password:
+        raise RuntimeError(
+            "Credenciais do PRORADIS ausentes. Defina SMARTRIS_EMAIL e "
+            "SMARTRIS_PASSWORD nas variáveis de ambiente (ou no arquivo .env)."
+        )
     return email, password
 
 
