@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RADIOBRAS · Fechar o dia</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Karla:wght@300;400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:#070d1a; --surface:#0e1625; --border:#1e2d45; --border-hi:#2a4063;
+      --text:#c8d8ed; --muted:#4a6080; --teal:#00e5c3; --teal-dim:#00a38b;
+      --red:#ff4d6d; --green:#00e5a0; --amber:#ffb347;
+      --font-head:'Syne',sans-serif; --font-body:'Karla',sans-serif; --font-mono:'JetBrains Mono',monospace;
+    }
+    html,body { min-height:100vh; background:var(--bg); color:var(--text); font-family:var(--font-body); font-size:15px; line-height:1.6; }
+    body::before { content:''; position:fixed; inset:0; background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px); background-size:48px 48px; opacity:.22; pointer-events:none; z-index:0; }
+    .page { position:relative; z-index:1; min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:48px 20px 80px; }
+    header { width:100%; max-width:920px; margin-bottom:28px; }
+    .badge { font-family:var(--font-mono); font-size:11px; letter-spacing:.15em; text-transform:uppercase; color:var(--teal); display:flex; align-items:center; gap:8px; }
+    .badge::before { content:''; width:6px; height:6px; border-radius:50%; background:var(--teal); box-shadow:0 0 8px var(--teal); animation:pulse 2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+    h1 { font-family:var(--font-head); font-size:clamp(26px,5vw,38px); font-weight:800; color:#e8f4ff; letter-spacing:-.02em; line-height:1.15; margin-top:6px; }
+    h1 span { color:var(--teal); }
+    .sub { color:var(--muted); margin-top:6px; max-width:640px; }
+    .card { width:100%; max-width:920px; background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:26px; }
+    .controls { display:flex; flex-wrap:wrap; gap:18px; align-items:flex-end; }
+    label.f { display:flex; flex-direction:column; gap:7px; font-family:var(--font-mono); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+    input[type=text]{ font-family:var(--font-mono); font-size:18px; background:#0a121f; border:1px solid var(--border-hi); color:var(--text); padding:12px 14px; border-radius:9px; width:200px; letter-spacing:.04em; }
+    input[type=text]:focus{ outline:none; border-color:var(--teal); box-shadow:0 0 0 3px var(--teal-glow); }
+    .chk { display:flex; align-items:center; gap:9px; color:var(--text); font-size:14px; padding-bottom:11px; cursor:pointer; }
+    .chk input{ width:17px; height:17px; accent-color:var(--teal); }
+    button.go { font-family:var(--font-head); font-weight:700; font-size:16px; letter-spacing:.02em; background:linear-gradient(135deg,var(--teal),var(--teal-dim)); color:#06231e; border:none; padding:14px 30px; border-radius:10px; cursor:pointer; transition:transform .1s, box-shadow .2s; box-shadow:0 0 0 0 var(--teal-glow); }
+    button.go:hover:not(:disabled){ transform:translateY(-1px); box-shadow:0 8px 26px rgba(0,229,195,.22); }
+    button.go:disabled{ opacity:.5; cursor:not-allowed; }
+    .hint { color:var(--muted); font-size:12.5px; margin-top:14px; }
+    .panel { width:100%; max-width:920px; margin-top:22px; display:none; }
+    .panel.show { display:block; }
+    .statusbar { display:flex; align-items:center; gap:12px; font-family:var(--font-mono); font-size:13px; color:var(--text); margin-bottom:14px; }
+    .spinner { width:15px; height:15px; border:2px solid var(--border-hi); border-top-color:var(--teal); border-radius:50%; animation:spin .8s linear infinite; }
+    @keyframes spin { to{ transform:rotate(360deg);} }
+    .log { background:#060b14; border:1px solid var(--border); border-radius:10px; padding:14px 16px; font-family:var(--font-mono); font-size:12.5px; line-height:1.7; color:#9fb6d4; max-height:300px; overflow-y:auto; white-space:pre-wrap; }
+    .log .ok{ color:var(--green); } .log .err{ color:var(--red); } .log .ph{ color:var(--teal); }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; margin:18px 0; }
+    .stat { background:#0a121f; border:1px solid var(--border); border-radius:10px; padding:14px; }
+    .stat .n { font-family:var(--font-head); font-weight:800; font-size:28px; color:#e8f4ff; }
+    .stat .l { font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); margin-top:2px; }
+    .stat.good .n{ color:var(--green);} .stat.bad .n{ color:var(--red);} .stat.warn .n{ color:var(--amber);}
+    table { width:100%; border-collapse:collapse; font-size:13.5px; margin-top:6px; }
+    th,td { text-align:left; padding:9px 11px; border-bottom:1px solid var(--border); vertical-align:top; }
+    th { font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); position:sticky; top:0; background:var(--surface); }
+    .tagwrap{ max-height:420px; overflow-y:auto; border:1px solid var(--border); border-radius:10px; }
+    .tag { display:inline-block; font-family:var(--font-mono); font-size:10.5px; padding:2px 8px; border-radius:20px; letter-spacing:.04em; }
+    .tag.enviado{ background:rgba(0,229,160,.12); color:var(--green); border:1px solid rgba(0,229,160,.3);}
+    .tag.erro{ background:rgba(255,77,109,.12); color:var(--red); border:1px solid rgba(255,77,109,.3);}
+    .tag.semmatch,.tag.ambiguo{ background:rgba(255,179,71,.12); color:var(--amber); border:1px solid rgba(255,179,71,.3);}
+    .tag.outro{ background:rgba(74,96,128,.18); color:var(--muted); border:1px solid var(--border-hi);}
+    .muted{ color:var(--muted);} .nowrap{ white-space:nowrap;}
+    .toplinks{ position:absolute; top:18px; right:22px; font-family:var(--font-mono); font-size:11px;}
+    .toplinks a{ color:var(--muted); text-decoration:none; border-bottom:1px dashed var(--border-hi);}
+    .toplinks a:hover{ color:var(--teal);}
+    .errbox{ background:rgba(255,77,109,.08); border:1px solid rgba(255,77,109,.3); color:#ffb3c1; border-radius:10px; padding:14px 16px; font-family:var(--font-mono); font-size:12.5px; white-space:pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="toplinks"><a href="/relatorio">relatório / download →</a></div>
+  <div class="page">
+    <header>
+      <div class="badge">RADIOBRAS · REDE UNNA · OdontoPrev</div>
+      <h1>Fechar o <span>dia</span></h1>
+      <p class="sub">Escolha a data, clique e o sistema baixa os laudos e imagens do PRORADIS e anexa em cada GTO em análise de repasse do portal. Idempotente — pode rodar de novo sem duplicar.</p>
+    </header>
+
+    <div class="card">
+      <div class="controls">
+        <label class="f">Dia
+          <input type="text" id="data" placeholder="DD/MM/AAAA" maxlength="10" />
+        </label>
+        <label class="chk"><input type="checkbox" id="simular" /> Simular (não anexa — só mostra o que faria)</label>
+        <button class="go" id="btn">FECHAR DIA</button>
+      </div>
+      <div class="hint" id="hint">O processo leva alguns minutos (baixa tudo e anexa). Deixe a aba aberta — o progresso aparece abaixo.</div>
+    </div>
+
+    <div class="panel" id="panel">
+      <div class="statusbar" id="statusbar"><div class="spinner" id="spin"></div><span id="statustxt">Iniciando…</span></div>
+      <div id="errbox" class="errbox" style="display:none"></div>
+      <div class="cards" id="cards" style="display:none"></div>
+      <div id="tablewrap" style="display:none">
+        <div class="tagwrap">
+          <table>
+            <thead><tr><th>GTO</th><th>Paciente</th><th>Status</th><th>Anexos</th><th>Justif.</th><th>Solicitação / Pendência</th></tr></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="log" id="log" style="margin-top:16px"></div>
+    </div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const data = $('data'), btn = $('btn'), panel = $('panel');
+
+// máscara DD/MM/AAAA + default hoje
+function hoje(){ const d=new Date(); const p=(n)=>String(n).padStart(2,'0'); return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()}`; }
+data.value = hoje();
+data.addEventListener('input', () => {
+  let v = data.value.replace(/\D/g,'').slice(0,8);
+  if (v.length > 4) v = v.slice(0,2)+'/'+v.slice(2,4)+'/'+v.slice(4);
+  else if (v.length > 2) v = v.slice(0,2)+'/'+v.slice(2);
+  data.value = v;
+});
+
+function logLine(msg){
+  const el = $('log'); const div = document.createElement('div');
+  let cls = '';
+  if (/\[ENVIADO\]|\[OK\]/.test(msg)) cls='ok';
+  else if (/\[ERRO|SEM_LAUDO|SEM MATCH|\[SEM/.test(msg)) cls='err';
+  else if (/\[1\/3\]|\[2\/3\]|\[3\/3\]|===/.test(msg)) cls='ph';
+  div.className = cls; div.textContent = msg;
+  el.appendChild(div); el.scrollTop = el.scrollHeight;
+}
+
+let seen = 0, timer = null;
+async function poll(jobId){
+  let r;
+  try { r = await fetch(`/fechar/status/${jobId}`); } catch(e){ return; }
+  const j = await r.json();
+  (j.log||[]).slice(seen).forEach(logLine); seen = (j.log||[]).length;
+  if (j.status === 'running' || j.status === 'queued'){
+    $('statustxt').textContent = j.status === 'queued' ? 'Na fila…' : 'Processando…';
+    return;
+  }
+  clearInterval(timer); $('spin').style.display='none';
+  if (j.status === 'error'){
+    $('statustxt').textContent = 'Erro';
+    $('errbox').style.display='block'; $('errbox').textContent = j.error || 'Falha desconhecida.';
+  } else if (j.status === 'done'){
+    $('statustxt').textContent = (j.dry_run ? 'Simulação concluída' : 'Dia fechado') + ' ✓';
+    render(j.resumo||{}, j.itens||[], j.dry_run);
+  }
+  btn.disabled = false;
+}
+
+function stat(n,l,kind){ return `<div class="stat ${kind||''}"><div class="n">${n}</div><div class="l">${l}</div></div>`; }
+function render(resumo, itens, dry){
+  const c = $('cards'); c.style.display='grid';
+  const principal = dry ? (resumo.prontos??0) : (resumo.enviados??0);
+  c.innerHTML =
+    stat(resumo.alvos??'—','GTOs alvo') +
+    stat(principal, dry?'prontos (simul.)':'anexados','good') +
+    stat(resumo.solic_anexada??0,'c/ solicitação') +
+    stat((resumo.sem_laudo??0)+(resumo.sem_imagens??0),'sem laudo/img', ((resumo.sem_laudo||0)+(resumo.sem_imagens||0))?'warn':'') +
+    stat(resumo.sem_match??0,'sem match', (resumo.sem_match||0)?'warn':'') +
+    stat(resumo.erros??0,'erros',(resumo.erros||0)?'bad':'') +
+    stat(resumo.revisao_humana??0,'revisão humana');
+
+  const tb = $('tbody'); tb.innerHTML='';
+  const ord = {ERRO:0, ERRO_UPLOAD:0, SEM_MATCH:1, AMBIGUO:1, SEM_LAUDO:2, SEM_IMAGENS:2};
+  itens.sort((a,b)=>(ord[a.status]??9)-(ord[b.status]??9));
+  itens.forEach(it=>{
+    const up = it.upload||{};
+    const stt = it.status||'';
+    let tcls='outro';
+    if (stt==='ENVIADO'||stt==='DRY_RUN'||stt==='PRONTO') tcls='enviado';
+    else if (stt.startsWith('ERRO')) tcls='erro';
+    else if (stt==='SEM_MATCH'||stt==='AMBIGUO') tcls='semmatch';
+    const anex = up.enviados!=null ? `+${(up.enviados||[]).length} <span class="muted">(já ${ (up.ja_anexados||[]).length })</span>` :
+                 (it.arquivos? it.arquivos.length+' arq.' : '—');
+    const pend = it.revisao_humana || it.detalhe || (it.solicitacao? 'solicitação: '+it.solicitacao : '') || '';
+    tb.innerHTML += `<tr>
+      <td class="nowrap">${it.gto||''}</td>
+      <td>${it.nome_gto||it.nome||''}</td>
+      <td><span class="tag ${tcls}">${stt}</span></td>
+      <td class="nowrap">${anex}</td>
+      <td class="muted nowrap">${it.justificativa||''}</td>
+      <td class="muted">${pend}</td>
+    </tr>`;
+  });
+  $('tablewrap').style.display='block';
+}
+
+btn.addEventListener('click', async () => {
+  if (!/^\d{2}\/\d{2}\/\d{4}$/.test(data.value)){ alert('Informe a data como DD/MM/AAAA.'); return; }
+  const dry = $('simular').checked;
+  if (!dry && !confirm(`Fechar o dia ${data.value}?\n\nIsto vai ANEXAR os arquivos nas GTOs do OdontoPrev.`)) return;
+  btn.disabled = true; panel.classList.add('show');
+  $('log').innerHTML=''; $('cards').style.display='none'; $('tablewrap').style.display='none';
+  $('errbox').style.display='none'; $('spin').style.display='inline-block';
+  $('statustxt').textContent='Iniciando…'; seen=0;
+  const fd = new FormData(); fd.append('data', data.value); if (dry) fd.append('simular','1');
+  let r;
+  try { r = await fetch('/fechar', {method:'POST', body:fd}); }
+  catch(e){ $('statustxt').textContent='Falha de conexão'; btn.disabled=false; return; }
+  const j = await r.json();
+  if (j.error){ $('errbox').style.display='block'; $('errbox').textContent=j.error; $('spin').style.display='none'; btn.disabled=false; return; }
+  timer = setInterval(()=>poll(j.job_id), 2000);
+});
+</script>
+</body>
+</html>

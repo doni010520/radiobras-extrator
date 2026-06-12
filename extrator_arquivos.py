@@ -33,6 +33,10 @@ BATCH_SIZE = 10
 POPUP_WAIT_MS = 10000
 MAX_RETRIES = 2
 FORCE = False
+# Tempo de espera pela abertura do popup reports_doc (event 'page'). O viewer às
+# vezes demora >30s (default) -> timeouts esporádicos. 60s + retry reduz falhas.
+EXPECT_PAGE_MS = 60000
+POPUP_OPEN_RETRIES = 2
 
 # Criterio de imagem entregavel: presenca da LOGO RadioBras Digital (VERDE) no canto
 # superior-esquerdo da lamina. Deteccao 100% deterministica por COR, SEM OCR/IA.
@@ -61,6 +65,24 @@ _BAD_RE = re.compile(
 
 def slug(nome: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", nome).strip("_").lower()
+
+
+def _sem_acentos(s: str) -> str:
+    """Remove acentos/cedilha. A worklist do PRORADIS NÃO casa 'Ç'/acentos no
+    filtro por nome (ex.: 'FRANÇA' acha 0; 'FRANCA' acha) -> buscamos as 2 formas."""
+    import unicodedata
+    s = unicodedata.normalize("NFD", s or "")
+    return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+
+def _variantes_nome(nome: str) -> list:
+    """Variantes de busca por nome (original + sem acentos), deduplicadas."""
+    chave = re.sub(r"\s+", " ", nome or "").strip()
+    out = []
+    for v in (chave, _sem_acentos(chave)):
+        if v and v not in out:
+            out.append(v)
+    return out
 
 
 def parse_groups(html: str) -> dict:
@@ -96,15 +118,24 @@ def _login_playwright(pw, email: str, password: str):
     )
     ctx = browser.new_context()
     page = ctx.new_page()
-    page.goto(f"{BASE}/", wait_until="networkidle")
+    # domcontentloaded em vez de networkidle: o SmartRIS faz polling/websocket
+    # que nunca "aquieta", então networkidle estoura timeout de forma intermitente.
+    page.goto(f"{BASE}/", wait_until="domcontentloaded", timeout=60000)
     page.fill('input[name="username"]', email)
     page.fill('input[name="password"]', password)
     page.click('button[type="submit"], input[type="submit"]')
-    # Aguarda navegação pós-login: networkidle é mais robusto que wait_for_url
-    # quando o redirect passa por intermediários
-    page.wait_for_load_state("networkidle", timeout=30000)
+    # Aguarda sair da página de login por POLLING de URL (robusto contra o polling
+    # de rede que faz networkidle nunca disparar). Até 60s.
+    deadline = 60
+    ok = False
+    for _ in range(deadline * 2):
+        u = page.url
+        if "/login" not in u and "checklogin" not in u:
+            ok = True
+            break
+        page.wait_for_timeout(500)
     page.wait_for_timeout(1500)
-    if "/login" in page.url or "checklogin" in page.url:
+    if not ok or "/login" in page.url or "checklogin" in page.url:
         browser.close()
         raise RuntimeError(f"Falha no login — URL pos-submit: {page.url}")
     return browser, ctx, page
@@ -279,16 +310,16 @@ def listar_worklist_por_pacientes(page, data: str, nomes: list) -> list:
     by_acc: dict = {}
     vistos: set = set()
     for nome in nomes:
-        chave = re.sub(r"\s+", " ", nome or "").strip()
-        if not chave or chave.upper() in vistos:
-            continue
-        vistos.add(chave.upper())
-        for tipo in ("study_datetime", "realized"):
-            try:
-                raw_html = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
-                _parse_worklist_html(raw_html, by_acc)
-            except Exception as e:
-                print(f"   [worklist] falha nome={chave} tipo={tipo}: {e}")
+        for chave in _variantes_nome(nome):  # original + sem acentos (bug da cedilha)
+            if chave.upper() in vistos:
+                continue
+            vistos.add(chave.upper())
+            for tipo in ("study_datetime", "realized"):
+                try:
+                    raw_html = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
+                    _parse_worklist_html(raw_html, by_acc)
+                except Exception as e:
+                    print(f"   [worklist] falha nome={chave} tipo={tipo}: {e}")
     return list(by_acc.values())
 
 
@@ -318,6 +349,19 @@ def extrair_tokens(row_html: str) -> dict:
             break
 
     return {"pan": pan, "ceph": ceph, "doc": doc, "exame": exame}
+
+
+def extrair_exame_status(row_html: str) -> tuple:
+    """Lê (exame, status) de uma linha da worklist.
+    Status vem de <td name="report_status"><span class="tag">...</span></td>;
+    exame de <span class="wrap-exam">. Retorna ('', '') se não achar."""
+    soup = BeautifulSoup(row_html, "lxml")
+    st_el = soup.select_one('td[name="report_status"] .tag') or \
+        soup.select_one('td[name="report_status"]')
+    status = st_el.get_text(strip=True) if st_el else ""
+    ex_el = soup.select_one(".wrap-exam")
+    exame = ex_el.get_text(strip=True) if ex_el else ""
+    return exame, status
 
 
 # ── Deteccao de imagem entregavel (logo RadioBras) ─────────────────────────────
@@ -403,38 +447,48 @@ def baixar_imagens(
             tail = q.get("studyUID", "").split(".")[-1]
             captured.append((tail, body))
 
+    _ABRE_POPUP = """([s, sc]) => {
+        const f = document.createElement('form');
+        f.method = 'POST';
+        f.action = '/ris/reports_doc';
+        f.target = 'docpop';
+        for (const [k, v] of [['study_id', s], ['schedule_id', sc]]) {
+            const i = document.createElement('input');
+            i.name = k; i.value = v;
+            f.appendChild(i);
+        }
+        document.body.appendChild(f);
+        window.open('', 'docpop');
+        f.submit();
+    }"""
+
     ctx.on("response", on_resp)
     try:
-        # Abrir popup (form POST target=docpop) para disparar carregamento das imagens
-        with ctx.expect_page() as pinfo:
-            page.evaluate(
-                """([s, sc]) => {
-                    const f = document.createElement('form');
-                    f.method = 'POST';
-                    f.action = '/ris/reports_doc';
-                    f.target = 'docpop';
-                    for (const [k, v] of [['study_id', s], ['schedule_id', sc]]) {
-                        const i = document.createElement('input');
-                        i.name = k; i.value = v;
-                        f.appendChild(i);
-                    }
-                    document.body.appendChild(f);
-                    window.open('', 'docpop');
-                    f.submit();
-                }""",
-                [study_id, schedule_id],
-            )
+        # Abrir popup (form POST target=docpop) para disparar o carregamento das
+        # imagens. O viewer às vezes demora a abrir -> timeout maior + retry.
+        popup = None
+        for tentativa in range(POPUP_OPEN_RETRIES + 1):
+            try:
+                with ctx.expect_page(timeout=EXPECT_PAGE_MS) as pinfo:
+                    page.evaluate(_ABRE_POPUP, [study_id, schedule_id])
+                popup = pinfo.value
+                break
+            except Exception as e:
+                if tentativa >= POPUP_OPEN_RETRIES:
+                    pendencias.append(f"popup nao abriu (study {study_id}): {e}")
+                else:
+                    page.wait_for_timeout(2000)
 
-        popup = pinfo.value
-        try:
-            popup.wait_for_load_state("networkidle", timeout=15000)
-        except Exception:
-            pass
-        popup.wait_for_timeout(POPUP_WAIT_MS)
-        try:
-            popup.close()
-        except Exception:
-            pass
+        if popup is not None:
+            try:
+                popup.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            popup.wait_for_timeout(POPUP_WAIT_MS)
+            try:
+                popup.close()
+            except Exception:
+                pass
 
     finally:
         ctx.remove_listener("response", on_resp)
@@ -587,22 +641,25 @@ def _buscar_na_worklist_por_nome(page, nome: str, acc: str, data: str) -> dict |
     accession. Nome+dia mantem a resposta abaixo do teto do servidor.
     Retorna dict {accession, nome, rows_html} ou None.
     """
-    chave = re.sub(r"\s+", " ", nome or "").strip()
-    if not chave:
+    variantes = _variantes_nome(nome)
+    if not variantes:
         return None
     dt_inicio = f"{data} 00:00:00"
     dt_fim = f"{data} 23:59:59"
     rows_html = []
-    for tipo in ("study_datetime", "realized"):
-        try:
-            raw = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
-        except Exception:
-            continue
-        soup = BeautifulSoup(raw, "lxml")
-        for tr in soup.find_all("tr"):
-            h = str(tr)
-            if acc in h and h not in rows_html:
-                rows_html.append(h)
+    for chave in variantes:  # original + sem acentos (bug da cedilha na worklist)
+        for tipo in ("study_datetime", "realized"):
+            try:
+                raw = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
+            except Exception:
+                continue
+            soup = BeautifulSoup(raw, "lxml")
+            for tr in soup.find_all("tr"):
+                h = str(tr)
+                if acc in h and h not in rows_html:
+                    rows_html.append(h)
+            if rows_html:
+                break
         if rows_html:
             break
 

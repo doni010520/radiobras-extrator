@@ -6,6 +6,7 @@ Flask app: relatório analítico (xlsx) + download de arquivos (ZIP).
 import io
 import logging
 import os
+import re
 import sys
 import threading
 import traceback
@@ -24,22 +25,13 @@ from extrator_pacientes_analitico import (
 )
 from extrator_arquivos import processar_dia
 from ciclo_completo import ciclo_dia
+from fechar_dia import fechar_dia
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# Escopo atual (por enquanto): 4 unidades REDE UNNA.
-# (As demais — CAMAÇARI, TANCREDO, DESCONTO — ficam comentadas para reativar fácil.)
-CONVENIOS = [
-    "REDE UNNA - CENTRO",
-    "REDE UNNA - ITAIGARA",
-    "REDE UNNA - PERIPERI",
-    "REDE UNNA - LAURO DE FREITAS",
-    # "REDE UNNA - CAMAÇARI",
-    # "REDE UNNA CAMINHO DAS ÁRVORES - TANCREDO",
-    # "REDE UNNA DESCONTO CAMAÇARI",
-]
-SEGMENTOS = ["CENTRO", "ITAIGARA", "LAURO", "PERIPERI"]
+# Escopo REDE UNNA — definido em config.py (evita import circular).
+from config import CONVENIOS, SEGMENTOS
 
 # ── Job store (em memória) ────────────────────────────────────────────────────
 _jobs: dict = {}
@@ -86,11 +78,76 @@ def _run_ciclo_job(job_id: str, data: str, convenios: list, segmentos: list) -> 
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
 
 
+def _run_fechar_job(job_id: str, data: str, dry_run: bool) -> None:
+    """Job do 'Fechar dia' (orquestrador completo fechar_dia.py)."""
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "running"
+
+    def progress(msg: str) -> None:
+        with _jobs_lock:
+            _jobs[job_id].setdefault("log", []).append(str(msg))
+
+    try:
+        relatorio = fechar_dia(data, CONVENIOS, SEGMENTOS,
+                               dry_run=dry_run, progress_cb=progress)
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "done", "relatorio": relatorio})
+    except Exception as exc:
+        tb = traceback.format_exc()
+        app.logger.error("Erro no fechar_dia %s:\n%s", job_id, tb)
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
+
+
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
+def home():
+    """Tela principal — 'Fechar o dia' (um clique)."""
+    return render_template("fechar.html")
+
+
+@app.route("/relatorio")
 def index():
+    """Tela antiga (relatório analítico xlsx + download ZIP)."""
     return render_template("index.html", convenios=CONVENIOS, segmentos=SEGMENTOS)
+
+
+@app.route("/fechar", methods=["POST"])
+def fechar_route():
+    """Inicia o fechamento do dia (download + anexo no OdontoPrev). Assíncrono."""
+    data = request.form.get("data", "").strip()
+    # 'simular' = dry-run (não anexa, só mostra o que faria)
+    dry_run = request.form.get("simular", "").lower() in ("1", "true", "on", "yes")
+    if not data:
+        return jsonify({"error": "Informe o dia (DD/MM/AAAA)."}), 400
+    if not re.match(r"^\d{2}/\d{2}/\d{4}$", data):
+        return jsonify({"error": "Data inválida. Use DD/MM/AAAA."}), 400
+
+    job_id = str(uuid.uuid4())[:8]
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "log": []}
+    threading.Thread(
+        target=_run_fechar_job, args=(job_id, data, dry_run), daemon=True
+    ).start()
+    return jsonify({"job_id": job_id, "dry_run": dry_run})
+
+
+@app.route("/fechar/status/<job_id>")
+def fechar_status(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job não encontrado."}), 404
+    resp: dict = {"status": job["status"], "log": job.get("log", [])}
+    if job["status"] == "error":
+        resp["error"] = job.get("error", "")
+    if job["status"] == "done":
+        rel = job.get("relatorio", {})
+        resp["resumo"] = rel.get("resumo", {})
+        resp["itens"] = rel.get("itens", [])
+        resp["dry_run"] = rel.get("dry_run", False)
+    return jsonify(resp)
 
 
 @app.route("/gerar", methods=["POST"])
