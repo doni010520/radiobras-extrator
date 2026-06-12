@@ -94,10 +94,26 @@ def consultar_periodo(page, dia: str):
     page.mouse.click(1100, 600)
     page.wait_for_timeout(600)
     page.click("text=Período", timeout=8000)
-    page.wait_for_timeout(900)
-    fld = page.query_selector("#input-324") or page.query_selector(
-        "input[type=text]:below(:text('Selecione o período'))"
-    )
+    page.wait_for_timeout(1200)
+    # O id do campo é dinâmico (Vuetify) — localizar pelo label, com fallbacks.
+    fld = None
+    try:
+        fld = page.query_selector(
+            "xpath=//*[contains(normalize-space(.),'Selecione o per')]"
+            "/ancestor-or-self::div[contains(@class,'v-input')][1]//input"
+        )
+    except Exception:
+        fld = None
+    if not fld:
+        for el in page.query_selector_all("input[type='text'], input:not([type])"):
+            try:
+                if el.is_visible():
+                    fld = el
+                    break
+            except Exception:
+                continue
+    if not fld:
+        raise RuntimeError("Campo de período não encontrado na tela Consultar GTOs.")
     fld.click()
     page.wait_for_timeout(300)
     fld.type(f"{dia} - {dia}", delay=50)
@@ -151,22 +167,78 @@ def _anexos_count(page) -> int:
     return int(m.group(1)) if m else -1
 
 
-def abrir_gto(page, gto: str):
-    """Clica em 'ABRIR GTO' da linha cujo número == gto. Retorna a popup page."""
-    alvo = None
+def _anexos_nomes(page) -> set:
+    """Conjunto de nomes de arquivo (.pdf/.jpg/.png) atualmente anexados na GTO.
+    Usado para verificação por NOME (robusta) e idempotência (não reanexar)."""
+    nomes = set()
+    for el in page.query_selector_all("a, td, span, li, div"):
+        try:
+            t = (el.inner_text() or "").strip()
+        except Exception:
+            continue
+        if re.search(r"\.(pdf|jpe?g|png)\b", t, re.I) and len(t) < 200:
+            nomes.add(re.sub(r"\s+", " ", t).strip())
+    return nomes
+
+
+def _localizar_botao_abrir(page, gto: str):
+    """Re-localiza (sempre fresco) o botão 'ABRIR' da linha da GTO. Handles do
+    Vuetify viram stale entre iterações, então nunca reutilizar handle antigo."""
     for tr in page.query_selector_all("tr, [role=row]"):
-        if gto in (tr.inner_text() or ""):
-            alvo = tr.query_selector("button:has-text('ABRIR'), a:has-text('ABRIR')")
-            if alvo:
-                break
-    if not alvo:
-        raise RuntimeError(f"Linha da GTO {gto} não encontrada.")
-    with page.expect_popup() as pop:
-        alvo.click()
-    gp = pop.value
-    gp.wait_for_load_state("domcontentloaded")
-    gp.wait_for_timeout(5000)
-    return gp
+        try:
+            if gto in (tr.inner_text() or ""):
+                b = tr.query_selector("button:has-text('ABRIR'), a:has-text('ABRIR')")
+                if b:
+                    return b
+        except Exception:
+            continue
+    return None
+
+
+def abrir_gto(page, gto: str, _refrescar=None):
+    """Clica em 'ABRIR GTO' da linha cujo número == gto. Retorna a popup page.
+
+    Resiliente (corrige cascata de 'ElementHandle.click timeout'): a cada
+    tentativa dispensa overlays/modais, re-localiza a linha do zero, dá scroll e
+    abre a popup com timeout curto. Se falhar e houver `_refrescar`, recarrega a
+    lista e tenta de novo (até 3x)."""
+    last = None
+    for _ in range(3):
+        # dispensar overlay/modal que possa cobrir o botão (causa do timeout)
+        try:
+            page.keyboard.press("Escape")
+            page.mouse.click(1100, 600)
+            page.wait_for_timeout(400)
+        except Exception:
+            pass
+        alvo = _localizar_botao_abrir(page, gto)
+        if not alvo:
+            last = RuntimeError(f"Linha da GTO {gto} não encontrada.")
+            if _refrescar:
+                try:
+                    _refrescar()
+                except Exception:
+                    pass
+            continue
+        try:
+            alvo.scroll_into_view_if_needed(timeout=5000)
+        except Exception:
+            pass
+        try:
+            with page.expect_popup(timeout=20000) as pop:
+                alvo.click(timeout=10000)
+            gp = pop.value
+            gp.wait_for_load_state("domcontentloaded")
+            gp.wait_for_timeout(5000)
+            return gp
+        except Exception as e:
+            last = e
+            if _refrescar:
+                try:
+                    _refrescar()
+                except Exception:
+                    pass
+    raise last or RuntimeError(f"Falha ao abrir GTO {gto}")
 
 
 def ler_dados_gto(gp) -> dict:
@@ -184,8 +256,33 @@ def ler_dados_gto(gp) -> dict:
 
 def upload_arquivos(gp, arquivos: list) -> dict:
     """Anexa a lista de arquivos na GTO aberta (input[type=file] oculto, multiple).
-    O portal envia imediatamente. Retorna {anexos_antes, anexos_depois, ok}."""
+    O portal envia imediatamente.
+
+    IDEMPOTENTE: arquivos cujo nome-base já está anexado são pulados (permite
+    reprocessar o dia sem duplicar). VERIFICAÇÃO ROBUSTA: confirma por NOME de
+    arquivo (com polling), não pela aritmética do contador — que atualiza tarde
+    na popup e gerava falso 'ERRO_UPLOAD'.
+    Retorna {anexos_antes, anexos_depois, ja_anexados, enviados, ok}."""
+    # Esperar a seção de anexos RENDERIZAR antes de ler nomes/contador — senão a
+    # leitura antecipada faz a idempotência achar que faltam arquivos e procurar
+    # um input que ainda não existe (falso 'input não encontrado').
+    for _ in range(15):
+        if _anexos_count(gp) >= 0 or gp.query_selector("input[type=file]"):
+            break
+        gp.wait_for_timeout(1000)
     antes = _anexos_count(gp)
+    nomes_antes = _anexos_nomes(gp)
+
+    # Idempotência: só enviar os que ainda não estão anexados (por nome-base).
+    por_base = {}
+    for a in arquivos:
+        por_base.setdefault(os.path.basename(a), a)
+    ja = [b for b in por_base if b in nomes_antes]
+    faltam = [a for b, a in por_base.items() if b not in nomes_antes]
+    if not faltam:
+        return {"anexos_antes": antes, "anexos_depois": antes,
+                "ja_anexados": ja, "enviados": [], "ok": True}
+
     # achar o botão UPLOAD (alguns layouts disparam o input ao clicar)
     fi = gp.query_selector("input[type=file]")
     if not fi:
@@ -200,12 +297,29 @@ def upload_arquivos(gp, arquivos: list) -> dict:
         fi = gp.query_selector("input[type=file]")
     if not fi:
         raise RuntimeError("input[type=file] de upload não encontrado na GTO.")
-    fi.set_input_files(arquivos)
-    gp.wait_for_timeout(2000 + 1500 * len(arquivos))
+    fi.set_input_files(faltam)
+
+    # Verificação por NOME com polling (até ~30s). O contador da popup demora a
+    # refletir; os nomes dos novos anexos aparecem no DOM quando concluído.
+    alvo_bn = {os.path.basename(a) for a in faltam}
+    gp.wait_for_timeout(2000 + 1000 * len(faltam))
+    ok = False
+    for _ in range(30):
+        nomes = _anexos_nomes(gp)
+        if alvo_bn <= nomes:
+            ok = True
+            break
+        body = re.sub(r"\s+", " ", gp.inner_text("body")).lower()
+        if "sucesso" in body and _anexos_count(gp) >= antes + len(faltam):
+            ok = True
+            break
+        gp.wait_for_timeout(1000)
+
     depois = _anexos_count(gp)
-    body = re.sub(r"\s+", " ", gp.inner_text("body")).lower()
     return {
         "anexos_antes": antes,
         "anexos_depois": depois,
-        "ok": depois >= antes + len(arquivos) if antes >= 0 else "sucesso" in body,
+        "ja_anexados": ja,
+        "enviados": sorted(alvo_bn),
+        "ok": ok,
     }

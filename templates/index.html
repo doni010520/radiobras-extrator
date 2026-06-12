@@ -789,6 +789,7 @@
     SEM_MATCH:        ['✗ Sem match',      'var(--red)'],
     AMBIGUO:          ['⚠ Ambíguo',        '#e5b800'],
     SEM_ARQUIVOS:     ['✗ Sem arquivos',   'var(--red)'],
+    INCOMPLETO:       ['⛔ Incompleto',     '#e5b800'],
     ERRO:             ['✗ Erro',           'var(--red)'],
     ERRO_UPLOAD:      ['✗ Erro upload',    'var(--red)'],
     DRY_RUN:          ['• Simulado',       'var(--muted)'],
@@ -800,7 +801,8 @@
     const tbody = document.getElementById('ciclo-tbody');
     const r = rel.resumo || {};
     document.getElementById('ciclo-resumo').textContent =
-      `${rel.data} · alvos: ${r.alvos||0} · enviados: ${r.enviados||0} · pulados: ${r.pulados||0}` +
+      `${rel.data} · alvos: ${r.alvos||0} · enviados: ${r.enviados||0}` +
+      ` · incompletos: ${r.incompletos||0} · sem arquivos: ${r.sem_arquivos||0}` +
       ` · sem match: ${r.sem_match||0} · ambíguos: ${r.ambiguos||0} · erros: ${r.erros||0}`;
     tbody.innerHTML = '';
     (rel.itens || []).forEach(i => {

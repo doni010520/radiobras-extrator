@@ -14,9 +14,26 @@ _debug_response.html
 _diag_*
 _salvar_*
 _ciclo_*
+_check_*
+_dump_*
+_test_*
+_retry_*
+_scan_*
+_nav_*
+_desc_*
+_run_*
 downloads_*/
 chimene_*/
 _tmp_*/
+
+# Saídas com PII de paciente (laudos/imagens/relatórios baixados) — NUNCA versionar.
+_dia_*/
+_anexos_*/
+_faltantes/
+_nav/
+att_*/
+_fechar_*.json
+relatorio*.json
 
 # Screenshots / HTML de exploração — PODEM CONTER PII DE PACIENTE. Nunca versionar.
 *.png

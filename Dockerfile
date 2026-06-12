@@ -8,6 +8,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=5000
 
+# Tesseract (OCR das solicitações). A língua 'por' vem do tessdata/ do projeto
+# via TESSDATA_PREFIX, então basta o binário aqui.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
 # Dependências Python (a imagem já tem playwright + browsers instalados)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
