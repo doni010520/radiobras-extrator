@@ -11,6 +11,7 @@ estável (usado no histórico/URLs); não mude depois de ter execuções gravada
 """
 
 PLANOS = [
+    # ── Plano automatizado ─────────────────────────────────────────────────────
     {
         "slug": "odontoprev",
         "nome": "REDE UNNA / OdontoPrev",
@@ -18,14 +19,26 @@ PLANOS = [
         "handler": "fechar_dia",        # automação real existente
         "portal": "credenciado.odontoprev.com.br",
     },
-    # ── Demais planos (a automação de cada um será construída depois) ──────────
-    # Placeholders — substitua pelos nomes reais dos 20 planos.
-    {"slug": "hapvida", "nome": "HAPVIDA ODONTO", "ativo": False, "handler": None},
-    {"slug": "amil", "nome": "AMIL DENTAL", "ativo": False, "handler": None},
-    {"slug": "porto", "nome": "PORTO SEGURO", "ativo": False, "handler": None},
-    {"slug": "sulamerica", "nome": "SUL AMÉRICA", "ativo": False, "handler": None},
-    {"slug": "unimed", "nome": "UNIMED ODONTO", "ativo": False, "handler": None},
-    {"slug": "metlife", "nome": "METLIFE", "ativo": False, "handler": None},
+    # ── Demais planos (automação a construir; aparecem como 'Não configurado') ──
+    {"slug": "amil", "nome": "Amil Dental", "ativo": False, "handler": None},
+    {"slug": "atemde", "nome": "Atemde", "ativo": False, "handler": None},
+    {"slug": "hapvida_odonto", "nome": "Hapvida Odonto", "ativo": False, "handler": None},
+    {"slug": "hapvida_saude", "nome": "Hapvida Saúde", "ativo": False, "handler": None},
+    {"slug": "idental", "nome": "Idental", "ativo": False, "handler": None},
+    {"slug": "metlife", "nome": "Metlife", "ativo": False, "handler": None},
+    {"slug": "odonto_empresas", "nome": "Odonto Empresas", "ativo": False, "handler": None},
+    {"slug": "odonto_sa", "nome": "Odonto SA", "ativo": False, "handler": None},
+    {"slug": "odontosystem", "nome": "Odontosystem", "ativo": False, "handler": None},
+    {"slug": "orale", "nome": "Orale", "ativo": False, "handler": None},
+    {"slug": "petrobras", "nome": "Petrobras", "ativo": False, "handler": None},
+    {"slug": "plano_clin", "nome": "Plano Clin Digital", "ativo": False, "handler": None},
+    {"slug": "porto", "nome": "Porto Seguro", "ativo": False, "handler": None},
+    {"slug": "qualidonto", "nome": "Qualidonto", "ativo": False, "handler": None},
+    {"slug": "servdonto", "nome": "Servdonto", "ativo": False, "handler": None},
+    {"slug": "sulamerica", "nome": "Sul América", "ativo": False, "handler": None},
+    {"slug": "totalis", "nome": "Totalis", "ativo": False, "handler": None},
+    {"slug": "unimed", "nome": "Unimed Odonto", "ativo": False, "handler": None},
+    {"slug": "uniodonto", "nome": "Uniodonto", "ativo": False, "handler": None},
 ]
 
 _BY_SLUG = {p["slug"]: p for p in PLANOS}
