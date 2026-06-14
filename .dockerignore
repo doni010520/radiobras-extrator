@@ -30,6 +30,9 @@ env/
 
 # Saídas
 *.xlsx
+*.db
+*.sqlite
+*.sqlite3
 
 # Credenciais / git
 .env

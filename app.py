@@ -26,12 +26,20 @@ from extrator_pacientes_analitico import (
 from extrator_arquivos import processar_dia
 from ciclo_completo import ciclo_dia
 from fechar_dia import fechar_dia
+import db
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # Escopo REDE UNNA — definido em config.py (evita import circular).
 from config import CONVENIOS, SEGMENTOS
+
+# Inicializa o banco (cria tabelas se não existirem). Falha não derruba o app.
+try:
+    db.init_db()
+    app.logger.info("Banco inicializado (%s).", db.DATABASE_URL.split("@")[-1])
+except Exception as _e:
+    app.logger.error("Falha ao inicializar banco: %s", _e)
 
 # ── Job store (em memória) ────────────────────────────────────────────────────
 _jobs: dict = {}
@@ -87,14 +95,31 @@ def _run_fechar_job(job_id: str, data: str, dry_run: bool) -> None:
         with _jobs_lock:
             _jobs[job_id].setdefault("log", []).append(str(msg))
 
+    # Registra a execução no histórico (não bloqueia se o banco falhar).
+    run_id = None
+    try:
+        run_id = db.criar_run(data, dry_run)
+    except Exception as e:
+        app.logger.error("Falha ao criar run no banco: %s", e)
+
     try:
         relatorio = fechar_dia(data, CONVENIOS, SEGMENTOS,
                                dry_run=dry_run, progress_cb=progress)
+        if run_id is not None:
+            try:
+                db.finalizar_run_ok(run_id, relatorio)
+            except Exception as e:
+                app.logger.error("Falha ao salvar run %s: %s", run_id, e)
         with _jobs_lock:
             _jobs[job_id].update({"status": "done", "relatorio": relatorio})
     except Exception as exc:
         tb = traceback.format_exc()
         app.logger.error("Erro no fechar_dia %s:\n%s", job_id, tb)
+        if run_id is not None:
+            try:
+                db.finalizar_run_erro(run_id, str(exc))
+            except Exception:
+                pass
         with _jobs_lock:
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
 
@@ -103,7 +128,13 @@ def _run_fechar_job(job_id: str, data: str, dry_run: bool) -> None:
 
 @app.route("/")
 def home():
-    """Tela principal — 'Fechar o dia' (um clique)."""
+    """Tela principal — Dashboard (com 'Executar Agora')."""
+    return render_template("dashboard.html")
+
+
+@app.route("/fechar-simples")
+def fechar_simples():
+    """Tela enxuta de 'Fechar o dia' (fallback)."""
     return render_template("fechar.html")
 
 
@@ -111,6 +142,37 @@ def home():
 def index():
     """Tela antiga (relatório analítico xlsx + download ZIP)."""
     return render_template("index.html", convenios=CONVENIOS, segmentos=SEGMENTOS)
+
+
+# ── APIs do Dashboard ─────────────────────────────────────────────────────────
+
+@app.route("/api/dashboard")
+def api_dashboard():
+    """Dados agregados p/ o dashboard: última execução, semana, fila, totais."""
+    try:
+        ultima = db.run_mais_recente()
+        return jsonify({
+            "ultima": ultima,
+            "recentes": db.ultimas_runs(8),
+            "semana": db.serie_semana(),
+            "revisao": db.fila_revisao(30),
+            "totais": db.totais_gerais(),
+        })
+    except Exception as exc:
+        app.logger.error("Erro em /api/dashboard: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/gtos")
+def api_gtos():
+    """Funil + lista de GTOs de um dia (DD/MM/AAAA) ou da execução mais recente."""
+    dia = request.args.get("dia", "").strip() or None
+    try:
+        run = db.run_mais_recente(dia)
+        return jsonify({"run": run})
+    except Exception as exc:
+        app.logger.error("Erro em /api/gtos: %s", exc)
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/fechar", methods=["POST"])
