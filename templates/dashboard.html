@@ -87,12 +87,18 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 .modal-header{padding:22px 24px;border-bottom:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center;}
 .modal-title{font-size:18px;font-weight:700;}.modal-close{background:none;border:none;cursor:pointer;color:var(--gray-400);font-size:24px;line-height:1;}
 .modal-body{padding:24px;}
-.run-controls{display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;}
-.field{display:flex;flex-direction:column;gap:6px;}
-.field label{font-size:12px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;}
-.field input[type=text]{padding:11px 14px;border:1px solid var(--gray-300);border-radius:8px;font-size:16px;font-family:inherit;width:180px;outline:none;}
-.field input[type=text]:focus{border-color:var(--green-500);}
-.chk{display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;padding-bottom:11px;}.chk input{width:17px;height:17px;accent-color:var(--green-700);}
+.run-form{display:flex;flex-direction:column;gap:18px;margin-bottom:20px;}
+.field{display:flex;flex-direction:column;gap:7px;}
+.field label{font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.5px;}
+.field input[type=date]{padding:12px 14px;border:1px solid var(--gray-300);border-radius:8px;font-size:16px;font-family:inherit;max-width:220px;outline:none;color:var(--gray-900);background:#fff;}
+.field input[type=date]:focus{border-color:var(--green-500);box-shadow:0 0 0 3px rgba(16,185,129,.12);}
+.field input[type=date]::-webkit-calendar-picker-indicator{cursor:pointer;opacity:.6;}
+.field input[type=date]:hover::-webkit-calendar-picker-indicator{opacity:1;}
+.sim-toggle{display:flex;align-items:flex-start;gap:11px;font-size:14px;cursor:pointer;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:14px 16px;}
+.sim-toggle input{width:18px;height:18px;accent-color:var(--green-700);margin-top:1px;flex-shrink:0;}
+.sim-toggle span{color:var(--gray-600);}.sim-toggle strong{color:var(--gray-900);}
+.run-actions{display:flex;}
+.btn-block{width:100%;justify-content:center;font-size:15px;padding:14px;}
 .btn{padding:11px 18px;border-radius:8px;font-size:14px;font-weight:600;border:none;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:8px;}
 .btn-primary{background:var(--green-700);color:#fff;}.btn-primary:hover{background:var(--green-800);}.btn:disabled{opacity:.5;cursor:not-allowed;}
 .hint{font-size:12.5px;color:var(--gray-500);margin-top:10px;}
@@ -174,12 +180,14 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
   <div class="modal">
     <div class="modal-header"><span class="modal-title">Executar — Fechar o dia</span><button class="modal-close" onclick="fecharRun()">&times;</button></div>
     <div class="modal-body">
-      <div class="run-controls">
-        <div class="field"><label>Dia</label><input type="text" id="data" placeholder="DD/MM/AAAA" maxlength="10"></div>
-        <label class="chk"><input type="checkbox" id="simular"> Simular (não anexa)</label>
-        <button class="btn btn-primary" id="btnGo" onclick="executar()"><svg class="icon"><use href="#i-play"/></svg> FECHAR DIA</button>
+      <div class="run-form">
+        <div class="field"><label for="data">Dia a processar</label><input type="date" id="data"></div>
+        <label class="sim-toggle"><input type="checkbox" id="simular"><span><strong>Simular</strong> — roda tudo (baixa e decide) <em>sem anexar</em> no portal. Teste seguro.</span></label>
       </div>
-      <div class="hint">Baixa laudos+imagens do PRORADIS e anexa nas GTOs em repasse. Leva alguns minutos — mantenha aberto.</div>
+      <div class="run-actions">
+        <button class="btn btn-primary btn-block" id="btnGo" onclick="executar()"><svg class="icon"><use href="#i-play"/></svg> FECHAR DIA</button>
+      </div>
+      <div class="hint">Baixa laudos + imagens do PRORADIS e anexa nas GTOs em repasse. Leva alguns minutos — mantenha a aba aberta.</div>
       <div class="run-status" id="runstatus" style="display:none"><div class="spinner" id="runspin"></div><span id="runtxt"></span></div>
       <div class="errbox" id="errbox"></div>
       <div class="log" id="log"></div>
@@ -189,7 +197,8 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 
 <script>
 const $=id=>document.getElementById(id);
-function hoje(){const d=new Date(),p=n=>String(n).padStart(2,'0');return `${p(d.getDate())}/${p(d.getMonth()+1)}/${d.getFullYear()}`;}
+function isoHoje(){const d=new Date(),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;}
+function isoParaBR(iso){const [y,m,d]=iso.split('-');return `${d}/${m}/${y}`;}
 $('topdate').textContent=new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'});
 
 function statCard(c,icon,val,label){return `<div class="stat-card"><div class="stat-header"><div class="stat-icon ${c}"><svg class="icon-lg"><use href="${icon}"/></svg></div></div><div class="stat-value">${val}</div><div class="stat-label">${label}</div></div>`;}
@@ -255,14 +264,14 @@ function renderRevisao(list){
 }
 
 // modal run
-function abrirRun(){$('overlay').classList.add('show');$('data').value=hoje();$('log').classList.remove('show');$('log').innerHTML='';$('errbox').classList.remove('show');$('runstatus').style.display='none';$('btnGo').disabled=false;}
+function abrirRun(){$('overlay').classList.add('show');$('data').value=isoHoje();$('log').classList.remove('show');$('log').innerHTML='';$('errbox').classList.remove('show');$('runstatus').style.display='none';$('btnGo').disabled=false;}
 function fecharRun(){$('overlay').classList.remove('show');}
-$('data').addEventListener('input',function(){let v=this.value.replace(/\D/g,'').slice(0,8);if(v.length>4)v=v.slice(0,2)+'/'+v.slice(2,4)+'/'+v.slice(4);else if(v.length>2)v=v.slice(0,2)+'/'+v.slice(2);this.value=v;});
 function logLine(m){const el=$('log');const d=document.createElement('div');let c='';if(/\[ENVIADO\]|\[OK\]/.test(m))c='ok';else if(/\[ERRO|SEM_LAUDO|SEM MATCH|\[SEM/.test(m))c='err';else if(/\[1\/3\]|\[2\/3\]|\[3\/3\]|===/.test(m))c='ph';d.className=c;d.textContent=m;el.appendChild(d);el.scrollTop=el.scrollHeight;}
 let seen=0,timer=null;
 async function executar(){
-  const data=$('data').value;
-  if(!/^\d{2}\/\d{2}\/\d{4}$/.test(data)){alert('Informe a data como DD/MM/AAAA.');return;}
+  const iso=$('data').value;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)){alert('Selecione a data no calendário.');return;}
+  const data=isoParaBR(iso);
   const dry=$('simular').checked;
   if(!dry&&!confirm(`Fechar o dia ${data}?\n\nIsto vai ANEXAR os arquivos nas GTOs do OdontoPrev.`))return;
   $('btnGo').disabled=true;$('log').classList.add('show');$('log').innerHTML='';$('errbox').classList.remove('show');
