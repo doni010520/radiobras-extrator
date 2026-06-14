@@ -103,12 +103,16 @@ def _run_fechar_job(job_id: str, data: str, dry_run: bool, plano: str = "odontop
     except Exception as e:
         app.logger.error("Falha ao criar run no banco: %s", e)
 
+    def _log_texto():
+        with _jobs_lock:
+            return "\n".join(_jobs[job_id].get("log", []))
+
     try:
         relatorio = fechar_dia(data, CONVENIOS, SEGMENTOS,
                                dry_run=dry_run, progress_cb=progress)
         if run_id is not None:
             try:
-                db.finalizar_run_ok(run_id, relatorio)
+                db.finalizar_run_ok(run_id, relatorio, log_texto=_log_texto())
             except Exception as e:
                 app.logger.error("Falha ao salvar run %s: %s", run_id, e)
         with _jobs_lock:
@@ -118,7 +122,7 @@ def _run_fechar_job(job_id: str, data: str, dry_run: bool, plano: str = "odontop
         app.logger.error("Erro no fechar_dia %s:\n%s", job_id, tb)
         if run_id is not None:
             try:
-                db.finalizar_run_erro(run_id, str(exc))
+                db.finalizar_run_erro(run_id, str(exc) + "\n\n" + tb, log_texto=_log_texto())
             except Exception:
                 pass
         with _jobs_lock:
@@ -196,6 +200,42 @@ def api_gtos():
     except Exception as exc:
         app.logger.error("Erro em /api/gtos: %s", exc)
         return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/diag")
+def api_diag():
+    """Diagnóstico de saúde — para inspeção remota sem acesso aos logs do servidor.
+    Reporta: banco conectado, presença de credenciais e últimas execuções (c/ erro)."""
+    from sqlalchemy import text
+    diag = {"app": "ok"}
+    # banco
+    try:
+        with db.engine.connect() as c:
+            c.execute(text("SELECT 1"))
+        diag["db_ok"] = True
+        diag["db_host"] = db.DATABASE_URL.split("@")[-1]
+    except Exception as e:
+        diag["db_ok"] = False
+        diag["db_error"] = str(e)[:200]
+    # credenciais presentes? (não expõe valores)
+    diag["cred"] = {
+        "smartris": bool(os.environ.get("SMARTRIS_EMAIL") and os.environ.get("SMARTRIS_PASSWORD")),
+        "odontoprev": bool(os.environ.get("ODONTOPREV_USER") and os.environ.get("ODONTOPREV_PASSWORD")),
+    }
+    # jobs em memória + últimas execuções (com erro resumido)
+    with _jobs_lock:
+        diag["jobs_ativos"] = sum(1 for j in _jobs.values()
+                                  if j.get("status") in ("running", "queued"))
+    try:
+        diag["runs"] = [{
+            "id": r["id"], "plano": r["plano"], "dia": r["dia"], "status": r["status"],
+            "enviados": r["enviados"], "erros": r["erros"],
+            "erro_msg": (r.get("erro_msg") or "")[:300],
+            "finished_at": r["finished_at"],
+        } for r in db.runs_recentes(10)]
+    except Exception as e:
+        diag["runs_error"] = str(e)[:200]
+    return jsonify(diag)
 
 
 @app.route("/fechar", methods=["POST"])

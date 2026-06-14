@@ -60,6 +60,7 @@ class Run(Base):
     revisao_humana = Column(Integer, default=0)
     solic_anexada = Column(Integer, default=0)
     erro_msg = Column(Text)
+    log = Column(Text)            # log de progresso completo da execução
     itens = relationship("RunItem", back_populates="run", cascade="all, delete-orphan")
 
 
@@ -81,6 +82,24 @@ class RunItem(Base):
 
 def init_db():
     Base.metadata.create_all(engine)
+    _ensure_columns()
+
+
+def _ensure_columns():
+    """Migração leve: adiciona colunas novas em tabelas que já existem
+    (create_all não altera tabela existente). Best-effort, ignora erros."""
+    from sqlalchemy import text
+    alters = [
+        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS log TEXT",
+        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS plano VARCHAR(40) DEFAULT 'odontoprev'",
+        "ALTER TABLE runs ADD COLUMN IF NOT EXISTS erro_msg TEXT",
+    ]
+    for a in alters:
+        try:
+            with engine.begin() as c:
+                c.execute(text(a))
+        except Exception:
+            pass
 
 
 def criar_run(dia: str, dry_run: bool, plano: str = "odontoprev") -> int:
@@ -92,7 +111,7 @@ def criar_run(dia: str, dry_run: bool, plano: str = "odontoprev") -> int:
         return r.id
 
 
-def finalizar_run_ok(run_id: int, relatorio: dict) -> None:
+def finalizar_run_ok(run_id: int, relatorio: dict, log_texto: str = None) -> None:
     """Grava resumo + itens de uma execução concluída."""
     resumo = relatorio.get("resumo", {}) or {}
     itens = relatorio.get("itens", []) or []
@@ -102,6 +121,8 @@ def finalizar_run_ok(run_id: int, relatorio: dict) -> None:
             return
         r.status = "done"
         r.finished_at = _now()
+        if log_texto is not None:
+            r.log = log_texto[-20000:]
         r.dry_run = bool(relatorio.get("dry_run", r.dry_run))
         for k in ("alvos", "enviados", "prontos", "erros", "sem_match",
                   "sem_laudo", "sem_imagens", "revisao_humana", "solic_anexada"):
@@ -123,7 +144,7 @@ def finalizar_run_ok(run_id: int, relatorio: dict) -> None:
         s.commit()
 
 
-def finalizar_run_erro(run_id: int, msg: str) -> None:
+def finalizar_run_erro(run_id: int, msg: str, log_texto: str = None) -> None:
     with SessionLocal() as s:
         r = s.get(Run, run_id)
         if not r:
@@ -131,7 +152,31 @@ def finalizar_run_erro(run_id: int, msg: str) -> None:
         r.status = "error"
         r.finished_at = _now()
         r.erro_msg = (msg or "")[:2000]
+        if log_texto is not None:
+            r.log = log_texto[-20000:]
         s.commit()
+
+
+def runs_recentes(limite: int = 15) -> list:
+    """Últimas execuções de QUALQUER status (done/error/running) — p/ diagnóstico."""
+    with SessionLocal() as s:
+        rs = (s.query(Run).order_by(Run.started_at.desc()).limit(limite).all())
+        out = []
+        for r in rs:
+            d = _run_to_dict(r)
+            d["erro_msg"] = r.erro_msg
+            out.append(d)
+        return out
+
+
+def run_log(run_id: int) -> dict:
+    """Log completo + erro de uma execução específica."""
+    with SessionLocal() as s:
+        r = s.get(Run, run_id)
+        if not r:
+            return {}
+        return {"id": r.id, "dia": r.dia, "status": r.status,
+                "erro_msg": r.erro_msg, "log": r.log}
 
 
 # ── Consultas para o dashboard ────────────────────────────────────────────────

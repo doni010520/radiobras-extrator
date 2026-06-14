@@ -94,6 +94,7 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 .field input[type=date]:focus{border-color:var(--green-500);box-shadow:0 0 0 3px rgba(16,185,129,.12);}
 .field input[type=date]::-webkit-calendar-picker-indicator{cursor:pointer;opacity:.6;}
 .field input[type=date]:hover::-webkit-calendar-picker-indicator{opacity:1;}
+.date-echo{font-size:13px;color:var(--green-700);font-weight:700;}
 .sim-toggle{display:flex;align-items:flex-start;gap:11px;font-size:14px;cursor:pointer;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:14px 16px;}
 .sim-toggle input{width:18px;height:18px;accent-color:var(--green-700);margin-top:1px;flex-shrink:0;}
 .sim-toggle span{color:var(--gray-600);}.sim-toggle strong{color:var(--gray-900);}
@@ -181,7 +182,7 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
     <div class="modal-header"><span class="modal-title">Executar — Fechar o dia</span><button class="modal-close" onclick="fecharRun()">&times;</button></div>
     <div class="modal-body">
       <div class="run-form">
-        <div class="field"><label for="data">Dia a processar</label><input type="date" id="data"></div>
+        <div class="field"><label for="data">Dia a processar</label><input type="date" id="data"><span class="date-echo" id="dateEcho"></span></div>
         <label class="sim-toggle"><input type="checkbox" id="simular"><span><strong>Simular</strong> — roda tudo (baixa e decide) <em>sem anexar</em> no portal. Teste seguro.</span></label>
       </div>
       <div class="run-actions">
@@ -264,8 +265,10 @@ function renderRevisao(list){
 }
 
 // modal run
-function abrirRun(){$('overlay').classList.add('show');$('data').value=isoHoje();$('log').classList.remove('show');$('log').innerHTML='';$('errbox').classList.remove('show');$('runstatus').style.display='none';$('btnGo').disabled=false;}
+function atualizaEcho(){const iso=$('data').value;if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)){$('dateEcho').textContent='';return;}const [y,m,d]=iso.split('-');const dt=new Date(+y,+m-1,+d);const sem=dt.toLocaleDateString('pt-BR',{weekday:'long'});$('dateEcho').textContent=`→ vai processar ${d}/${m}/${y} (${sem})`;}
+function abrirRun(){$('overlay').classList.add('show');$('data').value=isoHoje();atualizaEcho();$('log').classList.remove('show');$('log').innerHTML='';$('errbox').classList.remove('show');$('runstatus').style.display='none';$('btnGo').disabled=false;}
 function fecharRun(){$('overlay').classList.remove('show');}
+$('data').addEventListener('change',atualizaEcho);
 function logLine(m){const el=$('log');const d=document.createElement('div');let c='';if(/\[ENVIADO\]|\[OK\]/.test(m))c='ok';else if(/\[ERRO|SEM_LAUDO|SEM MATCH|\[SEM/.test(m))c='err';else if(/\[1\/3\]|\[2\/3\]|\[3\/3\]|===/.test(m))c='ph';d.className=c;d.textContent=m;el.appendChild(d);el.scrollTop=el.scrollHeight;}
 let seen=0,timer=null;
 async function executar(){
