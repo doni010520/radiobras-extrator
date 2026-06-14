@@ -27,6 +27,7 @@ from extrator_arquivos import processar_dia
 from ciclo_completo import ciclo_dia
 from fechar_dia import fechar_dia
 import db
+import planos as planos_mod
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -86,7 +87,7 @@ def _run_ciclo_job(job_id: str, data: str, convenios: list, segmentos: list) -> 
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
 
 
-def _run_fechar_job(job_id: str, data: str, dry_run: bool) -> None:
+def _run_fechar_job(job_id: str, data: str, dry_run: bool, plano: str = "odontoprev") -> None:
     """Job do 'Fechar dia' (orquestrador completo fechar_dia.py)."""
     with _jobs_lock:
         _jobs[job_id]["status"] = "running"
@@ -98,7 +99,7 @@ def _run_fechar_job(job_id: str, data: str, dry_run: bool) -> None:
     # Registra a execução no histórico (não bloqueia se o banco falhar).
     run_id = None
     try:
-        run_id = db.criar_run(data, dry_run)
+        run_id = db.criar_run(data, dry_run, plano=plano)
     except Exception as e:
         app.logger.error("Falha ao criar run no banco: %s", e)
 
@@ -159,9 +160,21 @@ def api_dashboard():
         with _jobs_lock:
             processando = sum(1 for j in _jobs.values()
                               if j.get("status") in ("running", "queued"))
+            rodando_plano = {j.get("plano") for j in _jobs.values()
+                             if j.get("status") in ("running", "queued")}
         ultima = db.run_mais_recente()
+        # monta a lista de planos do registro + status (última execução de cada)
+        por_plano = db.status_por_plano()
+        lista_planos = []
+        for p in planos_mod.listar_planos():
+            lista_planos.append({
+                "slug": p["slug"], "nome": p["nome"], "ativo": p.get("ativo", False),
+                "rodando": p["slug"] in rodando_plano,
+                "ultima": por_plano.get(p["slug"]),
+            })
         return jsonify({
             "ultima": ultima,
+            "planos": lista_planos,
             "recentes": db.ultimas_runs(8),
             "semana": db.serie_semana(),
             "revisao": db.fila_revisao(30),
@@ -189,18 +202,22 @@ def api_gtos():
 def fechar_route():
     """Inicia o fechamento do dia (download + anexo no OdontoPrev). Assíncrono."""
     data = request.form.get("data", "").strip()
+    plano = (request.form.get("plano", "") or "odontoprev").strip()
     # 'simular' = dry-run (não anexa, só mostra o que faria)
     dry_run = request.form.get("simular", "").lower() in ("1", "true", "on", "yes")
     if not data:
         return jsonify({"error": "Informe o dia (DD/MM/AAAA)."}), 400
     if not re.match(r"^\d{2}/\d{2}/\d{4}$", data):
         return jsonify({"error": "Data inválida. Use DD/MM/AAAA."}), 400
+    if not planos_mod.plano_ativo(plano):
+        return jsonify({"error": f"O plano '{planos_mod.nome_plano(plano)}' ainda não "
+                                 "está configurado para automação."}), 400
 
     job_id = str(uuid.uuid4())[:8]
     with _jobs_lock:
-        _jobs[job_id] = {"status": "queued", "log": []}
+        _jobs[job_id] = {"status": "queued", "log": [], "plano": plano}
     threading.Thread(
-        target=_run_fechar_job, args=(job_id, data, dry_run), daemon=True
+        target=_run_fechar_job, args=(job_id, data, dry_run, plano), daemon=True
     ).start()
     return jsonify({"job_id": job_id, "dry_run": dry_run})
 

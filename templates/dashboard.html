@@ -206,24 +206,34 @@ async function carregar(){
     statCard('blue','#i-sync',proc,'Processando agora')+
     statCard('yellow','#i-clock',rev,'Aguardando revisão')+
     statCard('red','#i-alert',err,'Erros / sem match');
-  renderPlanos(u,proc);
+  renderPlanos(j.planos||[]);
   renderTaxa(u);
   renderChart(j.semana||[]);
   renderRevisao(j.revisao||[]);
 }
-function renderPlanos(u,proc){
-  $('planos-count').textContent='· 1 ativo';
-  let av='plano-avatar',ic='#i-tooth',pill='pending',ptxt='Aguardando',meta='Nenhuma execução ainda';
-  let env='—',erros='—';
-  if(proc>0){av='plano-avatar blue';ic='#i-sync';pill='running';ptxt='Executando';meta='Executando agora…';}
-  else if(u){env=u.enviados;erros=(u.erros+u.sem_match);meta=`Última execução: ${fmtHora(u.finished_at)} · dia ${u.dia}`+(u.dry_run?' (simulação)':'');
-    if(erros>0){pill='warning';ptxt='Com pendências';}else{pill='success';ptxt='Concluído';}}
-  const spin=proc>0?' spin':'';
-  $('planos').innerHTML=`<div class="plano-item" onclick="location.href='/gtos'">
-    <div class="${av}"><svg class="icon${spin}"><use href="${ic}"/></svg></div>
-    <div class="plano-info"><div class="plano-name">REDE UNNA / OdontoPrev</div><div class="plano-meta">${meta}</div></div>
-    <div class="plano-stats"><div class="plano-stat"><div class="plano-stat-value">${env}</div><div class="plano-stat-label">Anexados</div></div><div class="plano-stat"><div class="plano-stat-value">${erros}</div><div class="plano-stat-label">Erros</div></div></div>
-    <span class="status-pill ${pill}">${ptxt}</span></div>`;
+function renderPlanos(lista){
+  const ativos=lista.filter(p=>p.ativo).length;
+  $('planos-count').textContent=`· ${ativos} ativo${ativos!==1?'s':''} de ${lista.length}`;
+  $('planos').innerHTML=lista.map(p=>{
+    // não configurado
+    if(!p.ativo){
+      return `<div class="plano-item" style="cursor:default;opacity:.7">
+        <div class="plano-avatar gray"><svg class="icon"><use href="#i-tooth"/></svg></div>
+        <div class="plano-info"><div class="plano-name">${p.nome}</div><div class="plano-meta">Automação ainda não configurada</div></div>
+        <div class="plano-stats"><div class="plano-stat"><div class="plano-stat-value">—</div><div class="plano-stat-label">Anexados</div></div><div class="plano-stat"><div class="plano-stat-value">—</div><div class="plano-stat-label">Erros</div></div></div>
+        <span class="status-pill pending">Não configurado</span></div>`;
+    }
+    const u=p.ultima;
+    let av='plano-avatar',ic='#i-tooth',pill='pending',ptxt='Aguardando',meta='Nenhuma execução ainda',env='—',erros='—',spin='';
+    if(p.rodando){av='plano-avatar blue';ic='#i-sync';pill='running';ptxt='Executando';meta='Executando agora…';spin=' spin';}
+    else if(u){env=u.enviados;erros=(u.erros+u.sem_match);meta=`Última execução: ${fmtHora(u.finished_at)} · dia ${u.dia}`+(u.dry_run?' (simulação)':'');
+      if(erros>0){pill='warning';ptxt='Com pendências';}else{pill='success';ptxt='Concluído';}}
+    return `<div class="plano-item" onclick="location.href='/gtos'">
+      <div class="${av}"><svg class="icon${spin}"><use href="${ic}"/></svg></div>
+      <div class="plano-info"><div class="plano-name">${p.nome}</div><div class="plano-meta">${meta}</div></div>
+      <div class="plano-stats"><div class="plano-stat"><div class="plano-stat-value">${env}</div><div class="plano-stat-label">Anexados</div></div><div class="plano-stat"><div class="plano-stat-value">${erros}</div><div class="plano-stat-label">Erros</div></div></div>
+      <span class="status-pill ${pill}">${ptxt}</span></div>`;
+  }).join('');
 }
 function renderTaxa(u){
   if(!u||!u.alvos){$('taxa').textContent='—';$('ps-env').textContent='—';$('ps-rev').textContent='—';$('ps-err').textContent='—';return;}

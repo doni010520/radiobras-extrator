@@ -43,6 +43,7 @@ def _now():
 class Run(Base):
     __tablename__ = "runs"
     id = Column(Integer, primary_key=True)
+    plano = Column(String(40), index=True, default="odontoprev")  # slug do plano
     dia = Column(String(10), index=True)            # DD/MM/AAAA processado
     dry_run = Column(Boolean, default=False)
     status = Column(String(20), default="running")  # running | done | error
@@ -82,10 +83,10 @@ def init_db():
     Base.metadata.create_all(engine)
 
 
-def criar_run(dia: str, dry_run: bool) -> int:
+def criar_run(dia: str, dry_run: bool, plano: str = "odontoprev") -> int:
     """Cria a linha da execução (status=running) e retorna o id."""
     with SessionLocal() as s:
-        r = Run(dia=dia, dry_run=dry_run, status="running")
+        r = Run(dia=dia, dry_run=dry_run, status="running", plano=plano)
         s.add(r)
         s.commit()
         return r.id
@@ -137,7 +138,7 @@ def finalizar_run_erro(run_id: int, msg: str) -> None:
 
 def _run_to_dict(r: Run) -> dict:
     return {
-        "id": r.id, "dia": r.dia, "dry_run": r.dry_run, "status": r.status,
+        "id": r.id, "plano": r.plano, "dia": r.dia, "dry_run": r.dry_run, "status": r.status,
         "started_at": r.started_at.isoformat() if r.started_at else None,
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
         "alvos": r.alvos, "enviados": r.enviados, "prontos": r.prontos,
@@ -154,12 +155,27 @@ def ultimas_runs(limite: int = 10) -> list:
         return [_run_to_dict(r) for r in rs]
 
 
-def run_mais_recente(dia: str = None):
-    """Última execução concluída (de um dia específico, se informado)."""
+def status_por_plano() -> dict:
+    """Para cada plano (slug), a última execução concluída — p/ a lista de planos.
+    Retorna {slug: run_dict_resumido}."""
+    with SessionLocal() as s:
+        rs = (s.query(Run).filter(Run.status == "done")
+              .order_by(Run.finished_at.desc()).limit(200).all())
+        out = {}
+        for r in rs:
+            if r.plano not in out:
+                out[r.plano] = _run_to_dict(r)
+        return out
+
+
+def run_mais_recente(dia: str = None, plano: str = None):
+    """Última execução concluída (de um dia/plano específico, se informado)."""
     with SessionLocal() as s:
         q = s.query(Run).filter(Run.status == "done")
         if dia:
             q = q.filter(Run.dia == dia)
+        if plano:
+            q = q.filter(Run.plano == plano)
         r = q.order_by(Run.finished_at.desc()).first()
         if not r:
             return None
