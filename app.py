@@ -138,6 +138,12 @@ def fechar_simples():
     return render_template("fechar.html")
 
 
+@app.route("/gtos")
+def gtos_page():
+    """Detalhe de GTOs / funil de um dia (mockup 2)."""
+    return render_template("gtos.html")
+
+
 @app.route("/relatorio")
 def index():
     """Tela antiga (relatório analítico xlsx + download ZIP)."""
@@ -150,6 +156,9 @@ def index():
 def api_dashboard():
     """Dados agregados p/ o dashboard: última execução, semana, fila, totais."""
     try:
+        with _jobs_lock:
+            processando = sum(1 for j in _jobs.values()
+                              if j.get("status") in ("running", "queued"))
         ultima = db.run_mais_recente()
         return jsonify({
             "ultima": ultima,
@@ -157,6 +166,7 @@ def api_dashboard():
             "semana": db.serie_semana(),
             "revisao": db.fila_revisao(30),
             "totais": db.totais_gerais(),
+            "processando": processando,
         })
     except Exception as exc:
         app.logger.error("Erro em /api/dashboard: %s", exc)
