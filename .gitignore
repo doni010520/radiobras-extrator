@@ -10,6 +10,11 @@ env/
 *.xlsx
 _debug_response.html
 
+# Banco SQLite local (dev). Em produção é Postgres/Supabase via DATABASE_URL.
+*.db
+*.sqlite
+*.sqlite3
+
 # Scripts de diagnóstico / runners manuais e saídas (descartáveis)
 _diag_*
 _salvar_*

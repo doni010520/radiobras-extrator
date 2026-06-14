@@ -25,8 +25,20 @@ A tela antiga (relatório analítico `.xlsx` + download `.zip`) fica em `/relato
    SMARTRIS_PASSWORD=<senha do PRORADIS>
    ODONTOPREV_USER=<código do credenciado OdontoPrev>
    ODONTOPREV_PASSWORD=<senha do OdontoPrev>
+   DATABASE_URL=<connection string do Supabase/Postgres>
    ```
-   (Essas variáveis sobrescrevem qualquer valor padrão no código.)
+   - As credenciais são **obrigatórias** (o app falha sem elas — não há mais fallback no código).
+   - `DATABASE_URL`: liga o histórico do dashboard a um Postgres durável (recomendado:
+     Supabase). **Sem** essa variável o app cai em SQLite local — que é apagado a cada
+     redeploy do container, então o histórico se perde. Para produção, **defina-a**.
+
+### Como obter a DATABASE_URL no Supabase
+1. supabase.com → New project (guarde a senha do banco).
+2. Project → **Settings → Database → Connection string → URI**.
+3. Copie a URI (`postgresql://postgres:[SENHA]@db.<ref>.supabase.co:5432/postgres`),
+   troque `[SENHA]` pela senha do banco e cole em `DATABASE_URL` no EasyPanel.
+   (Para pooling/IPv4, use a porta **6543** do "Connection pooler" se o host direto não conectar.)
+   As tabelas são criadas automaticamente no primeiro boot.
 5. **Port / Proxy**: o container expõe **5000**. Configure o domínio/porta no EasyPanel apontando para `5000`.
 6. **Deploy**. O build instala o Tesseract (apt) e as dependências Python sobre a imagem do Playwright (Chromium já incluso).
 7. **Recursos**: reserve memória suficiente (Chromium headless + Tesseract ≈ 0,5–1 GB por execução). Recomendado ≥ 2 GB de RAM no serviço.
