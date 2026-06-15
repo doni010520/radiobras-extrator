@@ -35,6 +35,7 @@ from extrator_arquivos import (
 from extrator_odontoprev import (
     login_odonto, get_credentials_odonto, abrir_consultar_gtos, consultar_periodo,
     listar_gtos, abrir_gto, ler_dados_gto, upload_arquivos, normaliza_nome,
+    _anexos_nomes,
 )
 from extrair_anexos_dia import anexos_do_paciente
 from gto_utils import is_gto_pdf, extrair_observacao
@@ -42,6 +43,15 @@ from solicitacao_utils import gto_solicitante, gto_exames, analisar_paciente
 from laudo_utils import exames_pendentes_reais
 
 STATUS_ALVO = "REPASSE"  # só GTOs em "análise de repasse"
+
+
+def _ja_anexado_por_nos(nomes) -> bool:
+    """True se a GTO já tem NOSSOS arquivos: pelo menos um LAUDO_* e um ENTREGA_*.
+    Nomes deterministas da automação (prova de autoria) — anexos manuais usam
+    outros nomes e NÃO casam aqui, então não são confundidos com 'já completa'."""
+    tem_laudo = any(str(n).upper().startswith("LAUDO_") for n in nomes)
+    tem_img = any(str(n).upper().startswith("ENTREGA_") for n in nomes)
+    return tem_laudo and tem_img
 
 
 def _solic_anexavel(ana: dict) -> bool:
@@ -52,7 +62,8 @@ def _solic_anexavel(ana: dict) -> bool:
 
 
 def fechar_dia(data: str, convenios: list, segmentos: list,
-               dry_run: bool = True, progress_cb=None, limite: int = 0) -> dict:
+               dry_run: bool = True, progress_cb=None, limite: int = 0,
+               pular_completas: bool = True) -> dict:
     def log(m):
         print(m, flush=True)
         if progress_cb:
@@ -85,12 +96,47 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                         break
                     if tentativa == 0:
                         log("   (tabela vazia/atrasada — re-consultando o período...)")
+                alvos = [g for g in gtos if STATUS_ALVO in g["status"].upper()]
+                if limite:
+                    alvos = alvos[:limite]
+                log(f"   {len(gtos)} GTOs no dia | {len(alvos)} em 'análise de repasse' (alvo)")
+
+                # Pré-checagem (mesma sessão): pula GTOs que JÁ têm nossos arquivos
+                # (laudo+imagens), evitando re-baixar do PRORADIS num reprocessamento.
+                if pular_completas and alvos:
+                    log("   Conferindo anexos existentes (pular já completas)...")
+                    def _refrescar1():
+                        consultar_periodo(page, data)
+                    restantes = []
+                    for g in alvos:
+                        try:
+                            gp = abrir_gto(page, g["gto"], _refrescar=_refrescar1)
+                            nomes = _anexos_nomes(gp)
+                            try:
+                                gp.close()
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            log(f"      (checagem falhou na GTO {g['gto']}: {e} — "
+                                "será processada normalmente)")
+                            restantes.append(g)
+                            continue
+                        if _ja_anexado_por_nos(nomes):
+                            itens.append({
+                                "gto": g["gto"], "nome_gto": g["nome"], "arquivos": [],
+                                "status": "JA_ANEXADO", "solicitacao": None,
+                                "revisao_humana": "",
+                                "detalhe": "já tinha laudo+imagens nossos — pulada (não re-baixou)",
+                            })
+                        else:
+                            restantes.append(g)
+                    pulados = len(alvos) - len(restantes)
+                    if pulados:
+                        log(f"   {pulados} GTO(s) já completas — puladas. "
+                            f"{len(restantes)} para processar.")
+                    alvos = restantes
             finally:
                 b.close()
-        alvos = [g for g in gtos if STATUS_ALVO in g["status"].upper()]
-        if limite:
-            alvos = alvos[:limite]
-        log(f"   {len(gtos)} GTOs no dia | {len(alvos)} em 'análise de repasse' (alvo)")
         if not gtos:
             log(f"   ATENÇÃO: 0 GTOs para {data}. Verifique a data ou tente de novo "
                 "(pode ter sido lentidão do portal).")
@@ -283,6 +329,7 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
             i.pop("_paths", None)
         resumo = {
             "alvos": len(itens), "prontos": cnt("PRONTO"), "enviados": cnt("ENVIADO"),
+            "ja_anexados": cnt("JA_ANEXADO"),
             "sem_match": cnt("SEM_MATCH"), "ambiguos": cnt("AMBIGUO"),
             "sem_laudo": cnt("SEM_LAUDO"), "sem_imagens": cnt("SEM_IMAGENS"),
             "erros": cnt("ERRO") + cnt("ERRO_UPLOAD"),
@@ -302,11 +349,15 @@ if __name__ == "__main__":
     from config import CONVENIOS, SEGMENTOS
     DATA = sys.argv[1] if len(sys.argv) > 1 else "03/06/2026"
     DRY = "--go" not in sys.argv
+    # --full: reprocessa TODAS as GTOs (não pula as já completas). Útil se uma
+    # execução anterior foi interrompida no meio de um upload.
+    PULAR = "--full" not in sys.argv
     LIM = 0
     for a in sys.argv:
         if a.startswith("--limite="):
             LIM = int(a.split("=")[1])
-    rel = fechar_dia(DATA, CONVENIOS, SEGMENTOS, dry_run=DRY, limite=LIM)
+    rel = fechar_dia(DATA, CONVENIOS, SEGMENTOS, dry_run=DRY, limite=LIM,
+                     pular_completas=PULAR)
     out = f"_fechar_{DATA.replace('/', '')}.json"
     json.dump(rel, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print("relatorio salvo em", out)
