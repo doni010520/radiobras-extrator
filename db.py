@@ -234,6 +234,25 @@ def run_mais_recente(dia: str = None, plano: str = None):
         return d
 
 
+def run_detalhe(run_id: int):
+    """Uma execução específica (por id) + todos os itens — para o relatório."""
+    with SessionLocal() as s:
+        r = s.get(Run, run_id)
+        if not r:
+            return None
+        d = _run_to_dict(r)
+        d["dia"] = r.dia
+        d["plano"] = r.plano
+        d["log"] = r.log
+        d["itens"] = [{
+            "gto": it.gto, "paciente": it.paciente, "status": it.status,
+            "justificativa": it.justificativa, "enviados": it.enviados,
+            "ja_anexados": it.ja_anexados, "solicitacao": it.solicitacao,
+            "revisao_humana": it.revisao_humana, "detalhe": it.detalhe,
+        } for it in r.itens]
+        return d
+
+
 def fila_revisao(limite: int = 30) -> list:
     """Itens em revisão humana das execuções mais recentes (não-dry-run)."""
     with SessionLocal() as s:

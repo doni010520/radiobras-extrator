@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relatório — {{ run.dia }} ({{ run.plano }})</title>
+<style>
+  :root{
+    --verde:#0f7a4f; --verde-esc:#0b5f3d; --bg:#f4f6f5; --card:#fff;
+    --linha:#e6ebe8; --txt:#1f2a26; --sub:#6b7a73;
+    --ok:#0f7a4f; --ok-bg:#e7f5ee; --warn:#a86a00; --warn-bg:#fdf3e3;
+    --bad:#b3261e; --bad-bg:#fbeae9;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45}
+  .wrap{max-width:900px;margin:0 auto;padding:24px}
+  .topbar{background:var(--verde);color:#fff;border-radius:14px;padding:20px 24px;
+          display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+  .topbar h1{margin:0;font-size:20px;font-weight:700}
+  .topbar .sub{opacity:.9;font-size:13px;margin-top:4px}
+  .badge{display:inline-block;padding:4px 12px;border-radius:999px;font-weight:700;font-size:12px;letter-spacing:.3px}
+  .badge.sim{background:var(--warn-bg);color:var(--warn)}
+  .badge.real{background:#d9f0e3;color:var(--verde-esc)}
+  .meta{display:flex;flex-wrap:wrap;gap:18px;margin:18px 2px 6px;color:var(--sub);font-size:13px}
+  .meta b{color:var(--txt);font-weight:600}
+  .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:18px 0 6px}
+  .card{background:var(--card);border:1px solid var(--linha);border-radius:12px;padding:14px;text-align:center}
+  .card .n{font-size:26px;font-weight:800;line-height:1}
+  .card .l{font-size:11px;color:var(--sub);margin-top:6px;text-transform:uppercase;letter-spacing:.4px}
+  .card.ok .n{color:var(--ok)} .card.warn .n{color:var(--warn)} .card.bad .n{color:var(--bad)}
+  .actions{margin:18px 0;display:flex;gap:10px}
+  .btn{display:inline-flex;align-items:center;gap:8px;background:var(--verde);color:#fff;text-decoration:none;
+       border:none;border-radius:10px;padding:11px 18px;font-weight:700;font-size:14px;cursor:pointer}
+  .btn:hover{background:var(--verde-esc)}
+  .grupo{background:var(--card);border:1px solid var(--linha);border-radius:12px;margin:14px 0;overflow:hidden}
+  .grupo>h2{margin:0;padding:12px 16px;font-size:14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--linha)}
+  .grupo .pill{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;
+               font-weight:800;font-size:13px;color:#fff}
+  .grupo .cnt{margin-left:auto;color:var(--sub);font-weight:600}
+  .grupo .desc{padding:8px 16px 0;color:var(--sub);font-size:12.5px}
+  .ok .pill{background:var(--ok)} .warn .pill{background:var(--warn)} .bad .pill{background:var(--bad)}
+  .ok>h2{background:var(--ok-bg)} .warn>h2{background:var(--warn-bg)} .bad>h2{background:var(--bad-bg)}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{text-align:left;padding:9px 16px;border-top:1px solid var(--linha);vertical-align:top}
+  th{font-size:11px;color:var(--sub);text-transform:uppercase;letter-spacing:.4px;border-top:none}
+  td.gto{font-variant-numeric:tabular-nums;color:var(--sub);white-space:nowrap}
+  td.arq{white-space:nowrap;color:var(--sub)}
+  .obs{color:var(--txt)} .obs .m{color:var(--sub);font-size:12.5px}
+  .foot{color:var(--sub);font-size:12px;margin-top:22px;text-align:center}
+  .empty{padding:18px 16px;color:var(--sub)}
+  @media print{
+    body{background:#fff} .wrap{max-width:none;padding:0}
+    .actions{display:none}
+    .grupo,.card,.topbar{break-inside:avoid}
+    .topbar{border-radius:0}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div>
+      <h1>Relatório de Execução</h1>
+      <div class="sub">{{ run.plano|upper }} · dia processado <b>{{ run.dia }}</b></div>
+    </div>
+    <div>
+      {% if run.dry_run %}<span class="badge sim">SIMULAÇÃO</span>
+      {% else %}<span class="badge real">EXECUÇÃO REAL</span>{% endif %}
+    </div>
+  </div>
+
+  <div class="meta">
+    <span>Início: <b>{{ run.ini_fmt }}</b></span>
+    <span>Fim: <b>{{ run.fim_fmt }}</b></span>
+    <span>Duração: <b>{{ run.dur_fmt }}</b></span>
+    <span>Situação: <b>{{ 'Concluída' if run.status=='done' else run.status }}</b></span>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="n">{{ run.alvos }}</div><div class="l">Alvos</div></div>
+    {% if run.dry_run %}
+      <div class="card ok"><div class="n">{{ run.prontos }}</div><div class="l">Prontos p/ anexar</div></div>
+    {% else %}
+      <div class="card ok"><div class="n">{{ run.enviados }}</div><div class="l">Anexados</div></div>
+    {% endif %}
+    <div class="card warn"><div class="n">{{ run.sem_laudo }}</div><div class="l">Sem laudo</div></div>
+    <div class="card bad"><div class="n">{{ run.sem_match }}</div><div class="l">Sem match</div></div>
+    <div class="card"><div class="n">{{ run.revisao_humana }}</div><div class="l">Revisão humana</div></div>
+  </div>
+
+  {% if not pdf %}
+  <div class="actions">
+    <a class="btn" href="/relatorio/run/{{ run.id }}.pdf">⬇ Exportar PDF</a>
+  </div>
+  {% endif %}
+
+  {% for g in grupos %}
+  <section class="grupo {{ g.meta.cls }}">
+    <h2><span class="pill">{{ g.meta.icon }}</span> {{ g.meta.label }}
+        <span class="cnt">{{ g.itens|length }}</span></h2>
+    {% if g.meta.desc %}<div class="desc">{{ g.meta.desc }}</div>{% endif %}
+    <table>
+      <thead><tr><th>Paciente</th><th>GTO</th><th>Arquivos</th><th>Observação</th></tr></thead>
+      <tbody>
+      {% for it in g.itens %}
+        <tr>
+          <td>{{ it.paciente or '—' }}</td>
+          <td class="gto">{{ it.gto }}</td>
+          <td class="arq">
+            {% if it.enviados %}{{ it.enviados }} enviado(s){% endif %}
+            {%- if it.ja_anexados %}{% if it.enviados %} · {% endif %}{{ it.ja_anexados }} já anexado(s){% endif %}
+            {%- if not it.enviados and not it.ja_anexados %}—{% endif %}
+          </td>
+          <td class="obs">
+            {% if it.detalhe %}{{ it.detalhe }}{% else %}<span class="m">{{ g.meta.desc }}</span>{% endif %}
+            {% if it.revisao_humana %}<div class="m">Solicitação: {{ it.revisao_humana }}</div>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% else %}
+    <div class="grupo"><div class="empty">Nenhum item registrado nesta execução.</div></div>
+  {% endfor %}
+
+  <div class="foot">
+    Gerado automaticamente a partir dos dados da execução #{{ run.id }} ·
+    RadioBras Digital · sem edição manual.
+  </div>
+
+</div>
+</body>
+</html>

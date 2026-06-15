@@ -11,6 +11,13 @@ import sys
 import threading
 import traceback
 import uuid
+from datetime import datetime
+
+try:
+    from zoneinfo import ZoneInfo
+    _TZ = ZoneInfo("America/Sao_Paulo")
+except Exception:
+    _TZ = None
 
 from flask import Flask, jsonify, render_template, request, send_file
 
@@ -102,6 +109,8 @@ def _run_fechar_job(job_id: str, data: str, dry_run: bool, plano: str = "odontop
         run_id = db.criar_run(data, dry_run, plano=plano)
     except Exception as e:
         app.logger.error("Falha ao criar run no banco: %s", e)
+    with _jobs_lock:
+        _jobs[job_id]["run_id"] = run_id
 
     def _log_texto():
         with _jobs_lock:
@@ -153,6 +162,109 @@ def gtos_page():
 def index():
     """Tela antiga (relatório analítico xlsx + download ZIP)."""
     return render_template("index.html", convenios=CONVENIOS, segmentos=SEGMENTOS)
+
+
+# ── Relatório de execução (visual + PDF) ───────────────────────────────────────
+# Cada status vira um grupo visual, com rótulo, cor e o "porquê" determinístico.
+STATUS_META = {
+    "ENVIADO":     {"label": "Anexado",            "cls": "ok",   "icon": "✓",
+                    "desc": "Laudo e imagens anexados na GTO."},
+    "PRONTO":      {"label": "Pronto para anexar", "cls": "ok",   "icon": "✓",
+                    "desc": "Arquivos encontrados — seriam anexados numa execução real (simulação)."},
+    "JA_ANEXADO":  {"label": "Já estava anexado",  "cls": "ok",   "icon": "✓",
+                    "desc": "Os arquivos já estavam na GTO (nada a reenviar)."},
+    "SEM_LAUDO":   {"label": "Sem laudo",          "cls": "warn", "icon": "!",
+                    "desc": "Exame ainda não laudado no PRORADIS."},
+    "SEM_IMAGENS": {"label": "Sem imagens",        "cls": "warn", "icon": "!",
+                    "desc": "Sem imagens disponíveis no PRORADIS."},
+    "SEM_MATCH":   {"label": "Não localizado",     "cls": "bad",  "icon": "✕",
+                    "desc": "Paciente não localizado no PRORADIS."},
+    "AMBIGUO":     {"label": "Ambíguo",            "cls": "bad",  "icon": "✕",
+                    "desc": "Mais de um paciente com o mesmo nome — precisa conferência."},
+    "ERRO_UPLOAD": {"label": "Erro ao anexar",     "cls": "bad",  "icon": "✕",
+                    "desc": "Falha no envio do anexo."},
+}
+_ORDEM_STATUS = ["ENVIADO", "PRONTO", "JA_ANEXADO", "SEM_LAUDO", "SEM_IMAGENS",
+                 "SEM_MATCH", "AMBIGUO", "ERRO_UPLOAD"]
+
+
+def _fmt_run_datas(run: dict) -> dict:
+    """Adiciona início/fim formatados (Brasília) e duração ao dict da run."""
+    def _parse(s):
+        if not s:
+            return None
+        try:
+            dt = datetime.fromisoformat(s)
+            return dt.astimezone(_TZ) if _TZ else dt
+        except Exception:
+            return None
+    ini, fim = _parse(run.get("started_at")), _parse(run.get("finished_at"))
+    run["ini_fmt"] = ini.strftime("%d/%m/%Y %H:%M") if ini else "—"
+    run["fim_fmt"] = fim.strftime("%d/%m/%Y %H:%M") if fim else "—"
+    if ini and fim:
+        seg = max(int((fim - ini).total_seconds()), 0)
+        m, s = divmod(seg, 60)
+        run["dur_fmt"] = (f"{m}m {s}s" if m else f"{s}s")
+    else:
+        run["dur_fmt"] = "—"
+    return run
+
+
+def _agrupar_run(run: dict) -> list:
+    """Agrupa os itens por status (na ordem de _ORDEM_STATUS), pulando vazios."""
+    itens = run.get("itens", []) or []
+    por_status = {}
+    for it in itens:
+        st = (it.get("status") or "?").upper()
+        por_status.setdefault(st, []).append(it)
+    grupos = []
+    vistos = set()
+    for st in _ORDEM_STATUS + sorted(por_status.keys()):
+        if st in vistos or st not in por_status:
+            continue
+        vistos.add(st)
+        meta = STATUS_META.get(st, {"label": st.title(), "cls": "warn", "icon": "•", "desc": ""})
+        grupos.append({"status": st, "meta": meta, "itens": por_status[st]})
+    return grupos
+
+
+@app.route("/relatorio/run/<int:run_id>")
+def relatorio_run(run_id: int):
+    """Relatório visual de uma execução (o que foi feito, o que não, e por quê)."""
+    run = db.run_detalhe(run_id)
+    if not run:
+        return ("Execução não encontrada.", 404)
+    _fmt_run_datas(run)
+    return render_template("relatorio_run.html", run=run,
+                           grupos=_agrupar_run(run), pdf=False)
+
+
+@app.route("/relatorio/run/<int:run_id>.pdf")
+def relatorio_run_pdf(run_id: int):
+    """Mesmo relatório, renderizado em PDF pelo Chromium (Playwright). Download 1-clique."""
+    run = db.run_detalhe(run_id)
+    if not run:
+        return ("Execução não encontrada.", 404)
+    _fmt_run_datas(run)
+    html = render_template("relatorio_run.html", run=run,
+                           grupos=_agrupar_run(run), pdf=True)
+    from playwright.sync_api import sync_playwright
+    try:
+        with sync_playwright() as pw:
+            br = pw.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            pg = br.new_page()
+            pg.set_content(html, wait_until="networkidle")
+            pdf_bytes = pg.pdf(format="A4", print_background=True,
+                               margin={"top": "12mm", "bottom": "12mm",
+                                       "left": "10mm", "right": "10mm"})
+            br.close()
+    except Exception as exc:
+        app.logger.error("Falha ao gerar PDF da run %s: %s", run_id, exc)
+        return (f"Falha ao gerar PDF: {exc}", 500)
+    nome = f"relatorio_{(run.get('dia') or '').replace('/', '-')}_run{run_id}.pdf"
+    return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
+                     as_attachment=True, download_name=nome)
 
 
 # ── APIs do Dashboard ─────────────────────────────────────────────────────────
@@ -269,6 +381,7 @@ def fechar_status(job_id: str):
     if not job:
         return jsonify({"error": "Job não encontrado."}), 404
     resp: dict = {"status": job["status"], "log": job.get("log", [])}
+    resp["run_id"] = job.get("run_id")
     if job["status"] == "error":
         resp["error"] = job.get("error", "")
     if job["status"] == "done":

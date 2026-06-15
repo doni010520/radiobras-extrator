@@ -193,6 +193,7 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
       </div>
       <div class="hint">Baixa laudos + imagens do PRORADIS e anexa nas GTOs em repasse. Leva alguns minutos — mantenha a aba aberta.</div>
       <div class="run-status" id="runstatus" style="display:none"><div class="spinner" id="runspin"></div><span id="runtxt"></span></div>
+      <div id="reportbox" style="display:none;gap:8px;margin-top:12px;flex-wrap:wrap"></div>
       <div class="errbox" id="errbox"></div>
       <div class="log" id="log"></div>
     </div>
@@ -281,7 +282,7 @@ function renderRevisao(list){
 
 // modal run
 function atualizaEcho(){const iso=$('data').value;if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)){$('dateEcho').textContent='';return;}const [y,m,d]=iso.split('-');const dt=new Date(+y,+m-1,+d);const sem=dt.toLocaleDateString('pt-BR',{weekday:'long'});$('dateEcho').textContent=`→ vai processar ${d}/${m}/${y} (${sem})`;}
-function abrirRun(){$('overlay').classList.add('show');$('data').value=isoHoje();atualizaEcho();$('log').classList.remove('show');$('log').innerHTML='';$('errbox').classList.remove('show');$('runstatus').style.display='none';$('btnGo').disabled=false;}
+function abrirRun(){$('overlay').classList.add('show');$('data').value=isoHoje();atualizaEcho();$('log').classList.remove('show');$('log').innerHTML='';$('errbox').classList.remove('show');$('runstatus').style.display='none';$('reportbox').style.display='none';$('reportbox').innerHTML='';$('btnGo').disabled=false;}
 function fecharRun(){$('overlay').classList.remove('show');}
 $('data').addEventListener('change',atualizaEcho);
 function logLine(m){const el=$('log');const d=document.createElement('div');let c='';if(/\[ENVIADO\]|\[OK\]/.test(m))c='ok';else if(/\[ERRO|SEM_LAUDO|SEM MATCH|\[SEM/.test(m))c='err';else if(/\[1\/3\]|\[2\/3\]|\[3\/3\]|===/.test(m))c='ph';d.className=c;d.textContent=m;el.appendChild(d);el.scrollTop=el.scrollHeight;}
@@ -309,6 +310,11 @@ async function poll(id){
   clearInterval(timer);$('runspin').style.display='none';
   if(j.status==='error'){$('runtxt').textContent='Erro';$('errbox').classList.add('show');$('errbox').textContent=j.error||'Falha.';}
   else if(j.status==='done'){$('runtxt').textContent=(j.dry_run?'Simulação concluída':'Dia fechado')+' ✓';}
+  if(j.run_id){const b='display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:600;font-size:13px;';
+    $('reportbox').style.display='flex';
+    $('reportbox').innerHTML=
+      '<a href="/relatorio/run/'+j.run_id+'" target="_blank" style="'+b+'border:1px solid #0f7a4f;color:#0f7a4f;background:#fff">📄 Ver relatório</a>'+
+      '<a href="/relatorio/run/'+j.run_id+'.pdf" style="'+b+'background:#0f7a4f;color:#fff">⬇ Exportar PDF</a>';}
   $('btnGo').disabled=false;carregar();
 }
 carregar();
