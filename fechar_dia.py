@@ -72,15 +72,28 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
         with sync_playwright() as pw:
             b, c, page = login_odonto(pw, ouser, opwd)
             try:
-                abrir_consultar_gtos(page)
-                consultar_periodo(page, data)
-                gtos = listar_gtos(page)
+                gtos = []
+                # até 2 tentativas: a tabela pode demorar a popular no servidor.
+                for tentativa in range(2):
+                    abrir_consultar_gtos(page)
+                    consultar_periodo(page, data)
+                    gtos = listar_gtos(page)
+                    # só GTOs cuja liberação == dia pedido (garante o filtro certo)
+                    do_dia = [g for g in gtos if g.get("liberacao") == data]
+                    if do_dia:
+                        gtos = do_dia
+                        break
+                    if tentativa == 0:
+                        log("   (tabela vazia/atrasada — re-consultando o período...)")
             finally:
                 b.close()
         alvos = [g for g in gtos if STATUS_ALVO in g["status"].upper()]
         if limite:
             alvos = alvos[:limite]
         log(f"   {len(gtos)} GTOs no dia | {len(alvos)} em 'análise de repasse' (alvo)")
+        if not gtos:
+            log(f"   ATENÇÃO: 0 GTOs para {data}. Verifique a data ou tente de novo "
+                "(pode ter sido lentidão do portal).")
 
         # ── Fase 2: PRORADIS — montar arquivos por paciente ───────────────────
         email, password = get_credentials()

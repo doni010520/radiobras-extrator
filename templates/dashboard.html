@@ -95,6 +95,8 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 .field input[type=date]::-webkit-calendar-picker-indicator{cursor:pointer;opacity:.6;}
 .field input[type=date]:hover::-webkit-calendar-picker-indicator{opacity:1;}
 .date-echo{font-size:13px;color:var(--green-700);font-weight:700;}
+.sel{padding:12px 14px;border:1px solid var(--gray-300);border-radius:8px;font-size:16px;font-family:inherit;max-width:340px;outline:none;background:#fff;color:var(--gray-900);cursor:pointer;}
+.sel:focus{border-color:var(--green-500);box-shadow:0 0 0 3px rgba(16,185,129,.12);}
 .sim-toggle{display:flex;align-items:flex-start;gap:11px;font-size:14px;cursor:pointer;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:10px;padding:14px 16px;}
 .sim-toggle input{width:18px;height:18px;accent-color:var(--green-700);margin-top:1px;flex-shrink:0;}
 .sim-toggle span{color:var(--gray-600);}.sim-toggle strong{color:var(--gray-900);}
@@ -182,6 +184,7 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
     <div class="modal-header"><span class="modal-title">Executar — Fechar o dia</span><button class="modal-close" onclick="fecharRun()">&times;</button></div>
     <div class="modal-body">
       <div class="run-form">
+        <div class="field"><label for="plano">Plano</label><select id="plano" class="sel"></select></div>
         <div class="field"><label for="data">Dia a processar</label><input type="date" id="data"><span class="date-echo" id="dateEcho"></span></div>
         <label class="sim-toggle"><input type="checkbox" id="simular"><span><strong>Simular</strong> — roda tudo (baixa e decide) <em>sem anexar</em> no portal. Teste seguro.</span></label>
       </div>
@@ -217,9 +220,21 @@ async function carregar(){
     statCard('yellow','#i-clock',rev,'Aguardando revisão')+
     statCard('red','#i-alert',err,'Erros / sem match');
   renderPlanos(j.planos||[]);
+  renderPlanoSelect(j.planos||[]);
   renderTaxa(u);
   renderChart(j.semana||[]);
   renderRevisao(j.revisao||[]);
+}
+function renderPlanoSelect(lista){
+  const sel=$('plano'); if(!sel||!lista.length) return;
+  const atual=sel.value;
+  sel.innerHTML=lista.map(p=>{
+    const lbl=p.ativo?p.nome:`${p.nome} — não configurado`;
+    return `<option value="${p.slug}"${p.ativo?'':' disabled'}>${lbl}</option>`;
+  }).join('');
+  // seleciona o atual, senão o primeiro ativo
+  const ativo=lista.find(p=>p.slug===atual&&p.ativo)||lista.find(p=>p.ativo);
+  if(ativo) sel.value=ativo.slug;
 }
 function renderPlanos(lista){
   const ativos=lista.filter(p=>p.ativo).length;
@@ -276,10 +291,11 @@ async function executar(){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)){alert('Selecione a data no calendário.');return;}
   const data=isoParaBR(iso);
   const dry=$('simular').checked;
-  if(!dry&&!confirm(`Fechar o dia ${data}?\n\nIsto vai ANEXAR os arquivos nas GTOs do OdontoPrev.`))return;
+  const plano=$('plano').value||'odontoprev';
+  if(!dry&&!confirm(`Fechar o dia ${data}?\n\nIsto vai ANEXAR os arquivos nas GTOs do plano selecionado.`))return;
   $('btnGo').disabled=true;$('log').classList.add('show');$('log').innerHTML='';$('errbox').classList.remove('show');
   $('runstatus').style.display='flex';$('runspin').style.display='inline-block';$('runtxt').textContent='Iniciando…';seen=0;
-  const fd=new FormData();fd.append('data',data);if(dry)fd.append('simular','1');
+  const fd=new FormData();fd.append('data',data);fd.append('plano',plano);if(dry)fd.append('simular','1');
   let r;try{r=await fetch('/fechar',{method:'POST',body:fd});}catch(e){$('runtxt').textContent='Falha de conexão';$('btnGo').disabled=false;return;}
   const j=await r.json();
   if(j.error){$('errbox').classList.add('show');$('errbox').textContent=j.error;$('runspin').style.display='none';$('runtxt').textContent='Erro';$('btnGo').disabled=false;return;}

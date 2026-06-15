@@ -136,7 +136,32 @@ def consultar_periodo(page, dia: str):
         page.wait_for_load_state("networkidle", timeout=30000)
     except Exception:
         pass
-    page.wait_for_timeout(5000)
+    # Espera a tabela popular com GTOs do dia pedido (em vez de tempo fixo) —
+    # corrige o "0 GTOs" por leitura antes da tabela carregar em servidor lento.
+    n = _aguardar_tabela_gtos(page, dia)
+    return n
+
+
+def _aguardar_tabela_gtos(page, dia: str, timeout: int = 30) -> int:
+    """Aguarda a tabela mostrar linhas de GTO cuja LIBERAÇÃO == `dia`, ou um
+    indicador de 'nenhum registro'. Evita ler cedo demais (resultado 0 falso) e
+    confirma que o FILTRO da data foi aplicado. Retorna nº de linhas do dia."""
+    alvo = (dia or "").strip()
+    for _ in range(timeout * 2):
+        n_dia = 0
+        for tr in page.query_selector_all("tr, [role=row]"):
+            t = re.sub(r"\s+", " ", (tr.inner_text() or "")).strip()
+            m = re.match(r"^(\d{6,})\s+(\d{2}/\d{2}/\d{4})", t)
+            if m and m.group(2) == alvo:
+                n_dia += 1
+        if n_dia:
+            return n_dia
+        body = (page.inner_text("body") or "").lower()
+        if "nenhum" in body and any(k in body for k in
+                                    ("registro", "dado", "resultado", "encontrad")):
+            return 0
+        page.wait_for_timeout(500)
+    return 0
 
 
 # ── Parse da tabela de GTOs ──────────────────────────────────────────────────────
