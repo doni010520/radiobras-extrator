@@ -49,7 +49,13 @@ def login_odonto(pw, user: str, password: str):
     browser = pw.chromium.launch(
         headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
     )
-    ctx = browser.new_context(viewport={"width": 1500, "height": 900})
+    # locale/timezone fixos: no Docker o Chromium roda em en-US e renderiza datas
+    # como MM/DD/AAAA, quebrando o filtro de Liberação (== DD/MM/AAAA) -> "0 GTOs".
+    ctx = browser.new_context(
+        viewport={"width": 1500, "height": 900},
+        locale="pt-BR",
+        timezone_id="America/Sao_Paulo",
+    )
     page = ctx.new_page()
     page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=45000)
     page.wait_for_timeout(2500)
@@ -147,13 +153,17 @@ def _aguardar_tabela_gtos(page, dia: str, timeout: int = 30) -> int:
     indicador de 'nenhum registro'. Evita ler cedo demais (resultado 0 falso) e
     confirma que o FILTRO da data foi aplicado. Retorna nº de linhas do dia."""
     alvo = (dia or "").strip()
+    datas_vistas = set()
     for _ in range(timeout * 2):
         n_dia = 0
+        datas_vistas = set()
         for tr in page.query_selector_all("tr, [role=row]"):
             t = re.sub(r"\s+", " ", (tr.inner_text() or "")).strip()
             m = re.match(r"^(\d{6,})\s+(\d{2}/\d{2}/\d{4})", t)
-            if m and m.group(2) == alvo:
-                n_dia += 1
+            if m:
+                datas_vistas.add(m.group(2))
+                if m.group(2) == alvo:
+                    n_dia += 1
         if n_dia:
             return n_dia
         body = (page.inner_text("body") or "").lower()
@@ -161,6 +171,11 @@ def _aguardar_tabela_gtos(page, dia: str, timeout: int = 30) -> int:
                                     ("registro", "dado", "resultado", "encontrad")):
             return 0
         page.wait_for_timeout(500)
+    # Esgotou o tempo. Se HÁ linhas de GTO mas nenhuma casou com o dia, quase sempre
+    # é divergência de formato de data (locale) — registra o que foi visto p/ diag.
+    if datas_vistas:
+        print(f"[_aguardar_tabela_gtos] 0 linhas para {alvo}, mas vi datas: "
+              f"{sorted(datas_vistas)[:8]} (possível locale/formato de data)")
     return 0
 
 

@@ -116,7 +116,7 @@ def _login_playwright(pw, email: str, password: str):
     browser = pw.chromium.launch(
         headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
     )
-    ctx = browser.new_context()
+    ctx = browser.new_context(locale="pt-BR", timezone_id="America/Sao_Paulo")
     page = ctx.new_page()
     # domcontentloaded em vez de networkidle: o SmartRIS faz polling/websocket
     # que nunca "aquieta", então networkidle estoura timeout de forma intermitente.

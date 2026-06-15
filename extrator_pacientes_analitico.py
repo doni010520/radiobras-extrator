@@ -60,7 +60,7 @@ def discover_tokens_and_cookies(email: str, password: str) -> tuple[dict, dict, 
         browser = p.chromium.launch(
             headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
         )
-        context = browser.new_context()
+        context = browser.new_context(locale="pt-BR", timezone_id="America/Sao_Paulo")
         page = context.new_page()
 
         print("[1/5] Abrindo página de login...")
