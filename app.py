@@ -314,6 +314,58 @@ def api_gtos():
         return jsonify({"error": str(exc)}), 500
 
 
+@app.route("/api/planos-periodo")
+def api_planos_periodo():
+    """Gráfico empilhado: por plano, desfecho das GTOs no período [de, ate].
+    `de`/`ate` em YYYY-MM-DD (o cliente calcula a partir de Hoje/Semana/Mês)."""
+    de = request.args.get("de", "").strip()
+    ate = request.args.get("ate", "").strip()
+    try:
+        agg = db.gtos_por_plano_periodo(de, ate) if de and ate else {}
+        with _jobs_lock:
+            rodando = {j.get("plano") for j in _jobs.values()
+                       if j.get("status") in ("running", "queued")}
+        planos = []
+        for p in planos_mod.listar_planos():
+            c = agg.get(p["slug"], {})
+            planos.append({
+                "slug": p["slug"], "nome": p["nome"], "ativo": p.get("ativo", False),
+                "rodando": p["slug"] in rodando,
+                "anexadas": c.get("anexadas", 0), "sem_laudo": c.get("sem_laudo", 0),
+                "erros": c.get("erros", 0), "simulacao": c.get("simulacao", 0),
+                "revisao": c.get("revisao", 0), "total": c.get("total", 0),
+                "dias": c.get("dias", 0),
+            })
+        return jsonify({"de": de, "ate": ate, "planos": planos})
+    except Exception as exc:
+        app.logger.error("Erro em /api/planos-periodo: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/plano/<slug>")
+def plano_detalhe_page(slug: str):
+    """Tela de detalhe: GTOs processadas de um plano no período."""
+    return render_template("plano_detalhe.html",
+                           slug=slug, nome=planos_mod.nome_plano(slug),
+                           de=request.args.get("de", ""), ate=request.args.get("ate", ""))
+
+
+@app.route("/api/plano-detalhe")
+def api_plano_detalhe():
+    plano = request.args.get("plano", "").strip()
+    de = request.args.get("de", "").strip()
+    ate = request.args.get("ate", "").strip()
+    if not plano or not de or not ate:
+        return jsonify({"error": "Informe plano, de e ate."}), 400
+    try:
+        d = db.itens_plano_periodo(plano, de, ate)
+        d["nome"] = planos_mod.nome_plano(plano)
+        return jsonify(d)
+    except Exception as exc:
+        app.logger.error("Erro em /api/plano-detalhe: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
 @app.route("/api/diag")
 def api_diag():
     """Diagnóstico de saúde — para inspeção remota sem acesso aos logs do servidor.

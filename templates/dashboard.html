@@ -111,7 +111,35 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 .log.show{display:block;}.log .ok{color:#34d399;}.log .err{color:#f87171;}.log .ph{color:#5eead4;}
 .errbox{background:var(--red-100);border:1px solid #FECACA;color:#DC2626;border-radius:10px;padding:14px 16px;font-size:13px;display:none;white-space:pre-wrap;margin-top:12px;}
 .errbox.show{display:block;}
-@media(max-width:980px){.content-grid{grid-template-columns:1fr;}.stats-row{grid-template-columns:repeat(2,1fr);}.topnav-menu{display:none;}}
+/* filtro de período */
+.filterbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:20px;}
+.seg{display:inline-flex;background:#fff;border:1px solid var(--gray-200);border-radius:10px;padding:4px;gap:2px;}
+.seg button{border:none;background:none;padding:8px 16px;border-radius:7px;font-size:14px;font-weight:600;color:var(--gray-500);cursor:pointer;font-family:inherit;}
+.seg button.active{background:var(--green-700);color:#fff;}
+.seg button:hover:not(.active){background:var(--gray-100);}
+.customdates{display:flex;align-items:center;gap:8px;}
+.customdates input[type=date]{padding:8px 10px;border:1px solid var(--gray-300);border-radius:8px;font-size:14px;font-family:inherit;}
+.customdates span{color:var(--gray-500);font-size:13px;}
+.customdates .btn{padding:8px 14px;}
+.range-echo{color:var(--gray-500);font-size:14px;}
+.legend{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:16px;font-size:13px;color:var(--gray-600);}
+.legend span{display:inline-flex;align-items:center;gap:6px;}
+.dot{width:11px;height:11px;border-radius:3px;display:inline-block;}
+.dot.anex{background:var(--green-500);}.dot.sim{background:var(--blue-500);}.dot.lau{background:var(--yellow-500);}.dot.err{background:var(--red-500);}.dot.rev{background:var(--gray-400);}
+.pbar-row{display:grid;grid-template-columns:230px 1fr 70px;align-items:center;gap:16px;padding:16px 24px;border-bottom:1px solid var(--gray-100);cursor:pointer;transition:background .15s;}
+.pbar-row:last-child{border-bottom:none;}
+.pbar-row:hover{background:var(--gray-50);}
+.pbar-row.inactive{cursor:default;opacity:.65;}
+.pbar-row.inactive:hover{background:none;}
+.pbar-name{display:flex;align-items:center;gap:12px;min-width:0;}
+.pbar-name .nm{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.pbar-name .mt{font-size:12px;color:var(--gray-400);}
+.pbar{display:flex;height:24px;border-radius:6px;overflow:hidden;background:var(--gray-100);}
+.pseg{height:100%;min-width:0;transition:width .5s;}
+.pseg.anex{background:var(--green-500);}.pseg.sim{background:var(--blue-500);}.pseg.lau{background:var(--yellow-500);}.pseg.err{background:var(--red-500);}
+.pbar-total{text-align:right;font-size:18px;font-weight:700;}
+.pbar-total .rev{display:block;font-size:11px;font-weight:600;color:var(--gray-400);}
+@media(max-width:980px){.content-grid{grid-template-columns:1fr;}.stats-row{grid-template-columns:repeat(2,1fr);}.topnav-menu{display:none;}.pbar-row{grid-template-columns:140px 1fr 50px;gap:10px;padding:14px 16px;}}
 </style>
 </head>
 <body>
@@ -131,7 +159,7 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
   <div class="topnav-menu">
     <a class="topnav-link active">Dashboard</a>
     <a class="topnav-link" href="/gtos">GTOs</a>
-    <a class="topnav-link" onclick="document.getElementById('card-revisao').scrollIntoView({behavior:'smooth'})">Revisão <span class="topnav-badge" id="nav-rev">0</span></a>
+    <a class="topnav-link" href="/gtos">Revisão <span class="topnav-badge" id="nav-rev">0</span></a>
     <a class="topnav-link" href="/relatorio">Relatórios</a>
   </div>
   <div class="topnav-right"><span class="topnav-date" id="topdate"></span><div class="topnav-avatar">RB</div></div>
@@ -139,41 +167,35 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 
 <main class="main">
   <div class="page-header">
-    <h1 class="page-title">Dashboard</h1>
-    <p class="page-subtitle" id="subtitle">Acompanhe o status das automações em tempo real</p>
+    <h1 class="page-title">GTOs por plano</h1>
+    <p class="page-subtitle" id="subtitle">Carregando…</p>
   </div>
 
-  <div class="stats-row" id="stats"></div>
+  <div class="filterbar">
+    <div class="seg" id="rangeseg">
+      <button data-r="hoje">Hoje</button>
+      <button data-r="semana">Semana</button>
+      <button data-r="mes" class="active">Mês</button>
+      <button data-r="custom">Período</button>
+    </div>
+    <div class="customdates" id="customdates" style="display:none">
+      <input type="date" id="fde"><span>até</span><input type="date" id="fate">
+      <button class="btn btn-primary" id="aplicar" onclick="aplicarCustom()">Aplicar</button>
+    </div>
+    <span class="range-echo" id="rangeEcho"></span>
+  </div>
 
-  <div class="content-grid">
-    <div>
-      <div class="card">
-        <div class="card-header"><h2 class="card-title">Status dos Planos <span id="planos-count"></span></h2><a class="card-action" href="/gtos">Ver GTOs <svg class="icon-sm"><use href="#i-arrow"/></svg></a></div>
-        <div id="planos"></div>
-      </div>
-      <div class="card">
-        <div class="card-header"><h2 class="card-title">Envios por dia</h2></div>
-        <div class="chart-container" id="chart"></div>
-      </div>
-    </div>
-    <div class="right-column">
-      <div class="card">
-        <div class="card-header"><h2 class="card-title">Taxa de Sucesso</h2></div>
-        <div class="progress-content">
-          <div class="progress-circle"><svg width="140" height="140"><circle class="pc-bg" cx="70" cy="70" r="60"></circle><circle class="pc-fill" id="pc-fill" cx="70" cy="70" r="60" stroke-dasharray="377" stroke-dashoffset="377"></circle></svg>
-            <div class="progress-text"><div class="progress-value" id="taxa">—</div><div class="progress-label">anexados</div></div></div>
-          <div class="progress-stats">
-            <div><div class="ps-value" id="ps-env">—</div><div class="ps-label">Anexados</div></div>
-            <div><div class="ps-value" id="ps-rev">—</div><div class="ps-label">Revisão</div></div>
-            <div><div class="ps-value" id="ps-err">—</div><div class="ps-label">Erros</div></div>
-          </div>
-        </div>
-      </div>
-      <div class="card" id="card-revisao">
-        <div class="card-header"><h2 class="card-title">Fila de Revisão</h2><a class="card-action" href="/gtos">Ver todos <svg class="icon-sm"><use href="#i-arrow"/></svg></a></div>
-        <div id="revisao-list"></div>
-      </div>
-    </div>
+  <div class="legend">
+    <span><i class="dot anex"></i> Anexadas</span>
+    <span><i class="dot sim"></i> Simulação</span>
+    <span><i class="dot lau"></i> Sem laudo</span>
+    <span><i class="dot err"></i> Sem match / erro</span>
+    <span><i class="dot rev"></i> (revisão = solicitação a conferir)</span>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h2 class="card-title">Processadas por plano <span id="chart-sub"></span></h2></div>
+    <div id="planobars"><div class="empty">Carregando…</div></div>
   </div>
 </main>
 
@@ -209,22 +231,39 @@ $('topdate').textContent=new Date().toLocaleDateString('pt-BR',{weekday:'long',d
 function statCard(c,icon,val,label){return `<div class="stat-card"><div class="stat-header"><div class="stat-icon ${c}"><svg class="icon-lg"><use href="${icon}"/></svg></div></div><div class="stat-value">${val}</div><div class="stat-label">${label}</div></div>`;}
 function fmtHora(iso){if(!iso)return'';try{return new Date(iso).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return'';}}
 
+// ── período / filtro ──────────────────────────────────────────────────────
+let curRange='mes',curDe='',curAte='';
+const _pad=n=>String(n).padStart(2,'0');
+const isoOf=d=>`${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}`;
+function calcRange(r){
+  const t=new Date();t.setHours(0,0,0,0);
+  if(r==='hoje')return[isoOf(t),isoOf(t)];
+  if(r==='semana'){const dow=(t.getDay()+6)%7;const mon=new Date(t);mon.setDate(t.getDate()-dow);const sun=new Date(mon);sun.setDate(mon.getDate()+6);return[isoOf(mon),isoOf(sun)];}
+  if(r==='mes'){return[isoOf(new Date(t.getFullYear(),t.getMonth(),1)),isoOf(new Date(t.getFullYear(),t.getMonth()+1,0))];}
+  return[curDe,curAte];
+}
+function brOf(iso){if(!iso)return'';const[y,m,d]=iso.split('-');return `${d}/${m}/${y}`;}
+function setRange(r){
+  curRange=r;
+  document.querySelectorAll('#rangeseg button').forEach(b=>b.classList.toggle('active',b.dataset.r===r));
+  $('customdates').style.display=r==='custom'?'flex':'none';
+  if(r!=='custom'){[curDe,curAte]=calcRange(r);carregar();}
+}
+function aplicarCustom(){
+  const de=$('fde').value,ate=$('fate').value;
+  if(!de||!ate){alert('Escolha as duas datas.');return;}
+  if(de>ate){alert('A data inicial não pode ser depois da final.');return;}
+  curDe=de;curAte=ate;carregar();
+}
+document.querySelectorAll('#rangeseg button').forEach(b=>b.onclick=()=>setRange(b.dataset.r));
+
 async function carregar(){
-  let j;try{j=await (await fetch('/api/dashboard')).json();}catch(e){return;}
-  const u=j.ultima,tot=j.totais||{},proc=j.processando||0;
-  $('subtitle').textContent=u?`Última execução: dia ${u.dia} · ${tot.total_execucoes} no histórico · ${tot.total_enviados} anexos no total`:'Nenhuma execução ainda — clique em "Executar Agora".';
-  // stats
-  const rev=u?u.revisao_humana:0,err=u?(u.erros+u.sem_match):0;
-  $('stats').innerHTML=
-    statCard('green','#i-check',u?u.enviados:'—','Anexados (última)')+
-    statCard('blue','#i-sync',proc,'Processando agora')+
-    statCard('yellow','#i-clock',rev,'Aguardando revisão')+
-    statCard('red','#i-alert',err,'Erros / sem match');
-  renderPlanos(j.planos||[]);
-  renderPlanoSelect(j.planos||[]);
-  renderTaxa(u);
-  renderChart(j.semana||[]);
-  renderRevisao(j.revisao||[]);
+  if(!curDe||!curAte)[curDe,curAte]=calcRange(curRange);
+  $('rangeEcho').textContent=`${brOf(curDe)} — ${brOf(curAte)}`;
+  let j;try{j=await (await fetch(`/api/planos-periodo?de=${curDe}&ate=${curAte}`)).json();}catch(e){return;}
+  const lista=j.planos||[];
+  renderPlanoSelect(lista);
+  renderBars(lista);
 }
 function renderPlanoSelect(lista){
   const sel=$('plano'); if(!sel||!lista.length) return;
@@ -237,47 +276,35 @@ function renderPlanoSelect(lista){
   const ativo=lista.find(p=>p.slug===atual&&p.ativo)||lista.find(p=>p.ativo);
   if(ativo) sel.value=ativo.slug;
 }
-function renderPlanos(lista){
-  const ativos=lista.filter(p=>p.ativo).length;
-  $('planos-count').textContent=`· ${ativos} ativo${ativos!==1?'s':''} de ${lista.length}`;
-  $('planos').innerHTML=lista.map(p=>{
-    // não configurado
-    if(!p.ativo){
-      return `<div class="plano-item" style="cursor:default;opacity:.7">
-        <div class="plano-avatar gray"><svg class="icon"><use href="#i-tooth"/></svg></div>
-        <div class="plano-info"><div class="plano-name">${p.nome}</div><div class="plano-meta">Automação ainda não configurada</div></div>
-        <div class="plano-stats"><div class="plano-stat"><div class="plano-stat-value">—</div><div class="plano-stat-label">Anexados</div></div><div class="plano-stat"><div class="plano-stat-value">—</div><div class="plano-stat-label">Erros</div></div></div>
-        <span class="status-pill pending">Não configurado</span></div>`;
-    }
-    const u=p.ultima;
-    let av='plano-avatar',ic='#i-tooth',pill='pending',ptxt='Aguardando',meta='Nenhuma execução ainda',env='—',erros='—',spin='';
-    if(p.rodando){av='plano-avatar blue';ic='#i-sync';pill='running';ptxt='Executando';meta='Executando agora…';spin=' spin';}
-    else if(u){env=u.enviados;erros=(u.erros+u.sem_match);meta=`Última execução: ${fmtHora(u.finished_at)} · dia ${u.dia}`+(u.dry_run?' (simulação)':'');
-      if(erros>0){pill='warning';ptxt='Com pendências';}else{pill='success';ptxt='Concluído';}}
-    return `<div class="plano-item" onclick="location.href='/gtos'">
-      <div class="${av}"><svg class="icon${spin}"><use href="${ic}"/></svg></div>
-      <div class="plano-info"><div class="plano-name">${p.nome}</div><div class="plano-meta">${meta}</div></div>
-      <div class="plano-stats"><div class="plano-stat"><div class="plano-stat-value">${env}</div><div class="plano-stat-label">Anexados</div></div><div class="plano-stat"><div class="plano-stat-value">${erros}</div><div class="plano-stat-label">Erros</div></div></div>
-      <span class="status-pill ${pill}">${ptxt}</span></div>`;
+function renderBars(lista){
+  const comDados=lista.filter(p=>p.total>0);
+  const totGeral=comDados.reduce((s,p)=>s+p.total,0);
+  const totRev=comDados.reduce((s,p)=>s+(p.revisao||0),0);
+  $('nav-rev').textContent=totRev;
+  $('subtitle').textContent=totGeral
+    ?`${totGeral} GTO(s) processada(s) no período · ${comDados.length} plano(s) com atividade`
+    :'Nenhuma GTO processada no período selecionado.';
+  $('chart-sub').textContent=totGeral?`· ${totGeral} no total`:'';
+  // ordena: com dados primeiro (desc por total), depois ativos, depois alfabético
+  const ord=[...lista].sort((a,b)=>(b.total-a.total)||((b.ativo?1:0)-(a.ativo?1:0))||a.nome.localeCompare(b.nome));
+  $('planobars').innerHTML=ord.map(p=>{
+    const segs=[['anex',p.anexadas],['sim',p.simulacao],['lau',p.sem_laudo],['err',p.erros]];
+    const bar=p.total>0
+      ?`<div class="pbar">`+segs.map(([c,v])=>v>0?`<div class="pseg ${c}" style="width:${(v/p.total*100).toFixed(1)}%" title="${v}"></div>`:'').join('')+`</div>`
+      :`<div class="pbar"></div>`;
+    const mt=p.rodando?'Executando agora…'
+      :(p.total>0?`${p.dias} dia(s)${p.revisao?` · ${p.revisao} em revisão`:''}`
+      :(p.ativo?'sem dados no período':'não configurado'));
+    const tottxt=p.total>0?`${p.total}${p.revisao?`<span class="rev">${p.revisao} rev</span>`:''}`:'—';
+    const click=p.total>0?` onclick="location.href='/plano/${p.slug}?de=${curDe}&ate=${curAte}'"`:'';
+    const cls=p.total>0?'pbar-row':'pbar-row inactive';
+    const avc=p.ativo?'plano-avatar':'plano-avatar gray';
+    return `<div class="${cls}"${click}>
+      <div class="pbar-name"><div class="${avc}" style="width:32px;height:32px;margin:0"><svg class="icon-sm"><use href="#i-tooth"/></svg></div>
+        <div style="min-width:0"><div class="nm">${p.nome}</div><div class="mt">${mt}</div></div></div>
+      ${bar}
+      <div class="pbar-total">${tottxt}</div></div>`;
   }).join('');
-}
-function renderTaxa(u){
-  if(!u||!u.alvos){$('taxa').textContent='—';$('ps-env').textContent='—';$('ps-rev').textContent='—';$('ps-err').textContent='—';return;}
-  const base=u.alvos-u.sem_match;const pct=base>0?Math.round(u.enviados/base*100):0;
-  $('taxa').textContent=pct+'%';$('pc-fill').style.strokeDashoffset=377-(377*pct/100);
-  $('ps-env').textContent=u.enviados;$('ps-rev').textContent=u.revisao_humana;$('ps-err').textContent=u.erros;
-}
-function renderChart(serie){
-  const el=$('chart');
-  if(!serie.length){el.innerHTML='<div class="empty">Sem histórico ainda.</div>';return;}
-  const max=Math.max(...serie.map(s=>s.enviados),1);
-  el.innerHTML=serie.map(s=>{const h=Math.max(4,Math.round(s.enviados/max*150));return `<div class="chart-col"><span class="chart-value">${s.enviados}</span><div class="chart-bar" style="height:${h}px"></div><span class="chart-label">${s.dia.slice(0,5)}</span></div>`;}).join('');
-}
-function renderRevisao(list){
-  $('nav-rev').textContent=list.length;
-  const el=$('revisao-list');
-  if(!list.length){el.innerHTML='<div class="empty">Nada na fila. 🎉</div>';return;}
-  el.innerHTML=list.map(r=>`<div class="revisao-item"><div class="revisao-header"><span class="revisao-paciente">${r.paciente||'(sem nome)'}</span><span class="revisao-plano">GTO ${r.gto}</span></div><div class="revisao-motivo"><svg class="icon-sm"><use href="#i-warn"/></svg>${r.motivo||'revisar'}</div></div>`).join('');
 }
 
 // modal run

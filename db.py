@@ -301,3 +301,98 @@ def totais_gerais() -> dict:
             Run.status == "done", Run.dry_run == False).scalar()  # noqa: E712
         n_runs = s.query(func.count(Run.id)).filter(Run.status == "done").scalar()
         return {"total_enviados": int(tot_env or 0), "total_execucoes": int(n_runs or 0)}
+
+
+# ── Agregações por PERÍODO e por PLANO (gráfico empilhado + detalhe) ───────────
+
+def _dia_to_date(dia: str):
+    """'DD/MM/AAAA' -> date (ou None)."""
+    try:
+        return datetime.strptime((dia or "").strip(), "%d/%m/%Y").date()
+    except Exception:
+        return None
+
+
+def _bucket(status: str) -> str:
+    """Mapeia o status de uma GTO num balde mutuamente exclusivo (p/ empilhar)."""
+    st = (status or "").upper()
+    if st in ("ENVIADO", "JA_ANEXADO"):
+        return "anexadas"
+    if st == "PRONTO":
+        return "simulacao"
+    if st in ("SEM_LAUDO", "SEM_IMAGENS"):
+        return "sem_laudo"
+    if st in ("SEM_MATCH", "AMBIGUO", "ERRO", "ERRO_UPLOAD"):
+        return "erros"
+    return "outros"
+
+
+def _melhores_runs_periodo(s, de_iso: str, ate_iso: str, plano: str = None):
+    """Melhor run por (plano, dia) com 'dia' dentro de [de, ate]. Prefere
+    execução real (não-dry-run) e, em empate, a mais recente."""
+    try:
+        de = datetime.fromisoformat(de_iso).date()
+        ate = datetime.fromisoformat(ate_iso).date()
+    except Exception:
+        return []
+    q = s.query(Run).filter(Run.status == "done")
+    if plano:
+        q = q.filter(Run.plano == plano)
+    runs = q.order_by(Run.finished_at.desc()).all()
+    best = {}
+    for r in runs:
+        d = _dia_to_date(r.dia)
+        if not d or not (de <= d <= ate):
+            continue
+        key = (r.plano, r.dia)
+        cur = best.get(key)
+        if cur is None:
+            best[key] = r          # já vem do mais recente p/ mais antigo
+        elif cur.dry_run and not r.dry_run:
+            best[key] = r          # troca simulação por execução real
+    return list(best.values())
+
+
+def gtos_por_plano_periodo(de_iso: str, ate_iso: str) -> dict:
+    """Para cada plano, contagem empilhada por desfecho no período.
+    Retorna {slug: {anexadas, sem_laudo, erros, simulacao, revisao, total, dias}}."""
+    with SessionLocal() as s:
+        out = {}
+        for r in _melhores_runs_periodo(s, de_iso, ate_iso):
+            a = out.setdefault(r.plano, {"anexadas": 0, "sem_laudo": 0, "erros": 0,
+                                         "simulacao": 0, "revisao": 0, "total": 0,
+                                         "dias": 0})
+            a["dias"] += 1
+            for it in r.itens:
+                a["total"] += 1
+                a[_bucket(it.status)] = a.get(_bucket(it.status), 0) + 1
+                if (it.revisao_humana or "").strip():
+                    a["revisao"] += 1
+        return out
+
+
+def itens_plano_periodo(plano: str, de_iso: str, ate_iso: str) -> dict:
+    """Itens (GTOs) de um plano no período, agrupados por dia — p/ a tela de detalhe."""
+    with SessionLocal() as s:
+        runs = _melhores_runs_periodo(s, de_iso, ate_iso, plano=plano)
+        runs.sort(key=lambda r: (_dia_to_date(r.dia) or datetime.min.date()), reverse=True)
+        dias = []
+        tot = {"anexadas": 0, "sem_laudo": 0, "erros": 0, "simulacao": 0,
+               "revisao": 0, "total": 0}
+        for r in runs:
+            its = []
+            for it in r.itens:
+                its.append({
+                    "gto": it.gto, "paciente": it.paciente, "status": it.status,
+                    "bucket": _bucket(it.status), "enviados": it.enviados,
+                    "ja_anexados": it.ja_anexados, "detalhe": it.detalhe,
+                    "revisao_humana": it.revisao_humana, "solicitacao": it.solicitacao,
+                })
+                tot["total"] += 1
+                tot[_bucket(it.status)] = tot.get(_bucket(it.status), 0) + 1
+                if (it.revisao_humana or "").strip():
+                    tot["revisao"] += 1
+            dias.append({"dia": r.dia, "run_id": r.id, "dry_run": r.dry_run,
+                         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                         "itens": its})
+        return {"plano": plano, "de": de_iso, "ate": ate_iso, "totais": tot, "dias": dias}
