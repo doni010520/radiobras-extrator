@@ -90,7 +90,7 @@
     <div class="card"><div class="n">{{ run.revisao_humana }}</div><div class="l">Revisão humana</div></div>
   </div>
 
-  {% if not pdf %}
+  {% if not pdf and not embed %}
   <div class="actions">
     <a class="btn" href="/relatorio/run/{{ run.id }}.pdf">⬇ Exportar PDF</a>
   </div>

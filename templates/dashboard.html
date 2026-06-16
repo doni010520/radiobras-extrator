@@ -111,6 +111,10 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 .log.show{display:block;}.log .ok{color:#34d399;}.log .err{color:#f87171;}.log .ph{color:#5eead4;}
 .errbox{background:var(--red-100);border:1px solid #FECACA;color:#DC2626;border-radius:10px;padding:14px 16px;font-size:13px;display:none;white-space:pre-wrap;margin-top:12px;}
 .errbox.show{display:block;}
+.rpt-modal{max-width:980px;width:100%;height:88vh;display:flex;flex-direction:column;}
+.rpt-modal .modal-header{flex-shrink:0;}
+#rptFrame{border:0;flex:1;width:100%;background:var(--gray-50);}
+.rpt-actions{display:flex;gap:10px;align-items:center;}
 /* filtro de período */
 .filterbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:20px;}
 .seg{display:inline-flex;background:#fff;border:1px solid var(--gray-200);border-radius:10px;padding:4px;gap:2px;}
@@ -219,6 +223,19 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
       <div class="errbox" id="errbox"></div>
       <div class="log" id="log"></div>
     </div>
+  </div>
+</div>
+
+<div class="overlay" id="reportOverlay" onclick="if(event.target===this)fecharRelatorio()">
+  <div class="modal rpt-modal">
+    <div class="modal-header">
+      <span class="modal-title">Relatório da execução</span>
+      <div class="rpt-actions">
+        <a id="rptPdf" class="btn btn-primary" href="#" target="_blank" style="padding:9px 14px">⬇ Baixar PDF</a>
+        <button class="modal-close" onclick="fecharRelatorio()">&times;</button>
+      </div>
+    </div>
+    <iframe id="rptFrame" title="Relatório"></iframe>
   </div>
 </div>
 
@@ -337,13 +354,21 @@ async function poll(id){
   clearInterval(timer);$('runspin').style.display='none';
   if(j.status==='error'){$('runtxt').textContent='Erro';$('errbox').classList.add('show');$('errbox').textContent=j.error||'Falha.';}
   else if(j.status==='done'){$('runtxt').textContent=(j.dry_run?'Simulação concluída':'Dia fechado')+' ✓';}
-  if(j.run_id){const b='display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:9px 14px;border-radius:8px;font-weight:600;font-size:13px;';
+  if(j.status==='done'&&j.run_id){
+    abrirRelatorio(j.run_id);   // apresenta o relatório automaticamente
     $('reportbox').style.display='flex';
-    $('reportbox').innerHTML=
-      '<a href="/relatorio/run/'+j.run_id+'" target="_blank" style="'+b+'border:1px solid #0f7a4f;color:#0f7a4f;background:#fff">📄 Ver relatório</a>'+
-      '<a href="/relatorio/run/'+j.run_id+'.pdf" style="'+b+'background:#0f7a4f;color:#fff">⬇ Exportar PDF</a>';}
+    $('reportbox').innerHTML='<a href="#" onclick="abrirRelatorio('+j.run_id+');return false;" '
+      +'style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;padding:9px 14px;'
+      +'border-radius:8px;font-weight:600;font-size:13px;border:1px solid #0f7a4f;color:#0f7a4f;background:#fff">📄 Reabrir relatório</a>';
+  }
   $('btnGo').disabled=false;carregar();
 }
+function abrirRelatorio(rid){
+  $('rptFrame').src='/relatorio/run/'+rid+'?embed=1';
+  $('rptPdf').href='/relatorio/run/'+rid+'.pdf';
+  $('reportOverlay').classList.add('show');
+}
+function fecharRelatorio(){$('reportOverlay').classList.remove('show');$('rptFrame').src='about:blank';}
 carregar();
 setInterval(carregar,15000);
 </script>

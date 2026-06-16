@@ -235,8 +235,9 @@ def relatorio_run(run_id: int):
     if not run:
         return ("Execução não encontrada.", 404)
     _fmt_run_datas(run)
+    embed = request.args.get("embed") in ("1", "true", "yes")
     return render_template("relatorio_run.html", run=run,
-                           grupos=_agrupar_run(run), pdf=False)
+                           grupos=_agrupar_run(run), pdf=False, embed=embed)
 
 
 @app.route("/relatorio/run/<int:run_id>.pdf")
