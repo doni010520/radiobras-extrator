@@ -47,6 +47,28 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 .badge.outros{background:var(--gray-100);color:var(--gray-500);}
 .obs{color:var(--gray-600);font-size:13px;}
 .empty{padding:40px;text-align:center;color:var(--gray-400);}
+
+/* ===================== TEMA DARK + NEON ===================== */
+:root{
+  --neon:#2DE2A0;
+  --green-900:#04130d;--green-700:#15a173;--green-600:#16b97e;--green-500:#2DE2A0;--green-100:rgba(45,226,160,.14);
+  --gray-50:#070b0a;--gray-100:#16221d;--gray-200:rgba(45,226,160,.14);--gray-300:rgba(45,226,160,.28);
+  --gray-400:#6f8a80;--gray-500:#8fa89e;--gray-600:#adc2b9;--gray-700:#c8d8d0;--gray-900:#e9f5ef;
+  --red-500:#ff5b6e;--red-100:rgba(255,91,110,.16);--yellow-500:#ffc94d;--yellow-100:rgba(255,201,77,.16);
+  --blue-500:#5bb8ff;--blue-100:rgba(91,184,255,.16);
+}
+body{background:radial-gradient(900px 500px at 85% -8%,rgba(45,226,160,.07),transparent 60%),var(--gray-50);color:var(--gray-900);}
+.topnav{background:rgba(4,12,9,.85);backdrop-filter:blur(10px);border-bottom:1px solid rgba(45,226,160,.22);box-shadow:0 6px 24px rgba(0,0,0,.5);}
+.topnav-logo{background:rgba(45,226,160,.12)!important;color:var(--neon)!important;box-shadow:0 0 16px rgba(45,226,160,.45);}
+.brand-glyph{fill:none;stroke:var(--neon);stroke-width:1.8;filter:drop-shadow(0 0 5px rgba(45,226,160,.8));}
+.chip,.daycard{background:var(--green-900);border-color:rgba(45,226,160,.14);transition:border-color .2s,box-shadow .2s;}
+.daycard:hover{border-color:rgba(45,226,160,.35);box-shadow:0 0 18px rgba(45,226,160,.18);}
+.chip.anex .n{text-shadow:0 0 12px rgba(45,226,160,.4);}
+.back,.dayhead a{color:var(--neon);}
+.page-title{text-shadow:0 0 22px rgba(45,226,160,.18);}
+.badge.anex{background:rgba(45,226,160,.16);color:var(--neon);}
+::selection{background:rgba(45,226,160,.3);}
+::-webkit-scrollbar{width:10px;}::-webkit-scrollbar-thumb{background:rgba(45,226,160,.25);border-radius:6px;}
 </style>
 </head>
 <body>
@@ -54,7 +76,7 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 <symbol id="i-tooth" viewBox="0 0 24 24"><path d="M12 2C9.5 2 7.5 3.5 7 5.5 6.5 7.5 6 9 5 11s-1 4 0 6 2 4 3.5 5c.5.3 1 0 1-.5 0-1.5.5-3.5 1-5.5s1-3 1.5-3 1 1 1.5 3 1 4 1 5.5c0 .5.5.8 1 .5 1.5-1 2.5-3 3.5-5s1-4 0-6-1.5-3.5-2-5.5C16.5 3.5 14.5 2 12 2z"/></symbol></svg>
 
 <nav class="topnav">
-  <div class="topnav-brand"><div class="topnav-logo">RB</div><span class="topnav-title">RadioBras Digital</span></div>
+  <div class="topnav-brand"><div class="topnav-logo"><svg class="brand-glyph" viewBox="0 0 24 24" style="width:24px;height:24px"><use href="#i-tooth"/></svg></div><span class="topnav-title">RadioBras<span style="color:var(--neon)"> Digital</span></span></div>
   <a href="/"><svg class="icon"><use href="#i-arrow-l"/></svg> Dashboard</a>
 </nav>
 
