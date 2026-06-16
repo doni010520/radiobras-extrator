@@ -181,19 +181,35 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                             "solicitacao": None, "status": "", "detalhe": "",
                             "revisao_humana": ""}
                     cands = by_norm.get(g["nome_norm"], [])
-                    if not cands:
-                        item["status"] = "SEM_MATCH"
-                        log(f"   [SEM MATCH] GTO {g['gto']} {g['nome']!r}")
-                        itens.append(item); continue
                     if len(cands) > 1:
                         item["status"] = "AMBIGUO"
                         log(f"   [AMBÍGUO] GTO {g['gto']} {g['nome']!r}")
                         itens.append(item); continue
-                    pac = cands[0]
+
+                    # (a) localizar paciente + worklist (laudo + imagens)
+                    if cands:
+                        pac = cands[0]
+                        wl = listar_worklist_por_pacientes(pg, data, [pac["nome"]])
+                    else:
+                        # SEM_MATCH no analítico -> FALLBACK pelos LAUDOS. A GTO do
+                        # OdontoPrev já é REDE UNNA, então o paciente é nosso mesmo que
+                        # o exame esteja sob outro convênio/unidade no PRORADIS (caso
+                        # ARTHUR: unidade LAURO, mas convênio fora do REDE UNNA, então
+                        # não aparece no analítico financeiro — mas está nos laudos).
+                        wl = listar_worklist_por_pacientes(pg, data, [g["nome"]])
+                        accs = sorted({w["accession"] for w in wl if w.get("accession")})
+                        if not accs:
+                            item["status"] = "SEM_MATCH"
+                            log(f"   [SEM MATCH] GTO {g['gto']} {g['nome']!r} "
+                                "(nem no analítico nem nos laudos)")
+                            itens.append(item); continue
+                        pac = {"nome": g["nome"], "cod_pac": "WL" + accs[0],
+                               "accessions": accs}
+                        item["detalhe"] = "encontrado nos laudos (fora do analítico REDE UNNA)"
+                        log(f"   [FALLBACK-LAUDOS] GTO {g['gto']} {g['nome']!r}: "
+                            f"{len(accs)} exame(s) na worklist.")
                     log(f"   -> {pac['nome']} ({pac['cod_pac']}) | GTO {g['gto']}")
 
-                    # (a) worklist: laudo + imagens
-                    wl = listar_worklist_por_pacientes(pg, data, [pac["nome"]])
                     res = _processar_paciente(pg, ctx, pac, wl, tmp, data)
                     pasta = os.path.join(tmp, res["pasta"])
                     laudo_pdfs, imgs = [], []
