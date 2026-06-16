@@ -40,7 +40,7 @@ from extrator_odontoprev import (
 )
 from extrair_anexos_dia import anexos_do_paciente
 from gto_utils import is_gto_pdf, extrair_observacao
-from solicitacao_utils import gto_solicitante, gto_exames, analisar_paciente
+from solicitacao_utils import gto_solicitante, gto_exames, analisar_paciente, canon_exames
 from laudo_utils import exames_pendentes_reais
 
 STATUS_ALVO = "REPASSE"  # só GTOs em "análise de repasse"
@@ -262,8 +262,50 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                             justif_ok = True
                             break
 
-                    # (d) montar arquivos + decisão da solicitação
-                    arquivos = list(laudo_pdfs) + list(imgs)
+                    # (d) FILTRO DE EXAMES: anexar só os laudos cujos exames estão na
+                    # GTO. Exames particulares (fora da GTO) NÃO vão pro OdontoPrev.
+                    # As imagens (ENTREGA_*.jpg) não trazem o exame (nem no nome nem no
+                    # cabeçalho/OCR) — então num caso MISTO vão p/ revisão humana.
+                    gto_ex = set()
+                    for _gp in gtos_pdf:
+                        try:
+                            gto_ex |= gto_exames(_gp)
+                        except Exception:
+                            pass
+
+                    def _exame_laudo(p):
+                        m = re.match(r"LAUDO_(.+?)_\d+_", os.path.basename(p))
+                        return canon_exames(m.group(1)) if m else set()
+
+                    laudos_cobertos, laudos_fora = [], []
+                    if gto_ex:
+                        for lp in laudo_pdfs:
+                            cex = _exame_laudo(lp)
+                            # exclui só se o exame foi IDENTIFICADO e está FORA da GTO
+                            (laudos_fora if (cex and not (cex & gto_ex))
+                             else laudos_cobertos).append(lp)
+                    else:
+                        laudos_cobertos = list(laudo_pdfs)  # GTO ilegível -> não filtra
+                    misto = bool(laudos_fora)
+                    item["gto_exames"] = sorted(gto_ex)
+                    nota_misto = ""
+                    if misto:
+                        arquivos = list(laudos_cobertos)  # sem imagens (vão p/ revisão)
+                        item["laudos_excluidos"] = [os.path.basename(x) for x in laudos_fora]
+                        item["exames_particulares"] = sorted(
+                            {e for lp in laudos_fora for e in _exame_laudo(lp)})
+                        item["imagens_revisao"] = [os.path.basename(x) for x in imgs]
+                        nota_misto = (f"EXAMES MISTOS: {len(laudos_fora)} laudo(s) "
+                                      f"particular(es) fora da GTO excluído(s); "
+                                      f"{len(imgs)} imagem(ns) p/ conferência manual")
+                        log(f"      [EXAMES MISTOS] GTO={sorted(gto_ex)} | excluídos: "
+                            f"{item['laudos_excluidos']} | {len(imgs)} imagem(ns) -> revisão")
+                    else:
+                        arquivos = list(laudos_cobertos) + list(imgs)
+                    # 'tem_laudo' efetivo (p/ decisão de status) = há laudo COBERTO?
+                    tem_laudo = len(laudos_cobertos) > 0
+
+                    # decisão da solicitação
                     if justif_ok:
                         item["justificativa"] = "PREENCHIDA"
                         sol_dec = "nao_precisa"
@@ -295,6 +337,10 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                         sol_dec = "revisao_humana"
                         item["revisao_humana"] = "GTO/solicitação não localizada nos anexos"
 
+                    if nota_misto:
+                        item["revisao_humana"] = (
+                            (item.get("revisao_humana", "") + " | " + nota_misto)
+                            .strip(" |"))
                     item["arquivos"] = [os.path.basename(a) for a in arquivos]
                     item["_paths"] = arquivos
                     item["sol_decisao"] = sol_dec
