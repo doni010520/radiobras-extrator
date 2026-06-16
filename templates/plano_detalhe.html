@@ -95,10 +95,10 @@ async function carregar(){
   $('dias').innerHTML=dias.map(d=>{
     const rows=(d.itens||[]).map(it=>{
       const b=CLS[it.bucket]||'outros';
-      const obs=it.detalhe||it.revisao_humana||'';
+      const det=it.detalhe||'', rev=it.revisao_humana||'';
       return `<tr><td>${it.paciente||'—'}</td><td class="gto">${it.gto}</td>
         <td><span class="badge ${b}">${LBL[it.bucket]||it.status}</span></td>
-        <td class="obs">${obs||''}${it.revisao_humana&&it.detalhe?`<br><span style="color:#9CA3AF">${it.revisao_humana}</span>`:''}</td></tr>`;
+        <td class="obs">${det}${rev?`<div style="color:#9CA3AF;font-size:12.5px">⚠ Revisão: ${rev}</div>`:''}</td></tr>`;
     }).join('');
     return `<div class="daycard">
       <div class="dayhead">

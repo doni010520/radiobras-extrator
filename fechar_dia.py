@@ -291,13 +291,17 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                     nota_misto = ""
                     if misto:
                         arquivos = list(laudos_cobertos)  # sem imagens (vão p/ revisão)
+                        excl_ex = sorted({e for lp in laudos_fora for e in _exame_laudo(lp)})
                         item["laudos_excluidos"] = [os.path.basename(x) for x in laudos_fora]
-                        item["exames_particulares"] = sorted(
-                            {e for lp in laudos_fora for e in _exame_laudo(lp)})
+                        item["exames_particulares"] = excl_ex
                         item["imagens_revisao"] = [os.path.basename(x) for x in imgs]
-                        nota_misto = (f"EXAMES MISTOS: {len(laudos_fora)} laudo(s) "
-                                      f"particular(es) fora da GTO excluído(s); "
-                                      f"{len(imgs)} imagem(ns) p/ conferência manual")
+                        # grava nos campos PERSISTIDOS (detalhe/revisao_humana) p/ os relatórios
+                        det = (f"Exames mistos — anexados da GTO: {sorted(gto_ex)}; "
+                               f"particulares NÃO anexados: {excl_ex}; "
+                               f"{len(imgs)} imagem(ns) p/ conferência manual")
+                        item["detalhe"] = (item.get("detalhe", "") + " | " + det).strip(" |")
+                        nota_misto = (f"imagens p/ conferência manual "
+                                      f"(exames particulares fora da GTO: {excl_ex})")
                         log(f"      [EXAMES MISTOS] GTO={sorted(gto_ex)} | excluídos: "
                             f"{item['laudos_excluidos']} | {len(imgs)} imagem(ns) -> revisão")
                     else:
@@ -347,10 +351,12 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
 
                     if not tem_laudo:
                         item["status"] = "SEM_LAUDO"
-                        item["detalhe"] = "sem laudo — não anexar"
+                        _msg = ("nenhum laudo da GTO (todos particulares?)" if misto
+                                else "sem laudo — não anexar")
+                        item["detalhe"] = (item.get("detalhe", "") + " | " + _msg).strip(" |")
                     elif n_imgs == 0:
                         item["status"] = "SEM_IMAGENS"
-                        item["detalhe"] = "sem imagens — revisar"
+                        item["detalhe"] = (item.get("detalhe", "") + " | sem imagens — revisar").strip(" |")
                     else:
                         item["status"] = "PRONTO"
                     log(f"      {item['status']} | laudo={tem_laudo} imgs={n_imgs} "

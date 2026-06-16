@@ -115,7 +115,7 @@
           </td>
           <td class="obs">
             {% if it.detalhe %}{{ it.detalhe }}{% else %}<span class="m">{{ g.meta.desc }}</span>{% endif %}
-            {% if it.revisao_humana %}<div class="m">Solicitação: {{ it.revisao_humana }}</div>{% endif %}
+            {% if it.revisao_humana %}<div class="m">⚠ Revisão: {{ it.revisao_humana }}</div>{% endif %}
           </td>
         </tr>
       {% endfor %}
