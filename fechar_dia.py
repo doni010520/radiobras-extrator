@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from datetime import datetime
 
 import requests
@@ -75,6 +76,10 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
     log(f"\n=== FECHAR DIA {data} (dry_run={dry_run}) ===")
     tmp = tempfile.mkdtemp(prefix="_fechar_")
     itens = []
+    _t0 = time.monotonic()
+
+    def _dt():
+        return f"{time.monotonic() - _t0:.0f}s"
     try:
         ouser, opwd = get_credentials_odonto()
 
@@ -142,7 +147,11 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
             log(f"   ATENÇÃO: 0 GTOs para {data}. Verifique a data ou tente de novo "
                 "(pode ter sido lentidão do portal).")
 
+        log(f"   Fase 1 (lista + checagem) concluída em {_dt()}.")
+
         # ── Fase 2: PRORADIS — montar arquivos por paciente ───────────────────
+        _t_fase2 = time.monotonic()
+        log(f"[2/3] PRORADIS: baixando p/ {len(alvos)} paciente(s)...")
         email, password = get_credentials()
         with sync_playwright() as pw:
             br, ctx, pg = _login_playwright(pw, email, password)
@@ -167,6 +176,7 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                         pac["nome"] = nm
 
                 for g in alvos:
+                    _tp = time.monotonic()
                     item = {"gto": g["gto"], "nome_gto": g["nome"], "arquivos": [],
                             "solicitacao": None, "status": "", "detalhe": "",
                             "revisao_humana": ""}
@@ -282,10 +292,13 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                     else:
                         item["status"] = "PRONTO"
                     log(f"      {item['status']} | laudo={tem_laudo} imgs={n_imgs} "
-                        f"| solic={sol_dec} | arquivos={len(arquivos)}")
+                        f"| solic={sol_dec} | arquivos={len(arquivos)} "
+                        f"({time.monotonic() - _tp:.0f}s)")
                     itens.append(item)
             finally:
                 br.close()
+        log(f"   Fase 2 (PRORADIS) concluída em {time.monotonic() - _t_fase2:.0f}s "
+            f"(total {_dt()}).")
 
         # ── Fase 3: OdontoPrev — anexar ───────────────────────────────────────
         prontos = [i for i in itens if i["status"] == "PRONTO" and i.get("_paths")]
@@ -322,6 +335,7 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
         elif dry_run:
             for item in prontos:
                 log(f"   [DRY] GTO {item['gto']} <- {item['arquivos']}")
+        log(f"   Tempo total: {_dt()}.")
 
         # ── Relatório ─────────────────────────────────────────────────────────
         def cnt(s):

@@ -281,7 +281,18 @@ def abrir_gto(page, gto: str, _refrescar=None):
                 alvo.click(timeout=10000)
             gp = pop.value
             gp.wait_for_load_state("domcontentloaded")
-            gp.wait_for_timeout(5000)
+            # Espera inteligente (em vez de 5s fixos): retorna assim que a popup
+            # do detalhe está pronta — marcadores do GTO ou o input de upload.
+            # Teto ~5s; em popup rápida economiza vários segundos por GTO.
+            for _ in range(20):
+                try:
+                    body = gp.inner_text("body")
+                    if ("Carteirinha" in body or "anexos" in body.lower()
+                            or gp.query_selector("input[type=file]")):
+                        break
+                except Exception:
+                    pass
+                gp.wait_for_timeout(250)
             return gp
         except Exception as e:
             last = e
