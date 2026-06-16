@@ -103,25 +103,27 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
 
                 # Pré-checagem (mesma sessão): pula GTOs que JÁ têm nossos arquivos
                 # (laudo+imagens), evitando re-baixar do PRORADIS num reprocessamento.
+                # Loga GTO a GTO (nunca silenciosa) e falha rápido (_refrescar=None):
+                # se uma GTO não abrir, processa normal em vez de re-consultar 30s.
                 if pular_completas and alvos:
-                    log("   Conferindo anexos existentes (pular já completas)...")
-                    def _refrescar1():
-                        consultar_periodo(page, data)
+                    n = len(alvos)
+                    log(f"   Conferindo anexos de {n} GTO(s) (pular já completas)...")
                     restantes = []
-                    for g in alvos:
+                    for i, g in enumerate(alvos, 1):
                         try:
-                            gp = abrir_gto(page, g["gto"], _refrescar=_refrescar1)
+                            gp = abrir_gto(page, g["gto"], _refrescar=None)
+                            gp.wait_for_timeout(800)  # deixa a seção de anexos renderizar
                             nomes = _anexos_nomes(gp)
                             try:
                                 gp.close()
                             except Exception:
                                 pass
-                        except Exception as e:
-                            log(f"      (checagem falhou na GTO {g['gto']}: {e} — "
-                                "será processada normalmente)")
+                        except Exception:
+                            log(f"   [checagem {i}/{n}] GTO {g['gto']}: não abriu — processa normal")
                             restantes.append(g)
                             continue
                         if _ja_anexado_por_nos(nomes):
+                            log(f"   [checagem {i}/{n}] GTO {g['gto']}: já completa — pular")
                             itens.append({
                                 "gto": g["gto"], "nome_gto": g["nome"], "arquivos": [],
                                 "status": "JA_ANEXADO", "solicitacao": None,
@@ -129,11 +131,10 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                                 "detalhe": "já tinha laudo+imagens nossos — pulada (não re-baixou)",
                             })
                         else:
+                            log(f"   [checagem {i}/{n}] GTO {g['gto']}: pendente")
                             restantes.append(g)
-                    pulados = len(alvos) - len(restantes)
-                    if pulados:
-                        log(f"   {pulados} GTO(s) já completas — puladas. "
-                            f"{len(restantes)} para processar.")
+                    log(f"   Checagem concluída: {len(alvos) - len(restantes)} pulada(s), "
+                        f"{len(restantes)} a processar.")
                     alvos = restantes
             finally:
                 b.close()
