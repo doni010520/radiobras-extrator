@@ -23,7 +23,8 @@ import fitz  # PyMuPDF
 from extrator_odontoprev import login_odonto, get_credentials_odonto
 
 # Unidades (mesma senha p/ as 3 contas).
-CONTAS = [("388336", "REDE UNNA"), ("397950", "Tancredo"), ("410923", "Camacari")]
+CONTAS = [("388336", "Centro, Lauro, Periperi e Itaigara"),
+          ("397950", "Tancredo"), ("410923", "Camacari")]
 
 # ── Parser do PDF "Relatório de Glosas" (layout rotacionado em faixas) ──────────
 _RUIDO = re.compile(
