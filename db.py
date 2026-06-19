@@ -484,26 +484,40 @@ def glosa_panorama(lote: str = None) -> dict:
         lote = _lote_atual(s, lote)
         if not lote:
             return {"lote": None, "dia": None, "total": 0, "por_situacao": {},
-                    "por_unidade": [], "por_motivo": [], "situacoes": GLOSA_SITUACOES}
+                    "por_unidade": [], "por_motivo": [], "situacoes": GLOSA_SITUACOES,
+                    "total_glosado": 0.0}
         evs = s.query(GlosaEvento).filter(GlosaEvento.lote == lote).all()
         dia = evs[0].dia if evs else None
         por_situacao = {k: 0 for k, _ in GLOSA_SITUACOES}
         por_unidade, por_motivo = {}, {}
+        glosado_ficha = {}  # (unidade, ficha) -> R$ glosado (valor é por GUIA: conta 1x)
         for e in evs:
             por_situacao[e.situacao] = por_situacao.get(e.situacao, 0) + 1
             u = por_unidade.setdefault(e.unidade, {"unidade": e.unidade, "total": 0,
+                                                   "glosado": 0.0,
                                                    **{k: 0 for k, _ in GLOSA_SITUACOES}})
             u["total"] += 1
             u[e.situacao] = u.get(e.situacao, 0) + 1
             m = por_motivo.setdefault(e.glosa_cod, {"glosa_cod": e.glosa_cod,
                                                     "glosa_motivo": e.glosa_motivo, "total": 0})
             m["total"] += 1
+            try:
+                v = float(e.demo_glosado) if e.demo_glosado else 0.0
+            except (TypeError, ValueError):
+                v = 0.0
+            if v > 0:
+                glosado_ficha.setdefault((e.unidade, e.ficha), v)
+        for (uni, _f), v in glosado_ficha.items():
+            if uni in por_unidade:
+                por_unidade[uni]["glosado"] += v
         return {
             "lote": lote, "dia": dia, "total": len(evs),
             "por_situacao": por_situacao,
             "por_unidade": sorted(por_unidade.values(), key=lambda x: -x["total"]),
             "por_motivo": sorted(por_motivo.values(), key=lambda x: -x["total"]),
             "situacoes": GLOSA_SITUACOES,
+            "total_glosado": round(sum(glosado_ficha.values()), 2),
+            "guias_glosado": len(glosado_ficha),
         }
 
 

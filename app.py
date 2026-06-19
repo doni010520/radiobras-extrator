@@ -173,6 +173,54 @@ def _run_glosa_job(job_id: str, dia: str, contas: list, checar: bool,
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
 
 
+def _glosa_atualizou_hoje() -> bool:
+    """True se já há um lote de glosa capturado hoje (horário de Brasília)."""
+    try:
+        lotes = db.glosa_lotes(1)
+        if not lotes or not lotes[0].get("captured_at"):
+            return False
+        d = datetime.fromisoformat(lotes[0]["captured_at"])
+        if _TZ:
+            if d.tzinfo is None:
+                from datetime import timezone as _tzc
+                d = d.replace(tzinfo=_tzc.utc)
+            d = d.astimezone(_TZ)
+            hoje = datetime.now(_TZ).date()
+        else:
+            hoje = datetime.now().date()
+        return d.date() == hoje
+    except Exception:
+        return False
+
+
+def _glosa_scheduler():
+    """Atualiza o panorama de glosas 1x/dia (após GLOSA_UPDATE_HOUR, Brasília).
+    gunicorn roda 1 worker -> sem concorrência de agendadores."""
+    try:
+        hora = int(os.environ.get("GLOSA_UPDATE_HOUR", "6"))
+    except ValueError:
+        hora = 6
+    while not _glosa_stop.is_set():
+        try:
+            agora = datetime.now(_TZ) if _TZ else datetime.now()
+            if agora.hour >= hora and not _glosa_atualizou_hoje():
+                dia = agora.strftime("%d/%m/%Y")
+                jid = "auto" + uuid.uuid4().hex[:8]
+                with _jobs_lock:
+                    _jobs[jid] = {"status": "queued", "log": [], "kind": "glosa"}
+                app.logger.info("Glosa auto-update iniciando (%s)…", dia)
+                _run_glosa_job(jid, dia, [], True, True)
+                app.logger.info("Glosa auto-update concluído.")
+        except Exception as e:
+            app.logger.error("Glosa scheduler: %s", e)
+        _glosa_stop.wait(1800)  # re-checa a cada 30 min
+
+
+_glosa_stop = threading.Event()
+if os.environ.get("GLOSA_AUTO_UPDATE", "1") != "0":
+    threading.Thread(target=_glosa_scheduler, daemon=True).start()
+
+
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")

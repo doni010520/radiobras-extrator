@@ -184,6 +184,7 @@
 <script>
 let DATA=null, META={};
 function $(id){return document.getElementById(id)}
+function fmtBRL(v){return (v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
 function applyTheme(t){document.documentElement.setAttribute('data-theme',t);
   try{localStorage.setItem('rb-theme',t)}catch(e){}; $('themeBtn').textContent=(t==='dark')?'🌙':'☀️';}
 function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark')}
@@ -216,7 +217,7 @@ async function carregar(){
     $('kpis').innerHTML='';$('unidades').innerHTML='';$('motivos').innerHTML='';
     $('tabela').innerHTML='<div class="empty">Nenhuma glosa carregada.</div>';return;}
   const capTxt=cap?(' · atualizado '+new Date(cap).toLocaleString('pt-BR')):'';
-  $('sub').textContent=`Período: do 1º dia do mês até ${DATA.dia} · 3 unidades${capTxt}`;
+  $('sub').textContent=`Período: do 1º dia do mês até ${DATA.dia} · 3 unidades · 💰 ${fmtBRL(DATA.total_glosado)} glosado${capTxt}`;
   renderDonut(); renderKpis(); renderUnidades(); renderMotivos(); fillFiltros(); renderTabela();
   if(!window._urlApplied){window._urlApplied=1;
     const u=new URLSearchParams(location.search), su=u.get('unidade'), si=u.get('sit');
@@ -279,7 +280,7 @@ function renderUnidades(){
     const segs=SIT_ORDER.map(k=>{const v=u[k]||0;if(!v)return'';
       const pct=(v/u.total*100).toFixed(1);
       return `<i class="seg-${k}" style="width:${pct}%" title="${(META[k]||{}).label||k}: ${v}"></i>`;}).join('');
-    return `<div class="urow"><div class="ut"><b>${u.unidade}</b><span>${u.total}</span></div>
+    return `<div class="urow"><div class="ut"><b>${u.unidade}</b><span>${u.total} glosas · ${fmtBRL(u.glosado)}</span></div>
             <div class="stack">${segs}</div></div>`;
   }).join('')||'<div class="empty">—</div>';
   $('legenda').innerHTML=SIT_ORDER.map(k=>`<span><i class="seg-${k}"></i>${(META[k]||{}).label||k}</span>`).join('');
