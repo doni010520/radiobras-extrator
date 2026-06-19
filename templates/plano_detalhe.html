@@ -34,6 +34,7 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .chip{background:#fff;border:1px solid var(--gray-200);border-radius:12px;padding:14px 16px;min-height:104px;display:flex;flex-direction:column;}
 .chip .n{font-size:24px;font-weight:700;line-height:1;}
 .chip .l{font-size:12.5px;color:var(--gray-700);margin-top:5px;font-weight:700;}
+.chip .kv{font-size:13px;font-weight:700;margin-top:6px;color:var(--gray-900);}
 .chip .cd{font-size:11px;color:var(--gray-500);margin-top:4px;line-height:1.32;}
 .chip.anex .n{color:var(--green-600);}.chip.lau .n{color:var(--yellow-500);}.chip.err .n{color:var(--red-500);}.chip.sim .n{color:var(--blue-500);}
 .chip.click{cursor:pointer;transition:.15s;}
@@ -262,14 +263,17 @@ async function carregarGlosas(){
   if(j.situacoes&&j.situacoes.length)GSIT=j.situacoes.map(s=>s[0]);
   $('glosaTop').style.display=''; $('glosaSec').style.display='';
   const cap=j.lotes&&j.lotes[0]?j.lotes[0].captured_at:null;
-  $('glosaSub').textContent=`· ${j.total} glosas · 💰 ${fmtBRL(j.total_glosado)} glosado · período até ${j.dia}`+(cap?` · atualizado ${new Date(cap).toLocaleString('pt-BR')}`:'');
-  const s=j.por_situacao||{};
+  const gfim=j.dia||'', gini=gfim?('01/'+gfim.slice(3)):'';
+  $('glosaSub').textContent=`· ${j.total} glosas · 💰 ${fmtBRL(j.total_glosado)} glosado · período de ${gini} até ${gfim}`+(cap?` · atualizado ${new Date(cap).toLocaleString('pt-BR')}`:'');
+  const s=j.por_situacao||{}, g=j.glosado_situacao||{};
   $('glosaChips').innerHTML=`<div class="chip"><div class="n">${j.total}</div><div class="l">Total de glosas</div>
+      <div class="kv">💰 ${fmtBRL(j.total_glosado)}</div>
       <div class="cd">GTOs que glosaram no período</div></div>`+
     GSIT.map(k=>{const c=GCL[k];const cls=['anex','lau','err','sim'].includes(c)?(' '+c):'';
       return `<a class="chip${cls}" href="/glosas?sit=${k}" style="cursor:pointer;text-decoration:none;color:inherit"
         title="Ver as GTOs: ${(meta[k]||{}).label||k}">
         <div class="n">${s[k]||0}</div><div class="l">${(meta[k]||{}).label||k}</div>
+        <div class="kv">💰 ${fmtBRL(g[k])}</div>
         <div class="cd">${GDESC[k]||(meta[k]||{}).desc||''}</div></a>`;}).join('');
   $('glosaUnid').innerHTML=(j.por_unidade||[]).map(u=>{
     const segs=GSIT.map(k=>{const v=u[k]||0;if(!v)return'';

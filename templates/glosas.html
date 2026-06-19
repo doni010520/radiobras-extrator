@@ -46,6 +46,8 @@
   .kpi{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px 16px;box-shadow:var(--shadow)}
   .kpi .n{font-size:28px;font-weight:750;line-height:1.1}
   .kpi .l{color:var(--muted);font-size:12.5px;margin-top:3px}
+  .kpi .kv{font-size:13px;font-weight:700;margin-top:7px}
+  .kpi .kv small{font-weight:500;color:var(--muted);font-size:11px}
   .kpi .bar{height:4px;border-radius:3px;margin-top:9px;opacity:.85}
   .grid2{display:grid;grid-template-columns:1.1fr 1fr;gap:14px;margin-bottom:18px}
   @media(max-width:840px){.grid2{grid-template-columns:1fr}}
@@ -217,7 +219,8 @@ async function carregar(){
     $('kpis').innerHTML='';$('unidades').innerHTML='';$('motivos').innerHTML='';
     $('tabela').innerHTML='<div class="empty">Nenhuma glosa carregada.</div>';return;}
   const capTxt=cap?(' · atualizado '+new Date(cap).toLocaleString('pt-BR')):'';
-  $('sub').textContent=`Período: do 1º dia do mês até ${DATA.dia} · 3 unidades · 💰 ${fmtBRL(DATA.total_glosado)} glosado${capTxt}`;
+  const fim=DATA.dia||'', ini=fim?('01/'+fim.slice(3)):'';
+  $('sub').textContent=`Período: de ${ini} até ${fim} · 3 unidades · 💰 ${fmtBRL(DATA.total_glosado)} glosado${capTxt}`;
   renderDonut(); renderKpis(); renderUnidades(); renderMotivos(); fillFiltros(); renderTabela();
   if(!window._urlApplied){window._urlApplied=1;
     const u=new URLSearchParams(location.search), su=u.get('unidade'), si=u.get('sit');
@@ -263,13 +266,15 @@ function marcarAtivos(){
 }
 
 function renderKpis(){
-  const s=DATA.por_situacao||{};
+  const s=DATA.por_situacao||{}, g=DATA.glosado_situacao||{};
   let h=`<div class="kpi"><div class="n">${DATA.total}</div><div class="l">Total de glosas</div>
+         <div class="kv">${fmtBRL(DATA.total_glosado)} <small>glosado</small></div>
          <div class="bar" style="background:var(--accent)"></div></div>`;
   for(const k of SIT_ORDER){
     const m=META[k]||{};
     h+=`<div class="kpi click" data-k="${k}" onclick="setSituacao('${k}')" title="Filtrar ${m.label||k}">
         <div class="n">${s[k]||0}</div><div class="l">${(m.label||k)}</div>
+        <div class="kv">${fmtBRL(g[k])} <small>glosado</small></div>
         <div class="bar seg-${k}"></div></div>`;
   }
   $('kpis').innerHTML=h; marcarAtivos();

@@ -490,7 +490,9 @@ def glosa_panorama(lote: str = None) -> dict:
         dia = evs[0].dia if evs else None
         por_situacao = {k: 0 for k, _ in GLOSA_SITUACOES}
         por_unidade, por_motivo = {}, {}
-        glosado_ficha = {}  # (unidade, ficha) -> R$ glosado (valor é por GUIA: conta 1x)
+        ordem = {k: i for i, (k, _) in enumerate(GLOSA_SITUACOES)}
+        glosado_ficha = {}   # (unidade, ficha) -> R$ glosado (valor é por GUIA: 1x)
+        sit_ficha = {}       # (unidade, ficha) -> situação representativa (maior prioridade)
         for e in evs:
             por_situacao[e.situacao] = por_situacao.get(e.situacao, 0) + 1
             u = por_unidade.setdefault(e.unidade, {"unidade": e.unidade, "total": 0,
@@ -501,18 +503,27 @@ def glosa_panorama(lote: str = None) -> dict:
             m = por_motivo.setdefault(e.glosa_cod, {"glosa_cod": e.glosa_cod,
                                                     "glosa_motivo": e.glosa_motivo, "total": 0})
             m["total"] += 1
+            key = (e.unidade, e.ficha)
+            cur = sit_ficha.get(key)
+            if cur is None or ordem.get(e.situacao, 99) < ordem.get(cur, 99):
+                sit_ficha[key] = e.situacao
             try:
                 v = float(e.demo_glosado) if e.demo_glosado else 0.0
             except (TypeError, ValueError):
                 v = 0.0
             if v > 0:
-                glosado_ficha.setdefault((e.unidade, e.ficha), v)
-        for (uni, _f), v in glosado_ficha.items():
-            if uni in por_unidade:
-                por_unidade[uni]["glosado"] += v
+                glosado_ficha.setdefault(key, v)
+        glosado_situacao = {k: 0.0 for k, _ in GLOSA_SITUACOES}
+        for key, v in glosado_ficha.items():
+            if key[0] in por_unidade:
+                por_unidade[key[0]]["glosado"] += v
+            s = sit_ficha.get(key)
+            if s in glosado_situacao:
+                glosado_situacao[s] += v
         return {
             "lote": lote, "dia": dia, "total": len(evs),
             "por_situacao": por_situacao,
+            "glosado_situacao": {k: round(v, 2) for k, v in glosado_situacao.items()},
             "por_unidade": sorted(por_unidade.values(), key=lambda x: -x["total"]),
             "por_motivo": sorted(por_motivo.values(), key=lambda x: -x["total"]),
             "situacoes": GLOSA_SITUACOES,
