@@ -45,23 +45,6 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 .card+.card{margin-top:24px;}
 .card-header{padding:20px 24px;border-bottom:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center;}
 .card-title{font-size:16px;font-weight:600;}.card-title span{font-weight:400;color:var(--gray-400);font-size:14px;}
-/* Panorama donuts na tela principal */
-.panograde{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:24px;}
-@media(max-width:860px){.panograde{grid-template-columns:1fr;}}
-.pano .card-body{padding:18px 22px;}
-.donutwrap{display:flex;gap:20px;align-items:center;flex-wrap:wrap;}
-.donut{width:168px;height:168px;flex:0 0 auto;transform:rotate(-90deg);}
-.donut .seg{cursor:pointer;transition:opacity .15s,stroke-width .15s;}
-.donut .seg:hover{opacity:.82;stroke-width:7;}
-.leg{display:flex;flex-direction:column;gap:5px;min-width:210px;flex:1;}
-.leg a{display:flex;align-items:center;gap:9px;text-decoration:none;color:inherit;font-size:13px;padding:5px 8px;border-radius:7px;border:1px solid transparent;transition:.12s;}
-.leg a:hover{background:rgba(127,127,127,.07);border-color:var(--gray-200);}
-.leg .sw{width:12px;height:12px;border-radius:3px;flex:0 0 auto;}
-.leg .lq{margin-left:auto;font-weight:700;font-variant-numeric:tabular-nums;}
-.leg .lv{color:var(--gray-400);font-size:11px;margin-left:8px;min-width:74px;text-align:right;}
-.panohead{display:flex;justify-content:space-between;align-items:center;gap:10px;}
-.panolink{font-size:13px;font-weight:600;color:var(--green-700);text-decoration:none;white-space:nowrap;}
-.panolink:hover{text-decoration:underline;}
 .card-action{color:var(--green-700);text-decoration:none;font-size:13px;font-weight:600;display:flex;align-items:center;gap:4px;cursor:pointer;background:none;border:none;font-family:inherit;}
 .plano-item{display:flex;align-items:center;padding:16px 24px;border-bottom:1px solid var(--gray-100);transition:background .15s;cursor:pointer;}
 .plano-item:last-child{border-bottom:none;}.plano-item:hover{background:var(--gray-50);}
@@ -246,21 +229,8 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 
 <main class="main">
   <div class="page-header">
-    <h1 class="page-title">Painel das GTOs</h1>
+    <h1 class="page-title">GTOs por plano</h1>
     <p class="page-subtitle" id="subtitle">Carregando…</p>
-  </div>
-
-  <div class="panograde">
-    <div class="card pano" id="anxPanel" style="display:none">
-      <div class="card-header"><div class="panohead"><h2 class="card-title">📎 Estado das GTOs <span id="anxPanoSub"></span></h2></div>
-        <a class="panolink" href="/plano/odontoprev">ver detalhe →</a></div>
-      <div class="card-body"><div class="donutwrap"><svg class="donut" id="anxDonut" viewBox="0 0 42 42"></svg><div class="leg" id="anxLeg"></div></div></div>
-    </div>
-    <div class="card pano" id="glosaPanel" style="display:none">
-      <div class="card-header"><div class="panohead"><h2 class="card-title">🩹 GTOs glosadas <span id="glosaPanoSub"></span></h2></div>
-        <a class="panolink" href="/glosas">ver panorama →</a></div>
-      <div class="card-body"><div class="donutwrap"><svg class="donut" id="glosaDonut" viewBox="0 0 42 42"></svg><div class="leg" id="glosaLeg"></div></div></div>
-    </div>
   </div>
 
   <div class="filterbar">
@@ -464,46 +434,6 @@ function abrirRelatorio(rid){
 function fecharRelatorio(){$('reportOverlay').classList.remove('show');$('rptFrame').src='about:blank';}
 carregar();
 setInterval(carregar,15000);
-</script>
-<script>
-(function(){
-  const $=id=>document.getElementById(id);
-  const fmtBRL=v=>(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
-  const ANX_COLORS={FATURADA:'#1f9d6b',A_FATURAR:'#e0a020',SEM_ANEXO:'#e06464',LIBERADA:'#5aa6e0',CANCELADA:'#8395a6',ERRO:'#e06464'};
-  const SIT_COLORS={A_RECORRER:'#e0a020',RECURSO_OU_RESOLVIDA:'#5aa6e0',RECURSO_REJEITADO:'#e07b39',RESOLVIDA:'#34C88E',GLOSA_CONFIRMADA:'#e06464',NAO_RECURSAVEL:'#b06b6b',GLOSADA:'#8395a6'};
-  function donut(svgId,legId,total,centerLabel,order,counts,colors,labels,linkFn,values){
-    let acc=0,svg=`<circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--gray-100)" stroke-width="6"/>`;
-    order.filter(k=>(counts[k]||0)>0).forEach(k=>{
-      const pct=counts[k]/total*100;
-      svg+=`<circle class="seg" data-k="${k}" cx="21" cy="21" r="15.915" fill="none" stroke="${colors[k]||'#999'}" stroke-width="6"
-        stroke-dasharray="${pct.toFixed(2)} ${(100-pct).toFixed(2)}" stroke-dashoffset="${(100-acc).toFixed(2)}"><title>${labels[k]||k}: ${counts[k]}</title></circle>`;
-      acc+=pct;
-    });
-    svg+=`<text x="21" y="20.5" text-anchor="middle" font-size="7" font-weight="800" transform="rotate(90 21 21)" fill="var(--gray-900)">${total}</text>
-          <text x="21" y="25.3" text-anchor="middle" font-size="2.6" transform="rotate(90 21 21)" fill="var(--gray-400)">${centerLabel}</text>`;
-    $(svgId).innerHTML=svg;
-    $(legId).innerHTML=order.map(k=>{
-      const v=values?(`<span class="lv">${fmtBRL(values[k])}</span>`):'';
-      return `<a href="${linkFn(k)}" title="Abrir ${labels[k]||k}"><span class="sw" style="background:${colors[k]||'#999'}"></span>${labels[k]||k}<span class="lq">${counts[k]||0}</span>${v}</a>`;
-    }).join('');
-    $(svgId).querySelectorAll('.seg').forEach(c=>c.onclick=()=>{location.href=linkFn(c.dataset.k);});
-  }
-  async function carregarPanoramas(){
-    try{const a=await (await fetch('/api/anexacao')).json();
-      if(a&&a.total){$('anxPanel').style.display='';
-        $('anxPanoSub').textContent=`· ${a.total} GTOs · ${a.de}–${a.ate}`;
-        const order=(a.categorias||[]).map(c=>c[0]),labels={};(a.categorias||[]).forEach(c=>labels[c[0]]=c[1]);
-        donut('anxDonut','anxLeg',a.total,'GTOs',order,a.por_categoria||{},ANX_COLORS,labels,k=>'/plano/odontoprev?cat='+k);}
-    }catch(e){}
-    try{const g=await (await fetch('/api/glosas')).json();
-      if(g&&g.total){$('glosaPanel').style.display='';
-        $('glosaPanoSub').textContent=`· ${g.total} glosas · ${fmtBRL(g.total_glosado)}`;
-        const order=(g.situacoes||[]).map(s=>s[0]),labels={};(g.situacoes||[]).forEach(s=>labels[s[0]]=s[1]);
-        donut('glosaDonut','glosaLeg',g.total,'glosadas',order,g.por_situacao||{},SIT_COLORS,labels,k=>'/glosas?sit='+k,g.glosado_situacao||{});}
-    }catch(e){}
-  }
-  carregarPanoramas();
-})();
 </script>
 </body>
 </html>
