@@ -42,6 +42,16 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .chip.active{border-color:var(--green-600);box-shadow:0 0 0 2px var(--green-100);}
 .filtrobar{font-size:13px;color:var(--gray-600);margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
 .clearf{font-size:12.5px;color:var(--green-700);cursor:pointer;background:none;border:none;text-decoration:underline;}
+.gtolink{color:var(--green-700);text-decoration:none;font-weight:600;font-variant-numeric:tabular-nums;}
+.gtolink:hover{text-decoration:underline;}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:200;}
+.modal.show{display:flex;}
+.modal .box{background:#fff;border:1px solid var(--gray-200);border-radius:14px;width:min(560px,92vw);max-height:82vh;overflow:auto;padding:20px;}
+[data-theme="dark"] .modal .box{background:var(--green-900);border-color:rgba(52,200,142,.18);}
+.mlog{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:var(--gray-50);border:1px solid var(--gray-200);border-radius:9px;padding:10px;max-height:46vh;overflow:auto;white-space:pre-wrap;}
+.mbtn{border:1px solid var(--green-600);background:var(--green-600);color:#fff;border-radius:9px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--gray-200);border-top-color:var(--green-600);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px;}
+@keyframes sp{to{transform:rotate(360deg);}}
 .daycard{background:#fff;border:1px solid var(--gray-200);border-radius:12px;margin-bottom:20px;overflow:hidden;}
 .dayhead{padding:14px 20px;border-bottom:1px solid var(--gray-100);display:flex;align-items:center;justify-content:space-between;gap:12px;}
 .dayhead .d{font-size:15px;font-weight:700;}
@@ -131,8 +141,9 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   <a class="back" href="/"><svg class="icon"><use href="#i-arrow-l"/></svg> Voltar ao dashboard</a>
   <h1 class="page-title" id="title">{{ nome or slug }}</h1>
   <p class="page-sub" id="sub">Carregando…</p>
-  <h2 class="seclabel">📎 Processamento &amp; anexação <span class="sn" id="procSub"></span></h2>
-  <div class="chips" id="chips"></div>
+  <h2 class="seclabel">📎 Anexação &amp; Faturamento <span class="sn" id="anxSub"></span>
+    <span class="acts"><a href="#" onclick="atualizarAnexacao();return false;">⟳ Atualizar agora</a></span></h2>
+  <div class="chips" id="anxChips"><div class="empty">Carregando…</div></div>
 
   <div id="glosaTop" style="display:none">
     <h2 class="seclabel" style="margin-top:26px">🩹 Glosas &amp; Recurso <span class="sn" id="glosaSub"></span>
@@ -146,8 +157,10 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   </div>
 
   <div class="secdiv"></div>
-  <h2 class="seclabel">📋 Detalhe — GTOs processadas (dia a dia)</h2>
-  <div id="dias"><div class="empty">Carregando…</div></div>
+  <h2 class="seclabel">📋 GTOs <span class="sn" id="anxTabLbl"></span></h2>
+  <div class="filtrobar" id="anxFiltro" style="display:none">Mostrando: <b id="anxFiltroNome"></b> · <span id="anxFiltroN"></span> GTO(s)
+    <button class="clearf" onclick="setCat('')">ver todas</button></div>
+  <div id="anxTabela"><div class="empty">Carregando…</div></div>
 
   <div id="glosaSec" style="display:none">
     <div class="secdiv"></div>
@@ -161,6 +174,13 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 
 <a class="fab" href="/?run={{ slug }}"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg> Executar Agora</a>
 
+<div class="modal" id="anxModal"><div class="box">
+  <h3 id="anxMTitle" style="margin:0 0 8px"><span class="spin"></span> Varrendo as 3 unidades…</h3>
+  <p class="page-sub" style="margin:0 0 10px">Abre cada GTO pra ler os anexos (só leitura, não anexa nada). Pode levar bastante tempo — pode fechar e voltar depois.</p>
+  <div class="mlog" id="anxMLog">Iniciando…</div>
+  <div style="text-align:right;margin-top:12px"><button class="mbtn" id="anxMClose" onclick="fecharAnxModal()" style="display:none">Fechar</button></div>
+</div></div>
+
 <script>
 const $=id=>document.getElementById(id);
 function applyTheme(t){document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('rb-theme',t);}catch(e){}var b=$('themeBtn');if(b)b.textContent=(t==='dark'?'☀️':'🌙');}
@@ -172,14 +192,8 @@ const _pad=n=>String(n).padStart(2,'0');
 const isoOf=d=>`${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}`;
 if(!DE||!ATE){const t=new Date();DE=isoOf(new Date(t.getFullYear(),t.getMonth(),1));ATE=isoOf(new Date(t.getFullYear(),t.getMonth()+1,0));}
 function brOf(iso){if(!iso)return'';const[y,m,d]=iso.split('-');return `${d}/${m}/${y}`;}
-const LBL={anexadas:'Anexada',simulacao:'Simulação',sem_laudo:'Sem laudo',erros:'Erro/Sem match',outros:'—'};
-const CLS={anexadas:'anex',simulacao:'sim',sem_laudo:'lau',erros:'err',outros:'outros'};
-const CHIP_DEFS=[
-  {k:'anexadas',cls:'anex',lbl:'Anexadas',d:'Laudo e imagens já enviados na GTO'},
-  {k:'sem_laudo',cls:'lau',lbl:'Sem laudo',d:'Exame ainda não laudado no PRORADIS'},
-  {k:'erros',cls:'err',lbl:'Erro / sem match',d:'Falha no envio ou paciente não localizado'},
-  {k:'simulacao',cls:'sim',lbl:'Simulação',d:'Encontradas em teste (não foram enviadas)'},
-  {k:'revisao',cls:'',lbl:'Em revisão',d:'Precisa conferência humana antes de anexar'}];
+const PORTAL_GTO='https://credenciado.odontoprev.com.br/portal/guia/';
+const ANXCL={FATURADA:'anex',A_FATURAR:'lau',SEM_ANEXO:'err',LIBERADA:'sim',CANCELADA:'outros',ERRO:'err'};
 const GDESC={A_RECORRER:'Glosada — ainda dá pra recorrer',
   RECURSO_OU_RESOLVIDA:'Recurso enviado, aguardando resultado',
   RECURSO_REJEITADO:'Reanálise feita errada — refazer o recurso',
@@ -187,71 +201,80 @@ const GDESC={A_RECORRER:'Glosada — ainda dá pra recorrer',
   GLOSA_CONFIRMADA:'Glosa mantida no pagamento',
   NAO_RECURSAVEL:'Recuperação de valores — sem recurso',
   GLOSADA:'Recurso ainda não verificado'};
-const SMETA={SEM_MATCH:'Paciente não localizado no PRORADIS',AMBIGUO:'Nome ambíguo — precisa conferência',
-  ERRO_UPLOAD:'Falha no envio do anexo',ERRO:'Erro no processamento',
-  SEM_LAUDO:'Exame ainda não laudado no PRORADIS',SEM_IMAGENS:'Sem imagens disponíveis no PRORADIS'};
-let DADOS=null, gtoFilter='';
+let ANX=null, anxCat='';
 function fmtHora(iso){if(!iso)return'';try{return new Date(iso).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return'';}}
 function fmtBRL(v){return (v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
 
 async function carregar(){
-  let j;try{j=await (await fetch(`/api/plano-detalhe?plano=${encodeURIComponent(SLUG)}&de=${DE}&ate=${ATE}`)).json();}catch(e){$('dias').innerHTML='<div class="empty">Falha ao carregar.</div>';return;}
-  if(j.error){$('dias').innerHTML=`<div class="empty">${j.error}</div>`;return;}
-  $('title').textContent=j.nome||SLUG;
-  const t=j.totais||{};
-  $('sub').textContent=`${j.nome||SLUG} · acompanhamento das GTOs`;
-  $('procSub').textContent=`· período ${brOf(DE)} – ${brOf(ATE)} · ${t.total||0} GTO(s)`;
-  DADOS=j;
-  renderChips();
-  if(!(j.dias||[]).length){$('dias').innerHTML='<div class="empty">Nenhuma execução nesse período.</div>';return;}
-  renderDias();
+  $('sub').textContent=`{{ nome or slug }} · acompanhamento das GTOs (anexação + glosas)`;
+  carregarAnexacao();
 }
 
-function renderChips(){
-  const t=DADOS.totais||{};
-  $('chips').innerHTML=CHIP_DEFS.map(c=>{
-    if(c.k==='simulacao'&&!t.simulacao)return'';
-    const act=gtoFilter===c.k?' active':'';
-    return `<div class="chip click ${c.cls}${act}" data-k="${c.k}" onclick="setBucket('${c.k}')" title="Ver as GTOs ${c.lbl}">
-      <div class="n">${t[c.k]||0}</div><div class="l">${c.lbl}</div><div class="cd">${c.d||''}</div></div>`;
-  }).join('');
+async function carregarAnexacao(){
+  let j;try{j=await (await fetch('/api/anexacao')).json();}catch(e){$('anxChips').innerHTML='<div class="empty">Falha ao carregar.</div>';return;}
+  ANX=j; const meta=j.meta||{};
+  if(!j.total){
+    $('anxSub').textContent='';
+    $('anxChips').innerHTML='<div class="empty">Sem varredura ainda. Clique em “Atualizar agora”.</div>';
+    $('anxTabela').innerHTML=''; $('anxTabLbl').textContent=''; return;
+  }
+  const cap=j.lotes&&j.lotes[0]?j.lotes[0].captured_at:null;
+  $('anxSub').textContent=`· ${j.total} GTOs · período de ${j.de} até ${j.ate}`+(cap?` · varrido ${new Date(cap).toLocaleString('pt-BR')}`:'');
+  const ord=(j.categorias||[]).map(c=>c[0]), c=j.por_categoria||{};
+  $('anxChips').innerHTML=ord.map(k=>{const m=meta[k]||{};
+    if(!(c[k]||0)&&k==='ERRO')return'';
+    const act=anxCat===k?' active':'';
+    return `<div class="chip click ${ANXCL[k]||''}${act}" data-k="${k}" onclick="setCat('${k}')" title="Ver as GTOs: ${m.label||k}">
+      <div class="n">${c[k]||0}</div><div class="l">${m.label||k}</div><div class="cd">${m.desc||''}</div></div>`;}).join('');
+  renderAnxTab();
 }
-function itemMatch(it){
-  if(!gtoFilter)return true;
-  if(gtoFilter==='revisao')return !!(it.revisao_humana&&it.revisao_humana.trim());
-  return it.bucket===gtoFilter;
+function setCat(k){
+  anxCat=(anxCat===k)?'':k;
+  document.querySelectorAll('#anxChips .chip').forEach(x=>x.classList.toggle('active',x.dataset.k===anxCat));
+  renderAnxTab();
+  $('anxTabela').scrollIntoView({behavior:'smooth',block:'start'});
 }
-function renderDias(){
-  let total=0;
-  const html=(DADOS.dias||[]).map(d=>{
-    const its=(d.itens||[]).filter(itemMatch); total+=its.length;
-    if(!its.length)return'';
-    const rows=its.map(it=>{
-      const b=CLS[it.bucket]||'outros';
-      const det=it.detalhe||SMETA[it.status]||'', rev=it.revisao_humana||'';
-      return `<tr><td>${it.paciente||'—'}</td><td class="gto">${it.gto}</td>
-        <td><span class="badge ${b}">${LBL[it.bucket]||it.status}</span></td>
-        <td class="obs">${det||'—'}${rev?`<div style="color:var(--gray-400);font-size:12.5px">⚠ Revisão: ${rev}</div>`:''}</td></tr>`;
-    }).join('');
-    return `<div class="daycard">
-      <div class="dayhead">
-        <div><span class="d">Dia ${d.dia}</span> <span class="tag ${d.dry_run?'sim':'real'}">${d.dry_run?'SIMULAÇÃO':'REAL'}</span>
-          <span class="meta">· ${fmtHora(d.finished_at)} · ${its.length} GTO(s)</span></div>
-        <a href="/relatorio/run/${d.run_id}" target="_blank">Ver relatório →</a>
-      </div>
-      <table><thead><tr><th>Paciente</th><th>GTO</th><th>Desfecho</th><th>Observação</th></tr></thead><tbody>${rows}</tbody></table>
-    </div>`;
-  }).join('');
-  const def=CHIP_DEFS.find(c=>c.k===gtoFilter);
-  const bar=gtoFilter?`<div class="filtrobar">Mostrando: <b>${def?def.lbl:gtoFilter}</b> · ${total} GTO(s)
-      <button class="clearf" onclick="setBucket('')">ver todas</button></div>`:'';
-  $('dias').innerHTML=bar+(html||'<div class="empty">Nenhuma GTO nesse filtro.</div>');
+function renderAnxTab(){
+  const meta=ANX.meta||{};
+  const rows=(ANX.gtos||[]).filter(g=>!anxCat||g.categoria===anxCat);
+  $('anxFiltro').style.display=anxCat?'':'none';
+  if(anxCat){$('anxFiltroNome').textContent=(meta[anxCat]||{}).label||anxCat;$('anxFiltroN').textContent=rows.length;}
+  $('anxTabLbl').textContent=anxCat?'':`· ${(ANX.gtos||[]).length} no total`;
+  if(!rows.length){$('anxTabela').innerHTML='<div class="empty">Nenhuma GTO nesse filtro.</div>';return;}
+  $('anxTabela').innerHTML=`<div class="daycard"><table><thead><tr>
+    <th>Unidade</th><th>GTO</th><th>Paciente</th><th>Status</th><th>Anexos</th><th>Situação</th></tr></thead><tbody>${
+    rows.map(g=>{const m=meta[g.categoria]||{};
+      return `<tr><td>${g.unidade}</td>
+        <td><a class="gtolink" href="${PORTAL_GTO}${g.gto}" target="_blank" rel="noopener" title="Abrir no portal RedeUna (precisa estar logado na unidade)">${g.gto} ↗</a></td>
+        <td>${g.paciente||'—'}</td><td>${g.status||'—'}</td><td>${g.qtd_anexos}</td>
+        <td><span class="badge ${ANXCL[g.categoria]||'outros'}">${m.label||g.categoria}</span></td></tr>`;}).join('')
+    }</tbody></table></div>`;
 }
-function setBucket(k){
-  gtoFilter=(gtoFilter===k)?'':k;
-  renderChips(); renderDias();
-  $('dias').scrollIntoView({behavior:'smooth',block:'start'});
+
+// Atualizar — varredura em background
+let anxPollT=null;
+async function atualizarAnexacao(){
+  if(!confirm('Varredura das 3 unidades: abre cada GTO pra ler os anexos (só leitura, não anexa nada). Pode levar bastante tempo. Iniciar?'))return;
+  $('anxModal').classList.add('show'); $('anxMClose').style.display='none';
+  $('anxMTitle').innerHTML='<span class="spin"></span> Varrendo as 3 unidades…';
+  $('anxMLog').textContent='Iniciando…';
+  let j;try{j=await (await fetch('/anexacao/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})})).json();}
+  catch(e){$('anxMLog').textContent='Falha ao iniciar.';$('anxMClose').style.display='';return;}
+  if(j.error){$('anxMLog').textContent='Erro: '+j.error;$('anxMClose').style.display='';return;}
+  anxPollT=setInterval(()=>anxPoll(j.job_id),3000); anxPoll(j.job_id);
 }
+async function anxPoll(id){
+  const j=await (await fetch('/anexacao/atualizar/status/'+id)).json();
+  if(j.log)$('anxMLog').textContent=j.log.join('\n');
+  $('anxMLog').scrollTop=$('anxMLog').scrollHeight;
+  if(j.status==='done'||j.status==='error'){
+    clearInterval(anxPollT);
+    $('anxMTitle').innerHTML=(j.status==='done')?'✓ Varredura concluída':'✕ Falhou';
+    $('anxMClose').style.display='';
+    if(j.status==='done')carregarAnexacao();
+  }
+}
+function fecharAnxModal(){$('anxModal').classList.remove('show');}
 
 // ── Glosas & Recurso (panorama embutido) ─────────────────────────────────────
 let GSIT=['A_RECORRER','RECURSO_OU_RESOLVIDA','RECURSO_REJEITADO','RESOLVIDA','GLOSA_CONFIRMADA','NAO_RECURSAVEL','GLOSADA'];

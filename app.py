@@ -173,6 +173,38 @@ def _run_glosa_job(job_id: str, dia: str, contas: list, checar: bool,
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
 
 
+def _run_anexacao_job(job_id: str, de: str, ate: str, contas: list, limite: int) -> None:
+    """Job da varredura de anexação/faturamento (só-leitura, 3 unidades)."""
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "running"
+
+    def progress(msg: str) -> None:
+        with _jobs_lock:
+            _jobs[job_id].setdefault("log", []).append(str(msg))
+
+    try:
+        import time as _time
+        from playwright.sync_api import sync_playwright
+        from anexacao_extrator import CONTAS, varrer_unidade
+        lote = _time.strftime("%Y%m%d%H%M%S")
+        alvo = [(u, l) for u, l in CONTAS if not contas or u in contas]
+        total = 0
+        with sync_playwright() as pw:
+            for conta, label in alvo:
+                progress(f"==== {label} ({conta}) — {de} a {ate} ====")
+                r = varrer_unidade(pw, conta, label, de, ate, limite=limite, log=progress)
+                db.salvar_anexacao(lote, de, ate, r["gtos"])
+                total += len(r["gtos"])
+                progress(f"[{label}] gravado ({len(r['gtos'])}).")
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "done", "lote": lote, "total": total})
+    except Exception as exc:
+        tb = traceback.format_exc()
+        app.logger.error("Erro no anexacao job %s:\n%s", job_id, tb)
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
+
+
 def _glosa_atualizou_hoje() -> bool:
     """True se já há um lote de glosa capturado hoje (horário de Brasília)."""
     try:
@@ -582,6 +614,68 @@ def glosas_atualizar():
 
 @app.route("/glosas/atualizar/status/<job_id>")
 def glosas_atualizar_status(job_id: str):
+    with _jobs_lock:
+        j = _jobs.get(job_id)
+        if not j:
+            return jsonify({"error": "job não encontrado"}), 404
+        return jsonify({"status": j.get("status"), "log": j.get("log", [])[-40:],
+                        "total": j.get("total"), "lote": j.get("lote"),
+                        "error": j.get("error")})
+
+
+# ── Anexação / Faturamento (varredura só-leitura) ─────────────────────────────
+
+CATEGORIA_META = {
+    "FATURADA":  {"label": "Faturada", "cls": "ok",
+                  "desc": "2+ anexos — laudo e entrega já anexados"},
+    "A_FATURAR": {"label": "A faturar", "cls": "warn",
+                  "desc": "Só 1 anexo — falta o 2º para faturar"},
+    "SEM_ANEXO": {"label": "Sem anexo", "cls": "bad",
+                  "desc": "Nenhum anexo enviado ainda"},
+    "LIBERADA":  {"label": "Liberada p/ assinatura", "cls": "info",
+                  "desc": "Senha liberada no portal — aguardando"},
+    "CANCELADA": {"label": "Cancelada", "cls": "neutral",
+                  "desc": "GTO cancelada ou não autorizada"},
+    "ERRO":      {"label": "Erro de leitura", "cls": "bad",
+                  "desc": "Não foi possível ler a GTO"},
+}
+
+
+def _anexacao_view(lote: str = None) -> dict:
+    pan = db.anexacao_panorama(lote)
+    pan["gtos"] = db.anexacao_gtos(lote)
+    pan["meta"] = CATEGORIA_META
+    pan["lotes"] = db.anexacao_lotes(12)
+    return pan
+
+
+@app.route("/api/anexacao")
+def api_anexacao():
+    try:
+        return jsonify(_anexacao_view(request.args.get("lote") or None))
+    except Exception as exc:
+        app.logger.error("Erro em /api/anexacao: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/anexacao/atualizar", methods=["POST"])
+def anexacao_atualizar():
+    body = request.get_json(silent=True) or {}
+    hoje = datetime.now().strftime("%d/%m/%Y")
+    de = (body.get("de") or ("01/" + hoje[3:])).strip()
+    ate = (body.get("ate") or hoje).strip()
+    contas = body.get("contas") or []
+    limite = int(body.get("limite") or 0)
+    job_id = uuid.uuid4().hex[:12]
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "log": [], "kind": "anexacao"}
+    threading.Thread(target=_run_anexacao_job, args=(job_id, de, ate, contas, limite),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/anexacao/atualizar/status/<job_id>")
+def anexacao_atualizar_status(job_id: str):
     with _jobs_lock:
         j = _jobs.get(job_id)
         if not j:

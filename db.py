@@ -102,6 +102,23 @@ class GlosaEvento(Base):
     demo_pago = Column(Boolean, default=False)       # houve pagamento no Demonstrativo?
 
 
+class AnexacaoGto(Base):
+    """Estado de anexação/faturamento de uma GTO (varredura só-leitura por unidade)."""
+    __tablename__ = "anexacao_gtos"
+    id = Column(Integer, primary_key=True)
+    lote = Column(String(20), index=True)
+    captured_at = Column(DateTime(timezone=True), default=_now)
+    de = Column(String(10))
+    ate = Column(String(10))
+    conta = Column(String(20), index=True)
+    unidade = Column(String(60), index=True)
+    gto = Column(String(30), index=True)
+    paciente = Column(String(200))
+    status = Column(String(80))
+    qtd_anexos = Column(Integer, default=0)
+    categoria = Column(String(20), index=True)
+
+
 def init_db():
     Base.metadata.create_all(engine)
     _ensure_columns()
@@ -530,6 +547,90 @@ def glosa_panorama(lote: str = None) -> dict:
             "total_glosado": round(sum(glosado_ficha.values()), 2),
             "guias_glosado": len(glosado_ficha),
         }
+
+
+# ── Anexação / Faturamento (varredura só-leitura das GTOs) ────────────────────
+
+ANEXACAO_CATEGORIAS = [
+    ("FATURADA", "Faturada (2+ anexos)"),
+    ("A_FATURAR", "A faturar (só 1 anexo)"),
+    ("SEM_ANEXO", "Sem anexo"),
+    ("LIBERADA", "Liberada p/ assinatura"),
+    ("CANCELADA", "Cancelada"),
+    ("ERRO", "Erro de leitura"),
+]
+
+
+def salvar_anexacao(lote: str, de: str, ate: str, gtos: list) -> int:
+    with SessionLocal() as s:
+        for conta in {g.get("conta") for g in gtos}:
+            s.query(AnexacaoGto).filter(
+                AnexacaoGto.lote == lote, AnexacaoGto.conta == conta).delete()
+        for g in gtos:
+            s.add(AnexacaoGto(
+                lote=lote, de=de, ate=ate, conta=g.get("conta", ""),
+                unidade=g.get("unidade", ""), gto=str(g.get("gto", "")),
+                paciente=(g.get("paciente") or "")[:200], status=(g.get("status") or "")[:80],
+                qtd_anexos=int(g.get("qtd_anexos", 0) or 0), categoria=g.get("categoria", ""),
+            ))
+        s.commit()
+        return len(gtos)
+
+
+def anexacao_lotes(limite: int = 30) -> list:
+    with SessionLocal() as s:
+        rows = (s.query(AnexacaoGto.lote, AnexacaoGto.de, AnexacaoGto.ate,
+                        func.count(AnexacaoGto.id), func.max(AnexacaoGto.captured_at))
+                .group_by(AnexacaoGto.lote, AnexacaoGto.de, AnexacaoGto.ate)
+                .order_by(func.max(AnexacaoGto.captured_at).desc()).limit(limite).all())
+        return [{"lote": r[0], "de": r[1], "ate": r[2], "total": int(r[3]),
+                 "captured_at": r[4].isoformat() if r[4] else None} for r in rows]
+
+
+def _lote_anexacao(s, lote: str = None) -> str:
+    if lote:
+        return lote
+    r = s.query(AnexacaoGto.lote).order_by(AnexacaoGto.captured_at.desc()).first()
+    return r[0] if r else None
+
+
+def anexacao_panorama(lote: str = None) -> dict:
+    with SessionLocal() as s:
+        lote = _lote_anexacao(s, lote)
+        if not lote:
+            return {"lote": None, "de": None, "ate": None, "total": 0,
+                    "por_categoria": {}, "por_unidade": [], "categorias": ANEXACAO_CATEGORIAS}
+        gs = s.query(AnexacaoGto).filter(AnexacaoGto.lote == lote).all()
+        por_cat = {k: 0 for k, _ in ANEXACAO_CATEGORIAS}
+        por_uni = {}
+        for g in gs:
+            por_cat[g.categoria] = por_cat.get(g.categoria, 0) + 1
+            u = por_uni.setdefault(g.unidade, {"unidade": g.unidade, "total": 0,
+                                               **{k: 0 for k, _ in ANEXACAO_CATEGORIAS}})
+            u["total"] += 1
+            u[g.categoria] = u.get(g.categoria, 0) + 1
+        return {
+            "lote": lote, "de": gs[0].de if gs else None, "ate": gs[0].ate if gs else None,
+            "total": len(gs), "por_categoria": por_cat,
+            "por_unidade": sorted(por_uni.values(), key=lambda x: -x["total"]),
+            "categorias": ANEXACAO_CATEGORIAS,
+        }
+
+
+def anexacao_gtos(lote: str = None, unidade: str = None, categoria: str = None) -> list:
+    with SessionLocal() as s:
+        lote = _lote_anexacao(s, lote)
+        if not lote:
+            return []
+        q = s.query(AnexacaoGto).filter(AnexacaoGto.lote == lote)
+        if unidade:
+            q = q.filter(AnexacaoGto.unidade == unidade)
+        if categoria:
+            q = q.filter(AnexacaoGto.categoria == categoria)
+        q = q.order_by(AnexacaoGto.unidade, AnexacaoGto.categoria, AnexacaoGto.gto)
+        return [{"unidade": g.unidade, "conta": g.conta, "gto": g.gto,
+                 "paciente": g.paciente, "status": g.status, "qtd_anexos": g.qtd_anexos,
+                 "categoria": g.categoria} for g in q.all()]
 
 
 def glosa_eventos(lote: str = None, unidade: str = None, situacao: str = None) -> list:
