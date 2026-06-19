@@ -31,9 +31,10 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .seclabel .acts a{color:var(--green-700);text-decoration:none;font-size:13px;font-weight:600;}
 .seclabel .acts a:hover{text-decoration:underline;}
 .secdiv{border-top:1px solid var(--gray-200);margin:34px 0 22px;}
-.chip{background:#fff;border:1px solid var(--gray-200);border-radius:12px;padding:14px 18px;min-width:120px;}
+.chip{background:#fff;border:1px solid var(--gray-200);border-radius:12px;padding:14px 16px;min-width:172px;max-width:230px;flex:1 1 172px;}
 .chip .n{font-size:24px;font-weight:700;line-height:1;}
-.chip .l{font-size:12px;color:var(--gray-500);margin-top:5px;text-transform:uppercase;letter-spacing:.4px;}
+.chip .l{font-size:12.5px;color:var(--gray-700);margin-top:5px;font-weight:700;}
+.chip .cd{font-size:11px;color:var(--gray-500);margin-top:4px;line-height:1.32;}
 .chip.anex .n{color:var(--green-600);}.chip.lau .n{color:var(--yellow-500);}.chip.err .n{color:var(--red-500);}.chip.sim .n{color:var(--blue-500);}
 .chip.click{cursor:pointer;transition:.15s;}
 .chip.click:hover{border-color:var(--green-500);transform:translateY(-2px);box-shadow:0 2px 10px rgba(6,78,59,.12);}
@@ -172,8 +173,19 @@ if(!DE||!ATE){const t=new Date();DE=isoOf(new Date(t.getFullYear(),t.getMonth(),
 function brOf(iso){if(!iso)return'';const[y,m,d]=iso.split('-');return `${d}/${m}/${y}`;}
 const LBL={anexadas:'Anexada',simulacao:'Simulação',sem_laudo:'Sem laudo',erros:'Erro/Sem match',outros:'—'};
 const CLS={anexadas:'anex',simulacao:'sim',sem_laudo:'lau',erros:'err',outros:'outros'};
-const CHIP_DEFS=[{k:'anexadas',cls:'anex',lbl:'Anexadas'},{k:'sem_laudo',cls:'lau',lbl:'Sem laudo'},
-  {k:'erros',cls:'err',lbl:'Erro/Sem match'},{k:'simulacao',cls:'sim',lbl:'Simulação'},{k:'revisao',cls:'',lbl:'Em revisão'}];
+const CHIP_DEFS=[
+  {k:'anexadas',cls:'anex',lbl:'Anexadas',d:'Laudo e imagens já enviados na GTO'},
+  {k:'sem_laudo',cls:'lau',lbl:'Sem laudo',d:'Exame ainda não laudado no PRORADIS'},
+  {k:'erros',cls:'err',lbl:'Erro / sem match',d:'Falha no envio ou paciente não localizado'},
+  {k:'simulacao',cls:'sim',lbl:'Simulação',d:'Encontradas em teste (não foram enviadas)'},
+  {k:'revisao',cls:'',lbl:'Em revisão',d:'Precisa conferência humana antes de anexar'}];
+const GDESC={A_RECORRER:'Glosada — ainda dá pra recorrer',
+  RECURSO_OU_RESOLVIDA:'Recurso enviado, aguardando resultado',
+  RECURSO_REJEITADO:'Reanálise feita errada — refazer o recurso',
+  RESOLVIDA:'Paga / glosa revertida',
+  GLOSA_CONFIRMADA:'Glosa mantida no pagamento',
+  NAO_RECURSAVEL:'Recuperação de valores — sem recurso',
+  GLOSADA:'Recurso ainda não verificado'};
 const SMETA={SEM_MATCH:'Paciente não localizado no PRORADIS',AMBIGUO:'Nome ambíguo — precisa conferência',
   ERRO_UPLOAD:'Falha no envio do anexo',ERRO:'Erro no processamento',
   SEM_LAUDO:'Exame ainda não laudado no PRORADIS',SEM_IMAGENS:'Sem imagens disponíveis no PRORADIS'};
@@ -198,7 +210,7 @@ function renderChips(){
     if(c.k==='simulacao'&&!t.simulacao)return'';
     const act=gtoFilter===c.k?' active':'';
     return `<div class="chip click ${c.cls}${act}" data-k="${c.k}" onclick="setBucket('${c.k}')" title="Ver as GTOs ${c.lbl}">
-      <div class="n">${t[c.k]||0}</div><div class="l">${c.lbl}</div></div>`;
+      <div class="n">${t[c.k]||0}</div><div class="l">${c.lbl}</div><div class="cd">${c.d||''}</div></div>`;
   }).join('');
 }
 function itemMatch(it){
@@ -250,11 +262,13 @@ async function carregarGlosas(){
   const cap=j.lotes&&j.lotes[0]?j.lotes[0].captured_at:null;
   $('glosaSub').textContent=`· ${j.total} glosas · período até ${j.dia}`+(cap?` · atualizado ${new Date(cap).toLocaleString('pt-BR')}`:'');
   const s=j.por_situacao||{};
-  $('glosaChips').innerHTML=`<div class="chip"><div class="n">${j.total}</div><div class="l">Total glosas</div></div>`+
+  $('glosaChips').innerHTML=`<div class="chip"><div class="n">${j.total}</div><div class="l">Total de glosas</div>
+      <div class="cd">GTOs que glosaram no período</div></div>`+
     GSIT.map(k=>{const c=GCL[k];const cls=['anex','lau','err','sim'].includes(c)?(' '+c):'';
       return `<a class="chip${cls}" href="/glosas?sit=${k}" style="cursor:pointer;text-decoration:none;color:inherit;display:block"
-        title="Ver as GTOs com status ${(meta[k]||{}).label||k}">
-        <div class="n">${s[k]||0}</div><div class="l">${(meta[k]||{}).label||k}</div></a>`;}).join('');
+        title="Ver as GTOs: ${(meta[k]||{}).label||k}">
+        <div class="n">${s[k]||0}</div><div class="l">${(meta[k]||{}).label||k}</div>
+        <div class="cd">${GDESC[k]||(meta[k]||{}).desc||''}</div></a>`;}).join('');
   $('glosaUnid').innerHTML=(j.por_unidade||[]).map(u=>{
     const segs=GSIT.map(k=>{const v=u[k]||0;if(!v)return'';
       return `<i class="s-${k}" style="width:${(v/u.total*100).toFixed(1)}%" title="${(meta[k]||{}).label||k}: ${v}"></i>`;}).join('');
