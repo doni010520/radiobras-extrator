@@ -24,14 +24,14 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .back{color:var(--green-700);text-decoration:none;font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:6px;margin-bottom:14px;}
 .page-title{font-size:26px;font-weight:700;}
 .page-sub{font-size:14px;color:var(--gray-500);margin-bottom:24px;}
-.chips{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;}
+.chips{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:12px;margin-bottom:20px;}
 .seclabel{font-size:12.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--gray-500);font-weight:700;margin:0 0 14px;display:flex;align-items:center;gap:8px;}
 .seclabel .sn{font-size:12px;color:var(--gray-400);text-transform:none;letter-spacing:0;font-weight:400;}
 .seclabel .acts{margin-left:auto;display:flex;gap:16px;text-transform:none;letter-spacing:0;}
 .seclabel .acts a{color:var(--green-700);text-decoration:none;font-size:13px;font-weight:600;}
 .seclabel .acts a:hover{text-decoration:underline;}
 .secdiv{border-top:1px solid var(--gray-200);margin:34px 0 22px;}
-.chip{background:#fff;border:1px solid var(--gray-200);border-radius:12px;padding:14px 16px;min-width:172px;max-width:230px;flex:1 1 172px;}
+.chip{background:#fff;border:1px solid var(--gray-200);border-radius:12px;padding:14px 16px;min-height:104px;display:flex;flex-direction:column;}
 .chip .n{font-size:24px;font-weight:700;line-height:1;}
 .chip .l{font-size:12.5px;color:var(--gray-700);margin-top:5px;font-weight:700;}
 .chip .cd{font-size:11px;color:var(--gray-500);margin-top:4px;line-height:1.32;}
@@ -265,7 +265,7 @@ async function carregarGlosas(){
   $('glosaChips').innerHTML=`<div class="chip"><div class="n">${j.total}</div><div class="l">Total de glosas</div>
       <div class="cd">GTOs que glosaram no período</div></div>`+
     GSIT.map(k=>{const c=GCL[k];const cls=['anex','lau','err','sim'].includes(c)?(' '+c):'';
-      return `<a class="chip${cls}" href="/glosas?sit=${k}" style="cursor:pointer;text-decoration:none;color:inherit;display:block"
+      return `<a class="chip${cls}" href="/glosas?sit=${k}" style="cursor:pointer;text-decoration:none;color:inherit"
         title="Ver as GTOs: ${(meta[k]||{}).label||k}">
         <div class="n">${s[k]||0}</div><div class="l">${(meta[k]||{}).label||k}</div>
         <div class="cd">${GDESC[k]||(meta[k]||{}).desc||''}</div></a>`;}).join('');
