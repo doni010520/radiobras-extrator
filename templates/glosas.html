@@ -38,7 +38,7 @@
   .btn.primary:hover{box-shadow:0 0 12px rgba(52,200,142,.35)}
   .theme-toggle{font-size:16px;background:var(--card);border:1px solid var(--line);
        width:38px;height:38px;border-radius:9px;cursor:pointer;color:var(--ink)}
-  select{background:var(--card);color:var(--ink);border:1px solid var(--line);
+  select,input[type=date]{background:var(--card);color:var(--ink);border:1px solid var(--line);
        border-radius:9px;padding:8px 10px;font-size:13px}
   .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:18px}
   .toolbar .spacer{flex:1}
@@ -132,7 +132,9 @@
 
   <div class="toolbar">
     <select id="lote" onchange="carregar()"></select>
-    <button class="btn" onclick="atualizar()">⟳ Atualizar agora</button>
+    <span style="color:var(--muted);font-size:12.5px">período: 1º do mês até</span>
+    <input type="date" id="glAte">
+    <button class="btn" onclick="atualizar()">🔍 Consultar período</button>
     <span class="spacer"></span>
     <a class="btn" id="btnXlsx" href="/glosas.xlsx">⬇ Excel</a>
     <a class="btn primary" id="btnPdf" href="/glosas.pdf">⬇ PDF</a>
@@ -221,6 +223,8 @@ async function carregar(){
   const capTxt=cap?(' · atualizado '+new Date(cap).toLocaleString('pt-BR')):'';
   const fim=DATA.dia||'', ini=fim?('01/'+fim.slice(3)):'';
   $('sub').textContent=`Período: de ${ini} até ${fim} · 3 unidades · 💰 ${fmtBRL(DATA.total_glosado)} glosado${capTxt}`;
+  if(!$('glAte').dataset.set){$('glAte').dataset.set='1';
+    const f=DATA.dia; if(f){const[d,m,y]=f.split('/');$('glAte').value=`${y}-${m}-${d}`;}}
   renderDonut(); renderKpis(); renderUnidades(); renderMotivos(); fillFiltros(); renderTabela();
   if(!window._urlApplied){window._urlApplied=1;
     const u=new URLSearchParams(location.search), su=u.get('unidade'), si=u.get('sit');
@@ -327,12 +331,14 @@ function renderTabela(){
 
 // ── Atualizar (background) ───────────────────────────────────────────────────
 let pollT=null;
+function brOf(iso){if(!iso)return'';const[y,m,d]=iso.split('-');return `${d}/${m}/${y}`;}
 async function atualizar(){
+  const dia=brOf($('glAte').value);
   $('modal').classList.add('show'); $('mClose').style.display='none';
   $('mTitle').innerHTML='<span class="spin"></span> Atualizando panorama…';
-  $('mLog').textContent='Iniciando…';
+  $('mLog').textContent=`Período: 1º do mês até ${dia||'hoje'}. Iniciando…`;
   const r=await fetch('/glosas/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({checar_recurso:true})});
+    body:JSON.stringify({dia, checar_recurso:true})});
   const j=await r.json();
   if(j.error){$('mLog').textContent='Erro: '+j.error;$('mClose').style.display='';return;}
   pollT=setInterval(()=>poll(j.job_id),2500); poll(j.job_id);
