@@ -158,7 +158,7 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 [data-theme="dark"] ::selection{background:rgba(52,200,142,.25);}
 [data-theme="dark"] ::-webkit-scrollbar{width:10px;}[data-theme="dark"] ::-webkit-scrollbar-thumb{background:rgba(52,200,142,.2);border-radius:6px;}
 </style>
-<script>(function(){try{var t=localStorage.getItem('rb-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
+<script>(function(){try{var t=localStorage.getItem('rb-theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
 </head>
 <body>
 <svg style="display:none"><symbol id="i-arrow-l" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7"/></symbol>
@@ -223,8 +223,8 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 <script>
 const $=id=>document.getElementById(id);
 function applyTheme(t){document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('rb-theme',t);}catch(e){}var b=$('themeBtn');if(b)b.textContent=(t==='dark'?'☀️':'🌙');}
-function toggleTheme(){const c=document.documentElement.getAttribute('data-theme')||'dark';applyTheme(c==='dark'?'light':'dark');}
-applyTheme(document.documentElement.getAttribute('data-theme')||'dark');
+function toggleTheme(){const c=document.documentElement.getAttribute('data-theme')||'light';applyTheme(c==='dark'?'light':'dark');}
+applyTheme(document.documentElement.getAttribute('data-theme')||'light');
 const SLUG={{ slug|tojson }};
 let DE={{ de|tojson }}, ATE={{ ate|tojson }};
 const _pad=n=>String(n).padStart(2,'0');

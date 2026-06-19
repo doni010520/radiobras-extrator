@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Panorama de Glosas — RADIOBRAS</title>
-<script>(function(){try{var t=localStorage.getItem('rb-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
+<script>(function(){try{var t=localStorage.getItem('rb-theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
 <style>
   :root{
     --bg:#f4f6f8; --card:#fff; --ink:#1c2430; --muted:#5a6b7b; --line:#e3e8ee;
@@ -192,7 +192,7 @@ function fmtBRL(v){return (v||0).toLocaleString('pt-BR',{style:'currency',curren
 function applyTheme(t){document.documentElement.setAttribute('data-theme',t);
   try{localStorage.setItem('rb-theme',t)}catch(e){}; $('themeBtn').textContent=(t==='dark')?'🌙':'☀️';}
 function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark')}
-applyTheme(document.documentElement.getAttribute('data-theme')||'dark');
+applyTheme(document.documentElement.getAttribute('data-theme')||'light');
 
 let SIT_ORDER=['A_RECORRER','RECURSO_OU_RESOLVIDA','RECURSO_REJEITADO','RESOLVIDA','GLOSA_CONFIRMADA','NAO_RECURSAVEL','GLOSADA'];
 const SIT_COLORS={A_RECORRER:'#e0a020',RECURSO_OU_RESOLVIDA:'#5aa6e0',RECURSO_REJEITADO:'#e07b39',RESOLVIDA:'#34C88E',GLOSA_CONFIRMADA:'#e06464',NAO_RECURSAVEL:'#b06b6b',GLOSADA:'#8395a6'};

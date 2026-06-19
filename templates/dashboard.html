@@ -201,7 +201,7 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 [data-theme="dark"] ::selection{background:rgba(52,200,142,.25);}
 [data-theme="dark"] ::-webkit-scrollbar{width:10px;height:10px;}[data-theme="dark"] ::-webkit-scrollbar-thumb{background:rgba(52,200,142,.2);border-radius:6px;}
 </style>
-<script>(function(){try{var t=localStorage.getItem('rb-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
+<script>(function(){try{var t=localStorage.getItem('rb-theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
 </head>
 <body>
 <svg style="display:none">
@@ -300,8 +300,8 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 <script>
 const $=id=>document.getElementById(id);
 function applyTheme(t){document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('rb-theme',t);}catch(e){}var b=$('themeBtn');if(b)b.textContent=(t==='dark'?'☀️':'🌙');}
-function toggleTheme(){const c=document.documentElement.getAttribute('data-theme')||'dark';applyTheme(c==='dark'?'light':'dark');}
-applyTheme(document.documentElement.getAttribute('data-theme')||'dark');
+function toggleTheme(){const c=document.documentElement.getAttribute('data-theme')||'light';applyTheme(c==='dark'?'light':'dark');}
+applyTheme(document.documentElement.getAttribute('data-theme')||'light');
 let pendingRun=new URLSearchParams(location.search).get('run');
 function isoHoje(){const d=new Date(),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;}
 function isoParaBR(iso){const [y,m,d]=iso.split('-');return `${d}/${m}/${y}`;}
