@@ -267,7 +267,8 @@ function marcarAtivos(){
 
 function renderKpis(){
   const s=DATA.por_situacao||{}, g=DATA.glosado_situacao||{};
-  let h=`<div class="kpi"><div class="n">${DATA.total}</div><div class="l">Total de glosas</div>
+  let h=`<div class="kpi click${curFilter?'':' active'}" onclick="limparFiltro()" title="Ver todas as glosas">
+         <div class="n">${DATA.total}</div><div class="l">Total de glosas</div>
          <div class="kv">${fmtBRL(DATA.total_glosado)} <small>glosado</small></div>
          <div class="bar" style="background:var(--accent)"></div></div>`;
   for(const k of SIT_ORDER){

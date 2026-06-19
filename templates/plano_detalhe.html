@@ -266,9 +266,10 @@ async function carregarGlosas(){
   const gfim=j.dia||'', gini=gfim?('01/'+gfim.slice(3)):'';
   $('glosaSub').textContent=`· ${j.total} glosas · 💰 ${fmtBRL(j.total_glosado)} glosado · período de ${gini} até ${gfim}`+(cap?` · atualizado ${new Date(cap).toLocaleString('pt-BR')}`:'');
   const s=j.por_situacao||{}, g=j.glosado_situacao||{};
-  $('glosaChips').innerHTML=`<div class="chip"><div class="n">${j.total}</div><div class="l">Total de glosas</div>
+  $('glosaChips').innerHTML=`<a class="chip" href="/glosas" style="cursor:pointer;text-decoration:none;color:inherit" title="Ver todas as glosas no painel">
+      <div class="n">${j.total}</div><div class="l">Total de glosas</div>
       <div class="kv">💰 ${fmtBRL(j.total_glosado)}</div>
-      <div class="cd">GTOs que glosaram no período</div></div>`+
+      <div class="cd">GTOs que glosaram no período</div></a>`+
     GSIT.map(k=>{const c=GCL[k];const cls=['anex','lau','err','sim'].includes(c)?(' '+c):'';
       return `<a class="chip${cls}" href="/glosas?sit=${k}" style="cursor:pointer;text-decoration:none;color:inherit"
         title="Ver as GTOs: ${(meta[k]||{}).label||k}">
