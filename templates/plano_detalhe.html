@@ -48,6 +48,25 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 .obs{color:var(--gray-600);font-size:13px;}
 .empty{padding:40px;text-align:center;color:var(--gray-400);}
 
+/* Glosas & Recurso (seção embutida no detalhe do plano) */
+.th-ish{font-size:11px;color:var(--gray-400);text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px;}
+.gcols{display:grid;grid-template-columns:1fr 1fr;gap:26px;}
+@media(max-width:760px){.gcols{grid-template-columns:1fr;}}
+.gurow{margin-bottom:11px;}
+.gurow .t{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;}
+.gstack{display:flex;height:13px;border-radius:7px;overflow:hidden;background:var(--gray-200);}
+.gstack i{display:block;height:100%;}
+.s-A_RECORRER{background:var(--yellow-500);}.s-RECURSO_OU_RESOLVIDA{background:var(--blue-500);}
+.s-NAO_RECURSAVEL{background:var(--red-500);}.s-GLOSADA{background:var(--gray-400);}
+.gmrow{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px;}
+.gmrow .n{width:210px;color:var(--gray-600);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.gmrow .bar{flex:1;height:8px;border-radius:5px;background:var(--gray-200);overflow:hidden;}
+.gmrow .bar i{display:block;height:100%;background:var(--green-600);border-radius:5px;}
+.gmrow .q{width:30px;text-align:right;font-weight:700;}
+.glegend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--gray-500);margin-top:12px;}
+.glegend span{display:inline-flex;align-items:center;gap:6px;}.glegend i{width:11px;height:11px;border-radius:3px;}
+.dayhead .acts{display:flex;gap:16px;align-items:center;}
+
 /* logomark / toggle / fab — ambos os temas */
 .brand-glyph{fill:none;stroke:var(--green-700);stroke-width:1.8;}
 .tt-accent{color:var(--green-700);font-weight:700;}
@@ -97,6 +116,27 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   <h1 class="page-title" id="title">{{ nome or slug }}</h1>
   <p class="page-sub" id="sub">Carregando…</p>
   <div class="chips" id="chips"></div>
+
+  <div id="glosaSec" style="display:none;margin-bottom:24px">
+    <div class="daycard">
+      <div class="dayhead">
+        <div><span class="d">🩹 Glosas &amp; Recurso</span> <span class="meta" id="glosaSub"></span></div>
+        <div class="acts">
+          <a id="glosaXlsx" href="/glosas.xlsx">⬇ Excel</a>
+          <a id="glosaPdf" href="/glosas.pdf">⬇ PDF</a>
+          <a href="/glosas">Ver panorama →</a>
+        </div>
+      </div>
+      <div style="padding:16px 20px">
+        <div class="chips" id="glosaChips" style="margin-bottom:18px"></div>
+        <div class="gcols">
+          <div><div class="th-ish">Por unidade</div><div id="glosaUnid"></div></div>
+          <div><div class="th-ish">Por motivo de glosa</div><div id="glosaMot"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="dias"><div class="empty">Carregando…</div></div>
 </main>
 
@@ -149,7 +189,35 @@ async function carregar(){
     </div>`;
   }).join('');
 }
+
+// ── Glosas & Recurso (panorama embutido) ─────────────────────────────────────
+const GSIT=['A_RECORRER','RECURSO_OU_RESOLVIDA','NAO_RECURSAVEL','GLOSADA'];
+const GCL={A_RECORRER:'lau',RECURSO_OU_RESOLVIDA:'sim',NAO_RECURSAVEL:'err',GLOSADA:'outros'};
+async function carregarGlosas(){
+  let j;try{j=await (await fetch('/api/glosas')).json();}catch(e){return;}
+  if(!j||!j.total)return;                       // sem glosas p/ esse plano: não mostra
+  const meta=j.meta||{};
+  $('glosaSec').style.display='';
+  const cap=j.lotes&&j.lotes[0]?j.lotes[0].captured_at:null;
+  $('glosaSub').textContent=`· ${j.total} glosas · período até ${j.dia}`+(cap?` · atualizado ${new Date(cap).toLocaleString('pt-BR')}`:'');
+  const s=j.por_situacao||{};
+  $('glosaChips').innerHTML=`<div class="chip"><div class="n">${j.total}</div><div class="l">Total glosas</div></div>`+
+    GSIT.map(k=>{const c=GCL[k];const cls=(c==='lau'||c==='err'||c==='sim')?(' '+c):'';
+      return `<div class="chip${cls}"><div class="n">${s[k]||0}</div><div class="l">${(meta[k]||{}).label||k}</div></div>`;}).join('');
+  $('glosaUnid').innerHTML=(j.por_unidade||[]).map(u=>{
+    const segs=GSIT.map(k=>{const v=u[k]||0;if(!v)return'';
+      return `<i class="s-${k}" style="width:${(v/u.total*100).toFixed(1)}%" title="${(meta[k]||{}).label||k}: ${v}"></i>`;}).join('');
+    return `<div class="gurow"><div class="t"><b>${u.unidade}</b><span>${u.total}</span></div><div class="gstack">${segs}</div></div>`;
+  }).join('')+`<div class="glegend">${GSIT.map(k=>`<span><i class="s-${k}"></i>${(meta[k]||{}).label||k}</span>`).join('')}</div>`;
+  const ms=j.por_motivo||[],max=Math.max(1,...ms.map(m=>m.total));
+  $('glosaMot').innerHTML=ms.slice(0,8).map(m=>`<div class="gmrow">
+      <span class="n" title="${m.glosa_cod} — ${m.glosa_motivo}">${m.glosa_cod} · ${m.glosa_motivo}</span>
+      <span class="bar"><i style="width:${(m.total/max*100).toFixed(0)}%"></i></span>
+      <span class="q">${m.total}</span></div>`).join('');
+}
+
 carregar();
+carregarGlosas();
 </script>
 </body>
 </html>
