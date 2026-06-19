@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panorama de Glosas — RADIOBRAS</title>
+<script>(function(){try{var t=localStorage.getItem('rb-theme')||'dark';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();</script>
+<style>
+  :root{
+    --bg:#f4f6f8; --card:#fff; --ink:#1c2430; --muted:#5a6b7b; --line:#e3e8ee;
+    --accent:#1f9d6b; --accent2:#34C88E;
+    --warn:#d98a00; --bad:#d24b4b; --info:#3b82c4; --neutral:#7a889a;
+    --shadow:0 1px 3px rgba(20,30,45,.08);
+  }
+  [data-theme="dark"]{
+    --bg:#0e1419; --card:#161e26; --ink:#e7eef5; --muted:#92a3b3; --line:#243039;
+    --accent:#34C88E; --accent2:#34C88E;
+    --warn:#e0a020; --bad:#e06464; --info:#5aa6e0; --neutral:#8395a6;
+    --shadow:0 1px 4px rgba(0,0,0,.4);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+       background:var(--bg);color:var(--ink);transition:background .2s,color .2s}
+  a{color:var(--accent)}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px 18px 60px}
+  .top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand h1{font-size:21px;margin:0;font-weight:700}
+  .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--accent2);
+       box-shadow:0 0 8px var(--accent2)}
+  .nav-right{display:flex;align-items:center;gap:8px}
+  .sub{color:var(--muted);font-size:13px;margin:2px 0 18px}
+  .btn{border:1px solid var(--line);background:var(--card);color:var(--ink);
+       border-radius:9px;padding:8px 13px;font-size:13px;cursor:pointer;
+       text-decoration:none;display:inline-flex;align-items:center;gap:7px;transition:.15s}
+  .btn:hover{border-color:var(--accent);transform:translateY(-1px)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#04140d;font-weight:600}
+  .btn.primary:hover{box-shadow:0 0 12px rgba(52,200,142,.35)}
+  .theme-toggle{font-size:16px;background:var(--card);border:1px solid var(--line);
+       width:38px;height:38px;border-radius:9px;cursor:pointer;color:var(--ink)}
+  select{background:var(--card);color:var(--ink);border:1px solid var(--line);
+       border-radius:9px;padding:8px 10px;font-size:13px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:18px}
+  .toolbar .spacer{flex:1}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:18px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px 16px;box-shadow:var(--shadow)}
+  .kpi .n{font-size:28px;font-weight:750;line-height:1.1}
+  .kpi .l{color:var(--muted);font-size:12.5px;margin-top:3px}
+  .kpi .bar{height:4px;border-radius:3px;margin-top:9px;opacity:.85}
+  .grid2{display:grid;grid-template-columns:1.1fr 1fr;gap:14px;margin-bottom:18px}
+  @media(max-width:840px){.grid2{grid-template-columns:1fr}}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:16px 18px;box-shadow:var(--shadow)}
+  .panel h3{margin:0 0 12px;font-size:14px;font-weight:700}
+  .urow{margin-bottom:12px}
+  .urow .ut{display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px}
+  .urow .ut b{font-weight:700}
+  .stack{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--line)}
+  .stack i{display:block;height:100%}
+  .seg-A_RECORRER{background:var(--warn)}
+  .seg-RECURSO_OU_RESOLVIDA{background:var(--info)}
+  .seg-NAO_RECURSAVEL{background:var(--bad)}
+  .seg-GLOSADA{background:var(--neutral)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .mrow{display:flex;align-items:center;gap:10px;margin-bottom:9px;font-size:13px}
+  .mrow .mbar{flex:1;height:9px;border-radius:5px;background:var(--line);overflow:hidden}
+  .mrow .mbar i{display:block;height:100%;background:var(--accent);border-radius:5px}
+  .mrow .mq{width:34px;text-align:right;font-weight:700}
+  .mrow .mn{width:240px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.3px}
+  tr:hover td{background:rgba(127,127,127,.06)}
+  .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:600}
+  .pill.warn{background:rgba(217,138,0,.16);color:var(--warn)}
+  .pill.bad{background:rgba(210,75,75,.16);color:var(--bad)}
+  .pill.info{background:rgba(59,130,196,.16);color:var(--info)}
+  .pill.neutral{background:rgba(122,136,154,.16);color:var(--neutral)}
+  .empty{text-align:center;color:var(--muted);padding:50px 20px}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  /* modal */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal.show{display:flex}
+  .modal .box{background:var(--card);border:1px solid var(--line);border-radius:14px;
+       width:min(560px,92vw);max-height:80vh;overflow:auto;padding:20px}
+  .modal h3{margin:0 0 8px}
+  .log{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:var(--bg);
+       border:1px solid var(--line);border-radius:9px;padding:10px;max-height:46vh;overflow:auto;white-space:pre-wrap}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--line);
+       border-top-color:var(--accent);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand"><span class="dot"></span><h1>Panorama de Glosas</h1></div>
+    <div class="nav-right">
+      <a class="btn" href="/">← Dashboard</a>
+      <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙</button>
+    </div>
+  </div>
+  <div class="sub" id="sub">Carregando…</div>
+
+  <div class="toolbar">
+    <select id="lote" onchange="carregar()"></select>
+    <button class="btn" onclick="atualizar()">⟳ Atualizar agora</button>
+    <span class="spacer"></span>
+    <a class="btn" id="btnXlsx" href="/glosas.xlsx">⬇ Excel</a>
+    <a class="btn primary" id="btnPdf" href="/glosas.pdf">⬇ PDF</a>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3>Por unidade</h3>
+      <div id="unidades"></div>
+      <div class="legend" id="legenda"></div>
+    </div>
+    <div class="panel">
+      <h3>Por motivo de glosa</h3>
+      <div id="motivos"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Glosas (detalhe)</h3>
+    <div class="filters">
+      <select id="fUnidade" onchange="renderTabela()"><option value="">Todas as unidades</option></select>
+      <select id="fSituacao" onchange="renderTabela()"><option value="">Todas as situações</option></select>
+    </div>
+    <div id="tabela"></div>
+  </div>
+</div>
+
+<div class="modal" id="modal">
+  <div class="box">
+    <h3 id="mTitle"><span class="spin"></span> Atualizando panorama…</h3>
+    <p class="sub" style="margin:0 0 10px">Login nas 3 unidades, geração do relatório de glosa e checagem de recurso por guia. Pode levar alguns minutos.</p>
+    <div class="log" id="mLog"></div>
+    <div style="text-align:right;margin-top:12px">
+      <button class="btn" id="mClose" onclick="fecharModal()" style="display:none">Fechar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let DATA=null, META={};
+function $(id){return document.getElementById(id)}
+function applyTheme(t){document.documentElement.setAttribute('data-theme',t);
+  try{localStorage.setItem('rb-theme',t)}catch(e){}; $('themeBtn').textContent=(t==='dark')?'🌙':'☀️';}
+function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark')}
+applyTheme(document.documentElement.getAttribute('data-theme')||'dark');
+
+const SIT_ORDER=['A_RECORRER','RECURSO_OU_RESOLVIDA','NAO_RECURSAVEL','GLOSADA'];
+
+async function carregar(){
+  const lote=$('lote').value;
+  const r=await fetch('/api/glosas'+(lote?('?lote='+lote):''));
+  DATA=await r.json(); META=DATA.meta||{};
+  if(DATA.error){$('sub').textContent='Erro: '+DATA.error;return;}
+  // seletor de lotes
+  if(!$('lote').dataset.filled){
+    $('lote').innerHTML=(DATA.lotes||[]).map(l=>{
+      const dt=l.captured_at?new Date(l.captured_at).toLocaleString('pt-BR'):l.lote;
+      return `<option value="${l.lote}">${dt} · ${l.total} glosas (até ${l.dia||'—'})</option>`;
+    }).join('') || '<option>—</option>';
+    $('lote').dataset.filled='1';
+    if(lote) $('lote').value=lote;
+  }
+  const cap=DATA.lotes&&DATA.lotes[0]?DATA.lotes[0].captured_at:null;
+  const qs=lote?('?lote='+lote):'';
+  $('btnPdf').href='/glosas.pdf'+qs; $('btnXlsx').href='/glosas.xlsx'+qs;
+  if(!DATA.total){$('sub').textContent='Sem dados ainda. Clique em “Atualizar agora”.';
+    $('kpis').innerHTML='';$('unidades').innerHTML='';$('motivos').innerHTML='';
+    $('tabela').innerHTML='<div class="empty">Nenhuma glosa carregada.</div>';return;}
+  const capTxt=cap?(' · atualizado '+new Date(cap).toLocaleString('pt-BR')):'';
+  $('sub').textContent=`Período: do 1º dia do mês até ${DATA.dia} · 3 unidades${capTxt}`;
+  renderKpis(); renderUnidades(); renderMotivos(); fillFiltros(); renderTabela();
+}
+
+function renderKpis(){
+  const s=DATA.por_situacao||{};
+  let h=`<div class="kpi"><div class="n">${DATA.total}</div><div class="l">Total de glosas</div>
+         <div class="bar" style="background:var(--accent)"></div></div>`;
+  for(const k of SIT_ORDER){
+    const m=META[k]||{}; const cls=m.cls||'neutral';
+    h+=`<div class="kpi"><div class="n">${s[k]||0}</div><div class="l">${(m.label||k)}</div>
+        <div class="bar seg-${k}"></div></div>`;
+  }
+  $('kpis').innerHTML=h;
+}
+function renderUnidades(){
+  const us=DATA.por_unidade||[];
+  $('unidades').innerHTML=us.map(u=>{
+    const segs=SIT_ORDER.map(k=>{const v=u[k]||0;if(!v)return'';
+      const pct=(v/u.total*100).toFixed(1);
+      return `<i class="seg-${k}" style="width:${pct}%" title="${(META[k]||{}).label||k}: ${v}"></i>`;}).join('');
+    return `<div class="urow"><div class="ut"><b>${u.unidade}</b><span>${u.total}</span></div>
+            <div class="stack">${segs}</div></div>`;
+  }).join('')||'<div class="empty">—</div>';
+  $('legenda').innerHTML=SIT_ORDER.map(k=>`<span><i class="seg-${k}"></i>${(META[k]||{}).label||k}</span>`).join('');
+}
+function renderMotivos(){
+  const ms=DATA.por_motivo||[]; const max=Math.max(1,...ms.map(m=>m.total));
+  $('motivos').innerHTML=ms.map(m=>`<div class="mrow">
+      <span class="mn" title="${m.glosa_cod} — ${m.glosa_motivo}">${m.glosa_cod} · ${m.glosa_motivo}</span>
+      <span class="mbar"><i style="width:${(m.total/max*100).toFixed(0)}%"></i></span>
+      <span class="mq">${m.total}</span></div>`).join('')||'<div class="empty">—</div>';
+}
+function fillFiltros(){
+  const u=$('fUnidade'); if(!u.dataset.filled){
+    (DATA.por_unidade||[]).forEach(x=>u.insertAdjacentHTML('beforeend',`<option>${x.unidade}</option>`));
+    const s=$('fSituacao');
+    SIT_ORDER.forEach(k=>s.insertAdjacentHTML('beforeend',`<option value="${k}">${(META[k]||{}).label||k}</option>`));
+    u.dataset.filled='1';
+  }
+}
+function renderTabela(){
+  const fu=$('fUnidade').value, fs=$('fSituacao').value;
+  const rows=(DATA.eventos||[]).filter(e=>(!fu||e.unidade===fu)&&(!fs||e.situacao===fs));
+  if(!rows.length){$('tabela').innerHTML='<div class="empty">Nenhuma glosa para o filtro.</div>';return;}
+  $('tabela').innerHTML=`<table><thead><tr>
+    <th>Unidade</th><th>Guia</th><th>Paciente</th><th>Procedimento</th><th>Motivo</th><th>Situação</th>
+    </tr></thead><tbody>${rows.map(e=>{
+      const m=META[e.situacao]||{};
+      return `<tr><td>${e.unidade}</td><td>${e.ficha}</td><td>${e.paciente||'—'}</td>
+        <td>${e.evento||'—'}</td><td title="${e.glosa_cod}">${e.glosa_motivo||'—'}</td>
+        <td><span class="pill ${m.cls||'neutral'}">${m.label||e.situacao}</span></td></tr>`;
+    }).join('')}</tbody></table>`;
+}
+
+// ── Atualizar (background) ───────────────────────────────────────────────────
+let pollT=null;
+async function atualizar(){
+  $('modal').classList.add('show'); $('mClose').style.display='none';
+  $('mTitle').innerHTML='<span class="spin"></span> Atualizando panorama…';
+  $('mLog').textContent='Iniciando…';
+  const r=await fetch('/glosas/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({checar_recurso:true})});
+  const j=await r.json();
+  if(j.error){$('mLog').textContent='Erro: '+j.error;$('mClose').style.display='';return;}
+  pollT=setInterval(()=>poll(j.job_id),2500); poll(j.job_id);
+}
+async function poll(id){
+  const r=await fetch('/glosas/atualizar/status/'+id); const j=await r.json();
+  if(j.log)$('mLog').textContent=j.log.join('\n');
+  $('mLog').scrollTop=$('mLog').scrollHeight;
+  if(j.status==='done'||j.status==='error'){
+    clearInterval(pollT);
+    $('mTitle').innerHTML=(j.status==='done')?'✓ Atualizado':'✕ Falhou';
+    $('mClose').style.display='';
+    if(j.status==='done'){$('lote').dataset.filled='';carregar();}
+  }
+}
+function fecharModal(){$('modal').classList.remove('show');}
+carregar();
+</script>
+</body>
+</html>

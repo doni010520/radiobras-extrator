@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Panorama de Glosas — RADIOBRAS</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2430;
+       margin:0;padding:26px 30px;background:#fff}
+  h1{font-size:22px;margin:0 0 2px}
+  .sub{color:#5a6b7b;font-size:13px;margin-bottom:18px}
+  .accent{color:#1f9d6b}
+  h2{font-size:15px;margin:22px 0 9px;border-bottom:2px solid #e3e8ee;padding-bottom:5px}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:6px}
+  th,td{text-align:left;padding:7px 9px;border-bottom:1px solid #e8edf2}
+  th{background:#f4f6f8;color:#3a4756;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.3px}
+  .kpis{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .kpi{border:1px solid #e3e8ee;border-radius:10px;padding:10px 14px;min-width:130px}
+  .kpi .n{font-size:24px;font-weight:750}
+  .kpi .l{color:#5a6b7b;font-size:11.5px}
+  .pill{display:inline-block;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600}
+  .warn{background:rgba(217,138,0,.15);color:#b87400}
+  .bad{background:rgba(210,75,75,.15);color:#b53b3b}
+  .info{background:rgba(59,130,196,.15);color:#2f6ea3}
+  .neutral{background:rgba(122,136,154,.16);color:#5a6b7b}
+  .foot{margin-top:24px;color:#8595a6;font-size:11px;border-top:1px solid #e3e8ee;padding-top:8px}
+  .bar{height:5px;border-radius:3px;margin-top:6px}
+  {% if not pdf and embed %}.noembed{display:none}{% endif %}
+</style>
+</head>
+<body>
+  <h1><span class="accent">●</span> Panorama de Glosas</h1>
+  <div class="sub">
+    {% if pan.total %}Período: do 1º dia do mês até <b>{{ pan.dia }}</b> · 3 unidades (REDE UNNA, Tancredo, Camaçari)
+    {% else %}Sem dados.{% endif %}
+  </div>
+
+  {% if pan.total %}
+  <div class="kpis">
+    <div class="kpi"><div class="n">{{ pan.total }}</div><div class="l">Total de glosas</div></div>
+    {% for k, lbl in pan.situacoes %}
+      <div class="kpi"><div class="n">{{ pan.por_situacao.get(k,0) }}</div><div class="l">{{ lbl }}</div></div>
+    {% endfor %}
+  </div>
+
+  <h2>Por unidade</h2>
+  <table>
+    <thead><tr><th>Unidade</th><th>Total</th>
+      {% for k, lbl in pan.situacoes %}<th>{{ lbl }}</th>{% endfor %}</tr></thead>
+    <tbody>
+      {% for u in pan.por_unidade %}
+      <tr><td><b>{{ u.unidade }}</b></td><td>{{ u.total }}</td>
+        {% for k, lbl in pan.situacoes %}<td>{{ u.get(k,0) }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Por motivo de glosa</h2>
+  <table>
+    <thead><tr><th>Cód.</th><th>Motivo</th><th>Qtd</th></tr></thead>
+    <tbody>
+      {% for m in pan.por_motivo %}
+      <tr><td>{{ m.glosa_cod }}</td><td>{{ m.glosa_motivo }}</td><td>{{ m.total }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Glosas (detalhe)</h2>
+  <table>
+    <thead><tr><th>Unidade</th><th>Guia</th><th>Paciente</th><th>Procedimento</th><th>Motivo</th><th>Situação</th></tr></thead>
+    <tbody>
+      {% for e in pan.eventos %}
+      {% set m = pan.meta.get(e.situacao, {}) %}
+      <tr>
+        <td>{{ e.unidade }}</td><td>{{ e.ficha }}</td><td>{{ e.paciente or '—' }}</td>
+        <td>{{ e.evento or '—' }}</td><td>{{ e.glosa_motivo or '—' }}</td>
+        <td><span class="pill {{ m.cls or 'neutral' }}">{{ m.label or e.situacao }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <div class="foot">
+    RADIOBRAS · gerado automaticamente a partir do Portal RedeUna (Relatório de Glosa + Recurso de Glosa).
+    Situação derivada do portal — sem LLM.
+  </div>
+</body>
+</html>

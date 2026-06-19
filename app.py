@@ -138,6 +138,39 @@ def _run_fechar_job(job_id: str, data: str, dry_run: bool, plano: str = "odontop
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
 
 
+def _run_glosa_job(job_id: str, dia: str, contas: list, checar: bool) -> None:
+    """Job da atualização do panorama de glosas (3 unidades por padrão)."""
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "running"
+
+    def progress(msg: str) -> None:
+        with _jobs_lock:
+            _jobs[job_id].setdefault("log", []).append(str(msg))
+
+    try:
+        import time as _time
+        from playwright.sync_api import sync_playwright
+        from glosa_extrator import CONTAS, extrair_unidade
+        lote = _time.strftime("%Y%m%d%H%M%S")
+        alvo = [(u, l) for u, l in CONTAS if not contas or u in contas]
+        total = 0
+        with sync_playwright() as pw:
+            for conta, label in alvo:
+                progress(f"==== {label} ({conta}) — período até {dia} ====")
+                r = extrair_unidade(pw, conta, label, dia, "_diag_glosa",
+                                    checar_recursos=checar, log=progress)
+                db.salvar_glosas(lote, dia, r["eventos"])
+                total += len(r["eventos"])
+                progress(f"[{label}] gravado ({len(r['eventos'])}).")
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "done", "lote": lote, "total": total})
+    except Exception as exc:
+        tb = traceback.format_exc()
+        app.logger.error("Erro no glosa job %s:\n%s", job_id, tb)
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
+
+
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -365,6 +398,137 @@ def api_plano_detalhe():
     except Exception as exc:
         app.logger.error("Erro em /api/plano-detalhe: %s", exc)
         return jsonify({"error": str(exc)}), 500
+
+
+# ── Panorama de Glosas / Recurso ──────────────────────────────────────────────
+
+SITUACAO_META = {
+    "A_RECORRER":           {"label": "A recorrer",  "cls": "warn",
+                             "desc": "Glosada e ainda com recurso disponível na guia."},
+    "RECURSO_OU_RESOLVIDA": {"label": "Recurso enviado / em análise", "cls": "info",
+                             "desc": "Recursável, mas a guia já não mostra eventos glosados "
+                                     "(recurso provavelmente já enviado ou resolvido)."},
+    "NAO_RECURSAVEL":       {"label": "Não recursável", "cls": "bad",
+                             "desc": "Recuperação de valores ou sem opção de recurso na guia."},
+    "GLOSADA":              {"label": "Glosada", "cls": "neutral",
+                             "desc": "Glosada (estado de recurso ainda não verificado)."},
+}
+
+
+def _glosa_view(lote: str = None) -> dict:
+    pan = db.glosa_panorama(lote)
+    evs = db.glosa_eventos(lote)
+    pan["eventos"] = evs
+    pan["meta"] = SITUACAO_META
+    pan["lotes"] = db.glosa_lotes(12)
+    return pan
+
+
+@app.route("/glosas")
+def glosas_page():
+    """Panorama de glosas e recurso das unidades (tela, com exportar)."""
+    return render_template("glosas.html")
+
+
+@app.route("/api/glosas")
+def api_glosas():
+    try:
+        return jsonify(_glosa_view(request.args.get("lote") or None))
+    except Exception as exc:
+        app.logger.error("Erro em /api/glosas: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/glosas/relatorio")
+def glosas_relatorio():
+    """Versão imprimível do panorama (usada também para gerar o PDF)."""
+    pan = _glosa_view(request.args.get("lote") or None)
+    embed = request.args.get("embed") in ("1", "true", "yes")
+    return render_template("glosas_relatorio.html", pan=pan, pdf=False, embed=embed)
+
+
+@app.route("/glosas.pdf")
+def glosas_pdf():
+    pan = _glosa_view(request.args.get("lote") or None)
+    html = render_template("glosas_relatorio.html", pan=pan, pdf=True, embed=False)
+    from playwright.sync_api import sync_playwright
+    try:
+        with sync_playwright() as pw:
+            br = pw.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            pg = br.new_page()
+            pg.set_content(html, wait_until="networkidle")
+            pdf_bytes = pg.pdf(format="A4", print_background=True,
+                               margin={"top": "12mm", "bottom": "12mm",
+                                       "left": "10mm", "right": "10mm"})
+            br.close()
+    except Exception as exc:
+        app.logger.error("Falha ao gerar PDF de glosas: %s", exc)
+        return (f"Falha ao gerar PDF: {exc}", 500)
+    nome = f"glosas_{(pan.get('dia') or '').replace('/', '-')}.pdf"
+    return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
+                     as_attachment=True, download_name=nome)
+
+
+@app.route("/glosas.xlsx")
+def glosas_xlsx():
+    import pandas as pd
+    pan = _glosa_view(request.args.get("lote") or None)
+    evs = pan.get("eventos", [])
+    meta = SITUACAO_META
+    # Resumo por unidade x situação
+    resumo = []
+    for u in pan.get("por_unidade", []):
+        linha = {"Unidade": u["unidade"], "Total": u["total"]}
+        for k, lbl in db.GLOSA_SITUACOES:
+            linha[lbl] = u.get(k, 0)
+        resumo.append(linha)
+    det = [{
+        "Unidade": e["unidade"], "Guia": e["ficha"], "Paciente": e["paciente"],
+        "Procedimento": e["evento"], "Cód. glosa": e["glosa_cod"],
+        "Motivo": e["glosa_motivo"],
+        "Situação": meta.get(e["situacao"], {}).get("label", e["situacao"]),
+    } for e in evs]
+    motivos = [{"Cód.": m["glosa_cod"], "Motivo": m["glosa_motivo"], "Qtd": m["total"]}
+               for m in pan.get("por_motivo", [])]
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        (pd.DataFrame(resumo) if resumo else pd.DataFrame([{"Unidade": "—"}])).to_excel(
+            xw, sheet_name="Resumo", index=False)
+        (pd.DataFrame(motivos) if motivos else pd.DataFrame([{"Motivo": "—"}])).to_excel(
+            xw, sheet_name="Por motivo", index=False)
+        (pd.DataFrame(det) if det else pd.DataFrame([{"Guia": "—"}])).to_excel(
+            xw, sheet_name="Glosas", index=False)
+    buf.seek(0)
+    nome = f"glosas_{(pan.get('dia') or '').replace('/', '-')}.xlsx"
+    return send_file(buf, as_attachment=True, download_name=nome,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.route("/glosas/atualizar", methods=["POST"])
+def glosas_atualizar():
+    """Dispara a atualização do panorama (background)."""
+    body = request.get_json(silent=True) or {}
+    dia = (body.get("dia") or datetime.now().strftime("%d/%m/%Y")).strip()
+    checar = bool(body.get("checar_recurso", True))
+    contas = body.get("contas") or []
+    job_id = uuid.uuid4().hex[:12]
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "log": [], "kind": "glosa"}
+    threading.Thread(target=_run_glosa_job, args=(job_id, dia, contas, checar),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/glosas/atualizar/status/<job_id>")
+def glosas_atualizar_status(job_id: str):
+    with _jobs_lock:
+        j = _jobs.get(job_id)
+        if not j:
+            return jsonify({"error": "job não encontrado"}), 404
+        return jsonify({"status": j.get("status"), "log": j.get("log", [])[-40:],
+                        "total": j.get("total"), "lote": j.get("lote"),
+                        "error": j.get("error")})
 
 
 @app.route("/api/diag")

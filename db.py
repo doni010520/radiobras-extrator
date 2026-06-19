@@ -80,6 +80,26 @@ class RunItem(Base):
     run = relationship("Run", back_populates="itens")
 
 
+class GlosaEvento(Base):
+    """Um evento de glosa lido do Relatório de Glosa (por unidade/período).
+    Cada extração grava um 'lote' (carimbo) — o panorama usa o lote mais recente."""
+    __tablename__ = "glosa_eventos"
+    id = Column(Integer, primary_key=True)
+    lote = Column(String(20), index=True)          # YYYYMMDDHHMMSS da extração
+    captured_at = Column(DateTime(timezone=True), default=_now)
+    dia = Column(String(10))                        # data-fim do período (DD/MM/AAAA)
+    conta = Column(String(20), index=True)          # código da unidade
+    unidade = Column(String(60), index=True)        # rótulo da unidade
+    ficha = Column(String(30), index=True)          # nº da guia/GTO
+    paciente = Column(String(200))
+    evento_cod = Column(String(20))
+    evento = Column(String(200))                    # procedimento
+    glosa_cod = Column(String(10), index=True)
+    glosa_motivo = Column(String(200))
+    recurso_estado = Column(String(20))             # RECURSAVEL | SEM_GLOSADO | ...
+    situacao = Column(String(30), index=True)       # A_RECORRER | NAO_RECURSAVEL | ...
+
+
 def init_db():
     Base.metadata.create_all(engine)
     _ensure_columns()
@@ -396,3 +416,102 @@ def itens_plano_periodo(plano: str, de_iso: str, ate_iso: str) -> dict:
                          "finished_at": r.finished_at.isoformat() if r.finished_at else None,
                          "itens": its})
         return {"plano": plano, "de": de_iso, "ate": ate_iso, "totais": tot, "dias": dias}
+
+
+# ── Glosas / Recurso ──────────────────────────────────────────────────────────
+
+# Rótulos amigáveis das situações (ordem = prioridade de exibição).
+GLOSA_SITUACOES = [
+    ("A_RECORRER", "A recorrer"),
+    ("RECURSO_OU_RESOLVIDA", "Recurso enviado / em análise"),
+    ("NAO_RECURSAVEL", "Não recursável"),
+    ("GLOSADA", "Glosada"),
+]
+
+
+def salvar_glosas(lote: str, dia: str, eventos: list) -> int:
+    """Grava os eventos de glosa de uma extração (um 'lote'). Substitui os
+    eventos das MESMAS unidades naquele lote (idempotente por re-run do lote)."""
+    with SessionLocal() as s:
+        contas = {e.get("conta") for e in eventos}
+        for conta in contas:
+            s.query(GlosaEvento).filter(
+                GlosaEvento.lote == lote, GlosaEvento.conta == conta).delete()
+        for e in eventos:
+            s.add(GlosaEvento(
+                lote=lote, dia=dia, conta=e.get("conta", ""), unidade=e.get("unidade", ""),
+                ficha=str(e.get("ficha", "")), paciente=(e.get("paciente") or "")[:200],
+                evento_cod=e.get("evento_cod", ""), evento=(e.get("evento") or "")[:200],
+                glosa_cod=e.get("glosa_cod", ""), glosa_motivo=(e.get("glosa_motivo") or "")[:200],
+                recurso_estado=e.get("recurso_estado", ""), situacao=e.get("situacao", ""),
+            ))
+        s.commit()
+        return len(eventos)
+
+
+def glosa_lotes(limite: int = 30) -> list:
+    """Lotes de extração (mais recente primeiro) com data e total de eventos."""
+    with SessionLocal() as s:
+        rows = (s.query(GlosaEvento.lote, GlosaEvento.dia,
+                        func.count(GlosaEvento.id), func.max(GlosaEvento.captured_at))
+                .group_by(GlosaEvento.lote, GlosaEvento.dia)
+                .order_by(func.max(GlosaEvento.captured_at).desc()).limit(limite).all())
+        return [{"lote": r[0], "dia": r[1], "total": int(r[2]),
+                 "captured_at": r[3].isoformat() if r[3] else None} for r in rows]
+
+
+def _lote_atual(s, lote: str = None) -> str:
+    if lote:
+        return lote
+    r = (s.query(GlosaEvento.lote).order_by(GlosaEvento.captured_at.desc()).first())
+    return r[0] if r else None
+
+
+def glosa_panorama(lote: str = None) -> dict:
+    """Resumo do panorama de glosas de um lote (default = mais recente):
+    totais por situação, por unidade e por motivo."""
+    with SessionLocal() as s:
+        lote = _lote_atual(s, lote)
+        if not lote:
+            return {"lote": None, "dia": None, "total": 0, "por_situacao": {},
+                    "por_unidade": [], "por_motivo": [], "situacoes": GLOSA_SITUACOES}
+        evs = s.query(GlosaEvento).filter(GlosaEvento.lote == lote).all()
+        dia = evs[0].dia if evs else None
+        por_situacao = {k: 0 for k, _ in GLOSA_SITUACOES}
+        por_unidade, por_motivo = {}, {}
+        for e in evs:
+            por_situacao[e.situacao] = por_situacao.get(e.situacao, 0) + 1
+            u = por_unidade.setdefault(e.unidade, {"unidade": e.unidade, "total": 0,
+                                                   **{k: 0 for k, _ in GLOSA_SITUACOES}})
+            u["total"] += 1
+            u[e.situacao] = u.get(e.situacao, 0) + 1
+            m = por_motivo.setdefault(e.glosa_cod, {"glosa_cod": e.glosa_cod,
+                                                    "glosa_motivo": e.glosa_motivo, "total": 0})
+            m["total"] += 1
+        return {
+            "lote": lote, "dia": dia, "total": len(evs),
+            "por_situacao": por_situacao,
+            "por_unidade": sorted(por_unidade.values(), key=lambda x: -x["total"]),
+            "por_motivo": sorted(por_motivo.values(), key=lambda x: -x["total"]),
+            "situacoes": GLOSA_SITUACOES,
+        }
+
+
+def glosa_eventos(lote: str = None, unidade: str = None, situacao: str = None) -> list:
+    """Lista de eventos de glosa de um lote, com filtros opcionais — p/ tabela/export."""
+    with SessionLocal() as s:
+        lote = _lote_atual(s, lote)
+        if not lote:
+            return []
+        q = s.query(GlosaEvento).filter(GlosaEvento.lote == lote)
+        if unidade:
+            q = q.filter(GlosaEvento.unidade == unidade)
+        if situacao:
+            q = q.filter(GlosaEvento.situacao == situacao)
+        q = q.order_by(GlosaEvento.unidade, GlosaEvento.situacao, GlosaEvento.ficha)
+        return [{
+            "unidade": e.unidade, "conta": e.conta, "ficha": e.ficha,
+            "paciente": e.paciente, "evento": e.evento, "glosa_cod": e.glosa_cod,
+            "glosa_motivo": e.glosa_motivo, "recurso_estado": e.recurso_estado,
+            "situacao": e.situacao,
+        } for e in q.all()]
