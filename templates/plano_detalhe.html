@@ -24,7 +24,10 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .back{color:var(--green-700);text-decoration:none;font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:6px;margin-bottom:14px;}
 .page-title{font-size:26px;font-weight:700;}
 .page-sub{font-size:14px;color:var(--gray-500);margin-bottom:24px;}
-.chips{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:28px;}
+.chips{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;}
+.seclabel{font-size:12.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--gray-500);font-weight:700;margin:0 0 14px;display:flex;align-items:center;gap:8px;}
+.seclabel .sn{font-size:12px;color:var(--gray-400);text-transform:none;letter-spacing:0;font-weight:400;}
+.secdiv{border-top:1px solid var(--gray-200);margin:34px 0 22px;}
 .chip{background:#fff;border:1px solid var(--gray-200);border-radius:12px;padding:14px 18px;min-width:120px;}
 .chip .n{font-size:24px;font-weight:700;line-height:1;}
 .chip .l{font-size:12px;color:var(--gray-500);margin-top:5px;text-transform:uppercase;letter-spacing:.4px;}
@@ -123,12 +126,16 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   <a class="back" href="/"><svg class="icon"><use href="#i-arrow-l"/></svg> Voltar ao dashboard</a>
   <h1 class="page-title" id="title">{{ nome or slug }}</h1>
   <p class="page-sub" id="sub">Carregando…</p>
+  <h2 class="seclabel">📎 Processamento &amp; anexação <span class="sn">— o que a automação fez com as GTOs</span></h2>
   <div class="chips" id="chips"></div>
+  <div id="dias"><div class="empty">Carregando…</div></div>
 
-  <div id="glosaSec" style="display:none;margin-bottom:24px">
+  <div id="glosaSec" style="display:none">
+    <div class="secdiv"></div>
+    <h2 class="seclabel">🩹 Glosas &amp; Recurso <span class="sn" id="glosaSub"></span></h2>
     <div class="daycard">
       <div class="dayhead">
-        <div><span class="d">🩹 Glosas &amp; Recurso</span> <span class="meta" id="glosaSub"></span></div>
+        <div><span class="meta">Resultado das GTOs no convênio (3 unidades)</span></div>
         <div class="acts">
           <a id="glosaXlsx" href="/glosas.xlsx">⬇ Excel</a>
           <a id="glosaPdf" href="/glosas.pdf">⬇ PDF</a>
@@ -144,8 +151,6 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
       </div>
     </div>
   </div>
-
-  <div id="dias"><div class="empty">Carregando…</div></div>
 </main>
 
 <a class="fab" href="/?run={{ slug }}"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg> Executar Agora</a>
