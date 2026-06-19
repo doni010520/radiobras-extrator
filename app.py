@@ -138,7 +138,8 @@ def _run_fechar_job(job_id: str, data: str, dry_run: bool, plano: str = "odontop
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
 
 
-def _run_glosa_job(job_id: str, dia: str, contas: list, checar: bool) -> None:
+def _run_glosa_job(job_id: str, dia: str, contas: list, checar: bool,
+                   checar_demo: bool = True) -> None:
     """Job da atualização do panorama de glosas (3 unidades por padrão)."""
     with _jobs_lock:
         _jobs[job_id]["status"] = "running"
@@ -158,7 +159,8 @@ def _run_glosa_job(job_id: str, dia: str, contas: list, checar: bool) -> None:
             for conta, label in alvo:
                 progress(f"==== {label} ({conta}) — período até {dia} ====")
                 r = extrair_unidade(pw, conta, label, dia, "_diag_glosa",
-                                    checar_recursos=checar, log=progress)
+                                    checar_recursos=checar, checar_demonstrativo=checar_demo,
+                                    log=progress)
                 db.salvar_glosas(lote, dia, r["eventos"])
                 total += len(r["eventos"])
                 progress(f"[{label}] gravado ({len(r['eventos'])}).")
@@ -408,6 +410,15 @@ SITUACAO_META = {
     "RECURSO_OU_RESOLVIDA": {"label": "Recurso enviado / em análise", "cls": "info",
                              "desc": "Recursável, mas a guia já não mostra eventos glosados "
                                      "(recurso provavelmente já enviado ou resolvido)."},
+    "RECURSO_REJEITADO":    {"label": "Recurso recusado (refazer)", "cls": "rej",
+                             "desc": "Reanálise (recurso) feita de forma incorreta — já passou "
+                                     "pelo recurso e foi recusada; precisa refazer."},
+    "RESOLVIDA":            {"label": "Resolvida (paga)", "cls": "ok",
+                             "desc": "Demonstrativo mostra a guia paga e sem glosa "
+                                     "(recurso deferido ou glosa revertida)."},
+    "GLOSA_CONFIRMADA":     {"label": "Glosa confirmada", "cls": "bad",
+                             "desc": "Demonstrativo confirma a glosa no pagamento "
+                                     "(recurso indeferido ou não recorrido)."},
     "NAO_RECURSAVEL":       {"label": "Não recursável", "cls": "bad",
                              "desc": "Recuperação de valores ou sem opção de recurso na guia."},
     "GLOSADA":              {"label": "Glosada", "cls": "neutral",
@@ -511,11 +522,12 @@ def glosas_atualizar():
     body = request.get_json(silent=True) or {}
     dia = (body.get("dia") or datetime.now().strftime("%d/%m/%Y")).strip()
     checar = bool(body.get("checar_recurso", True))
+    checar_demo = bool(body.get("checar_demonstrativo", True))
     contas = body.get("contas") or []
     job_id = uuid.uuid4().hex[:12]
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": [], "kind": "glosa"}
-    threading.Thread(target=_run_glosa_job, args=(job_id, dia, contas, checar),
+    threading.Thread(target=_run_glosa_job, args=(job_id, dia, contas, checar, checar_demo),
                      daemon=True).start()
     return jsonify({"job_id": job_id})
 

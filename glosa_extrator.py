@@ -318,26 +318,106 @@ def checar_recurso(page, guia) -> str:
     return "INDEFINIDO"
 
 
-def classificar(glosa_cod, recurso_estado) -> str:
+# Glosa cuja própria existência indica que JÁ houve recurso (reanálise) — rejeitado.
+GLOSAS_RECURSO_JA_FEITO = {"2908"}  # "Solicitação de reanálise efetuada de forma incorreta"
+
+
+def _num_brl(s):
+    """'1.234,56' -> 1234.56 ; '' -> None."""
+    if not s:
+        return None
+    try:
+        return float(s.replace(".", "").replace(",", "."))
+    except Exception:
+        return None
+
+
+# ── Demonstrativo de Pagamento (resultado financeiro / recurso) ─────────────────
+def _demo_set_guia(page, guia):
+    """Preenche o campo (input height=0 do Vuetify) com o nº da guia e sincroniza."""
+    inp = page.query_selector('input[type="text"]')
+    if not inp:
+        return False
+    inp.evaluate("el=>el.focus()")
+    page.wait_for_timeout(120)
+    page.keyboard.type(str(guia), delay=60)
+    inp.evaluate("""(el,v)=>{el.value=v;
+        el.dispatchEvent(new Event('input',{bubbles:true}));
+        el.dispatchEvent(new Event('change',{bubbles:true}));}""", str(guia))
+    page.wait_for_timeout(300)
+    return True
+
+
+def consultar_demonstrativo(page, guia) -> dict:
+    """Consulta o Demonstrativo de Pagamento de uma guia e devolve
+    {tem_dados, bruto, glosado, pago}. Depois clica em NOVA BUSCA p/ a próxima.
+    Deve ser chamado já na tela /demonstrativoPagamento (modo 'Número da guia')."""
+    out = {"tem_dados": False, "bruto": None, "glosado": None, "pago": False}
+    if not _demo_set_guia(page, guia):
+        return out
+    page.mouse.move(1100, 650)
+    page.wait_for_timeout(150)
+    btn = _btn_por_texto(page, "CONSULTAR")
+    if btn:
+        try:
+            btn.click(timeout=6000)
+        except Exception:
+            btn.click(force=True)
+    try:
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except Exception:
+        pass
+    page.wait_for_timeout(3000)
+    corpo = re.sub(r"\s+", " ", page.inner_text("body") or "")
+    mb = re.search(r"bruto[:\s]*R\$\s*([\d\.,]+)", corpo, re.I)
+    mg = re.search(r"glosado[:\s]*R\$\s*([\d\.,]+)", corpo, re.I)
+    out["bruto"] = _num_brl(mb.group(1)) if mb else None
+    out["glosado"] = _num_brl(mg.group(1)) if mg else None
+    sem_pg = "não há dados" in corpo.lower() or "nao ha dados" in corpo.lower()
+    # processado quando há valor bruto > 0; pago quando processado e há pagamento
+    out["tem_dados"] = bool(out["bruto"] and out["bruto"] > 0)
+    out["pago"] = bool(out["tem_dados"] and not sem_pg)
+    # reseta p/ a próxima guia
+    nb = _btn_por_texto(page, "NOVA BUSCA")
+    if nb:
+        try:
+            nb.click(force=True)
+        except Exception:
+            pass
+        page.wait_for_timeout(1200)
+    return out
+
+
+def classificar(glosa_cod, recurso_estado, demo=None) -> str:
     """Situação derivada (só do portal) para o panorama da empresária:
-      A_RECORRER          -> glosada e recurso disponível na guia
-      NAO_RECURSAVEL      -> recuperação de valores / sem opção de recurso
-      RECURSO_OU_RESOLVIDA-> recursável, mas a guia já não mostra eventos glosados
-                             (recurso provavelmente já enviado / em análise / resolvido)
-      GLOSADA             -> glosada (estado de recurso não verificado)."""
+      RECURSO_REJEITADO   -> glosa 2908: reanálise (recurso) feita incorretamente
+                             = JÁ passou pelo recurso e foi recusada (refazer).
+      RESOLVIDA           -> Demonstrativo: pago e sem glosa (recurso deferido/pago).
+      GLOSA_CONFIRMADA    -> Demonstrativo: glosa efetivada no pagamento (indeferida).
+      A_RECORRER          -> glosada e recurso disponível na guia.
+      RECURSO_OU_RESOLVIDA-> recursável, mas a guia já não mostra eventos glosados.
+      NAO_RECURSAVEL      -> recuperação de valores / sem opção de recurso.
+      GLOSADA             -> glosada (estado não verificado)."""
+    if glosa_cod in GLOSAS_RECURSO_JA_FEITO:
+        return "RECURSO_REJEITADO"
+    if demo and demo.get("tem_dados"):
+        if demo.get("pago") and (demo.get("glosado") or 0) == 0:
+            return "RESOLVIDA"
+        if (demo.get("glosado") or 0) > 0:
+            return "GLOSA_CONFIRMADA"
     nao_recursavel = glosa_cod in GLOSAS_NAO_RECURSAVEIS
     if recurso_estado == "RECURSAVEL":
         return "A_RECORRER"
     if recurso_estado == "SEM_GLOSADO":
         return "NAO_RECURSAVEL" if nao_recursavel else "RECURSO_OU_RESOLVIDA"
-    # sem checagem de recurso
     return "NAO_RECURSAVEL" if nao_recursavel else "GLOSADA"
 
 
 def extrair_unidade(pw, conta, label, dia_str, destino_dir, checar_recursos=True,
-                    log=print) -> dict:
-    """Extrai glosas de uma unidade: gera/parseia o PDF e (opcional) checa o
-    estado de recurso de cada guia distinta. Retorna {conta,label,periodo,eventos}."""
+                    checar_demonstrativo=True, log=print) -> dict:
+    """Extrai glosas de uma unidade: gera/parseia o PDF, checa o estado de recurso
+    de cada guia distinta e (opcional) cruza com o Demonstrativo de Pagamento
+    (resultado financeiro/recurso). Retorna {conta,label,periodo,eventos}."""
     user, pwd = conta, get_credentials_odonto()[1]
     os.makedirs(destino_dir, exist_ok=True)
     pdf_path = os.path.join(destino_dir, f"glosa_{conta}.pdf")
@@ -385,9 +465,37 @@ def extrair_unidade(pw, conta, label, dia_str, destino_dir, checar_recursos=True
             except Exception:
                 pass
 
+    demos = {}
+    if checar_demonstrativo and eventos:
+        guias = sorted({e["ficha"] for e in eventos})
+        log(f"[{label}] consultando demonstrativo de {len(guias)} guia(s)...")
+        b, c, page = login_odonto(pw, user, pwd)
+        try:
+            _abrir_topo(page, "Financeiro")
+            _clicar_subitem(page, "DEMONSTRATIVO")
+            page.wait_for_timeout(1200)
+            page.mouse.move(1100, 400)
+            page.mouse.click(1100, 400)  # fecha o flyout do menu lateral
+            page.wait_for_timeout(500)
+            for i, g in enumerate(guias, 1):
+                try:
+                    demos[g] = consultar_demonstrativo(page, g)
+                except Exception:
+                    demos[g] = None
+                if i % 10 == 0 or i == len(guias):
+                    log(f"[{label}]   demonstrativo {i}/{len(guias)}")
+        finally:
+            try:
+                b.close()
+            except Exception:
+                pass
+
     for e in eventos:
         e["conta"] = conta
         e["unidade"] = label
         e["recurso_estado"] = estados.get(e["ficha"], "NAO_CHECADO")
-        e["situacao"] = classificar(e["glosa_cod"], e["recurso_estado"])
+        demo = demos.get(e["ficha"])
+        e["demo_glosado"] = demo.get("glosado") if demo else None
+        e["demo_pago"] = bool(demo.get("pago")) if demo else False
+        e["situacao"] = classificar(e["glosa_cod"], e["recurso_estado"], demo)
     return {"conta": conta, "label": label, "dia": dia_str, "eventos": eventos}

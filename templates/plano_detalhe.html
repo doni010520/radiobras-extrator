@@ -57,7 +57,9 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 .gstack{display:flex;height:13px;border-radius:7px;overflow:hidden;background:var(--gray-200);}
 .gstack i{display:block;height:100%;}
 .s-A_RECORRER{background:var(--yellow-500);}.s-RECURSO_OU_RESOLVIDA{background:var(--blue-500);}
-.s-NAO_RECURSAVEL{background:var(--red-500);}.s-GLOSADA{background:var(--gray-400);}
+.s-RECURSO_REJEITADO{background:#e07b39;}.s-RESOLVIDA{background:var(--green-500);}
+.s-GLOSA_CONFIRMADA{background:var(--red-500);}
+.s-NAO_RECURSAVEL{background:#b06b6b;}.s-GLOSADA{background:var(--gray-400);}
 .gmrow{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px;}
 .gmrow .n{width:210px;color:var(--gray-600);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .gmrow .bar{flex:1;height:8px;border-radius:5px;background:var(--gray-200);overflow:hidden;}
@@ -191,18 +193,19 @@ async function carregar(){
 }
 
 // ── Glosas & Recurso (panorama embutido) ─────────────────────────────────────
-const GSIT=['A_RECORRER','RECURSO_OU_RESOLVIDA','NAO_RECURSAVEL','GLOSADA'];
-const GCL={A_RECORRER:'lau',RECURSO_OU_RESOLVIDA:'sim',NAO_RECURSAVEL:'err',GLOSADA:'outros'};
+let GSIT=['A_RECORRER','RECURSO_OU_RESOLVIDA','RECURSO_REJEITADO','RESOLVIDA','GLOSA_CONFIRMADA','NAO_RECURSAVEL','GLOSADA'];
+const GCL={A_RECORRER:'lau',RECURSO_OU_RESOLVIDA:'sim',RECURSO_REJEITADO:'err',RESOLVIDA:'anex',GLOSA_CONFIRMADA:'err',NAO_RECURSAVEL:'err',GLOSADA:'outros'};
 async function carregarGlosas(){
   let j;try{j=await (await fetch('/api/glosas')).json();}catch(e){return;}
   if(!j||!j.total)return;                       // sem glosas p/ esse plano: não mostra
   const meta=j.meta||{};
+  if(j.situacoes&&j.situacoes.length)GSIT=j.situacoes.map(s=>s[0]);
   $('glosaSec').style.display='';
   const cap=j.lotes&&j.lotes[0]?j.lotes[0].captured_at:null;
   $('glosaSub').textContent=`· ${j.total} glosas · período até ${j.dia}`+(cap?` · atualizado ${new Date(cap).toLocaleString('pt-BR')}`:'');
   const s=j.por_situacao||{};
   $('glosaChips').innerHTML=`<div class="chip"><div class="n">${j.total}</div><div class="l">Total glosas</div></div>`+
-    GSIT.map(k=>{const c=GCL[k];const cls=(c==='lau'||c==='err'||c==='sim')?(' '+c):'';
+    GSIT.map(k=>{const c=GCL[k];const cls=['anex','lau','err','sim'].includes(c)?(' '+c):'';
       return `<div class="chip${cls}"><div class="n">${s[k]||0}</div><div class="l">${(meta[k]||{}).label||k}</div></div>`;}).join('');
   $('glosaUnid').innerHTML=(j.por_unidade||[]).map(u=>{
     const segs=GSIT.map(k=>{const v=u[k]||0;if(!v)return'';

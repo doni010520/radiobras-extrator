@@ -98,6 +98,8 @@ class GlosaEvento(Base):
     glosa_motivo = Column(String(200))
     recurso_estado = Column(String(20))             # RECURSAVEL | SEM_GLOSADO | ...
     situacao = Column(String(30), index=True)       # A_RECORRER | NAO_RECURSAVEL | ...
+    demo_glosado = Column(String(20))               # valor glosado no Demonstrativo (R$)
+    demo_pago = Column(Boolean, default=False)       # houve pagamento no Demonstrativo?
 
 
 def init_db():
@@ -113,6 +115,8 @@ def _ensure_columns():
         "ALTER TABLE runs ADD COLUMN IF NOT EXISTS log TEXT",
         "ALTER TABLE runs ADD COLUMN IF NOT EXISTS plano VARCHAR(40) DEFAULT 'odontoprev'",
         "ALTER TABLE runs ADD COLUMN IF NOT EXISTS erro_msg TEXT",
+        "ALTER TABLE glosa_eventos ADD COLUMN IF NOT EXISTS demo_glosado VARCHAR(20)",
+        "ALTER TABLE glosa_eventos ADD COLUMN IF NOT EXISTS demo_pago BOOLEAN DEFAULT FALSE",
     ]
     for a in alters:
         try:
@@ -424,6 +428,9 @@ def itens_plano_periodo(plano: str, de_iso: str, ate_iso: str) -> dict:
 GLOSA_SITUACOES = [
     ("A_RECORRER", "A recorrer"),
     ("RECURSO_OU_RESOLVIDA", "Recurso enviado / em análise"),
+    ("RECURSO_REJEITADO", "Recurso recusado (refazer)"),
+    ("RESOLVIDA", "Resolvida (paga)"),
+    ("GLOSA_CONFIRMADA", "Glosa confirmada"),
     ("NAO_RECURSAVEL", "Não recursável"),
     ("GLOSADA", "Glosada"),
 ]
@@ -444,6 +451,9 @@ def salvar_glosas(lote: str, dia: str, eventos: list) -> int:
                 evento_cod=e.get("evento_cod", ""), evento=(e.get("evento") or "")[:200],
                 glosa_cod=e.get("glosa_cod", ""), glosa_motivo=(e.get("glosa_motivo") or "")[:200],
                 recurso_estado=e.get("recurso_estado", ""), situacao=e.get("situacao", ""),
+                demo_glosado=("" if e.get("demo_glosado") is None
+                              else f"{e.get('demo_glosado'):.2f}"),
+                demo_pago=bool(e.get("demo_pago")),
             ))
         s.commit()
         return len(eventos)
@@ -513,5 +523,5 @@ def glosa_eventos(lote: str = None, unidade: str = None, situacao: str = None) -
             "unidade": e.unidade, "conta": e.conta, "ficha": e.ficha,
             "paciente": e.paciente, "evento": e.evento, "glosa_cod": e.glosa_cod,
             "glosa_motivo": e.glosa_motivo, "recurso_estado": e.recurso_estado,
-            "situacao": e.situacao,
+            "situacao": e.situacao, "demo_glosado": e.demo_glosado, "demo_pago": e.demo_pago,
         } for e in q.all()]

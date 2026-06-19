@@ -58,7 +58,10 @@
   .stack i{display:block;height:100%}
   .seg-A_RECORRER{background:var(--warn)}
   .seg-RECURSO_OU_RESOLVIDA{background:var(--info)}
-  .seg-NAO_RECURSAVEL{background:var(--bad)}
+  .seg-RECURSO_REJEITADO{background:#e07b39}
+  .seg-RESOLVIDA{background:var(--accent2)}
+  .seg-GLOSA_CONFIRMADA{background:var(--bad)}
+  .seg-NAO_RECURSAVEL{background:#b06b6b}
   .seg-GLOSADA{background:var(--neutral)}
   .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px}
   .legend span{display:inline-flex;align-items:center;gap:6px}
@@ -77,6 +80,8 @@
   .pill.bad{background:rgba(210,75,75,.16);color:var(--bad)}
   .pill.info{background:rgba(59,130,196,.16);color:var(--info)}
   .pill.neutral{background:rgba(122,136,154,.16);color:var(--neutral)}
+  .pill.ok{background:rgba(52,200,142,.16);color:var(--accent)}
+  .pill.rej{background:rgba(224,123,57,.18);color:#e07b39}
   .empty{text-align:center;color:var(--muted);padding:50px 20px}
   .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
   /* modal */
@@ -154,13 +159,14 @@ function applyTheme(t){document.documentElement.setAttribute('data-theme',t);
 function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark')}
 applyTheme(document.documentElement.getAttribute('data-theme')||'dark');
 
-const SIT_ORDER=['A_RECORRER','RECURSO_OU_RESOLVIDA','NAO_RECURSAVEL','GLOSADA'];
+let SIT_ORDER=['A_RECORRER','RECURSO_OU_RESOLVIDA','RECURSO_REJEITADO','RESOLVIDA','GLOSA_CONFIRMADA','NAO_RECURSAVEL','GLOSADA'];
 
 async function carregar(){
   const lote=$('lote').value;
   const r=await fetch('/api/glosas'+(lote?('?lote='+lote):''));
   DATA=await r.json(); META=DATA.meta||{};
   if(DATA.error){$('sub').textContent='Erro: '+DATA.error;return;}
+  if(DATA.situacoes&&DATA.situacoes.length)SIT_ORDER=DATA.situacoes.map(s=>s[0]);
   // seletor de lotes
   if(!$('lote').dataset.filled){
     $('lote').innerHTML=(DATA.lotes||[]).map(l=>{
