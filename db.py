@@ -114,6 +114,7 @@ class AnexacaoGto(Base):
     unidade = Column(String(60), index=True)
     gto = Column(String(30), index=True)
     paciente = Column(String(200))
+    liberacao = Column(String(10))                  # data de liberação da senha (DD/MM/AAAA)
     status = Column(String(80))
     qtd_anexos = Column(Integer, default=0)
     categoria = Column(String(20), index=True)
@@ -134,6 +135,7 @@ def _ensure_columns():
         "ALTER TABLE runs ADD COLUMN IF NOT EXISTS erro_msg TEXT",
         "ALTER TABLE glosa_eventos ADD COLUMN IF NOT EXISTS demo_glosado VARCHAR(20)",
         "ALTER TABLE glosa_eventos ADD COLUMN IF NOT EXISTS demo_pago BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE anexacao_gtos ADD COLUMN IF NOT EXISTS liberacao VARCHAR(10)",
     ]
     for a in alters:
         try:
@@ -570,7 +572,8 @@ def salvar_anexacao(lote: str, de: str, ate: str, gtos: list) -> int:
             s.add(AnexacaoGto(
                 lote=lote, de=de, ate=ate, conta=g.get("conta", ""),
                 unidade=g.get("unidade", ""), gto=str(g.get("gto", "")),
-                paciente=(g.get("paciente") or "")[:200], status=(g.get("status") or "")[:80],
+                paciente=(g.get("paciente") or "")[:200], liberacao=(g.get("liberacao") or "")[:10],
+                status=(g.get("status") or "")[:80],
                 qtd_anexos=int(g.get("qtd_anexos", 0) or 0), categoria=g.get("categoria", ""),
             ))
         s.commit()
@@ -629,8 +632,8 @@ def anexacao_gtos(lote: str = None, unidade: str = None, categoria: str = None) 
             q = q.filter(AnexacaoGto.categoria == categoria)
         q = q.order_by(AnexacaoGto.unidade, AnexacaoGto.categoria, AnexacaoGto.gto)
         return [{"unidade": g.unidade, "conta": g.conta, "gto": g.gto,
-                 "paciente": g.paciente, "status": g.status, "qtd_anexos": g.qtd_anexos,
-                 "categoria": g.categoria} for g in q.all()]
+                 "paciente": g.paciente, "liberacao": g.liberacao or "", "status": g.status,
+                 "qtd_anexos": g.qtd_anexos, "categoria": g.categoria} for g in q.all()]
 
 
 def glosa_eventos(lote: str = None, unidade: str = None, situacao: str = None) -> list:

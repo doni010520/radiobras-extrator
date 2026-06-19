@@ -27,6 +27,10 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .chips{display:grid;grid-template-columns:repeat(auto-fill,minmax(212px,1fr));gap:12px;margin-bottom:20px;}
 .seclabel{font-size:12.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--gray-500);font-weight:700;margin:0 0 14px;display:flex;align-items:center;gap:8px;}
 .seclabel .sn{font-size:12px;color:var(--gray-400);text-transform:none;letter-spacing:0;font-weight:400;}
+.sectitle{font-size:23px;font-weight:700;margin:0 0 18px;color:var(--gray-900);display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.sectitle .acts{margin-left:auto;display:flex;gap:16px;}
+.sectitle .acts a{color:var(--green-700);text-decoration:none;font-size:13px;font-weight:600;}
+.sectitle .acts a:hover{text-decoration:underline;}
 .seclabel .acts{margin-left:auto;display:flex;gap:16px;text-transform:none;letter-spacing:0;}
 .seclabel .acts a{color:var(--green-700);text-decoration:none;font-size:13px;font-weight:600;}
 .seclabel .acts a:hover{text-decoration:underline;}
@@ -40,6 +44,15 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .dleg a:hover{color:var(--green-700);}
 .dleg i{width:11px;height:11px;border-radius:3px;}
 .dleg b{font-weight:700;}
+.gtofiltros{display:flex;flex-direction:column;gap:9px;margin:0 0 16px;}
+.ffield{display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+.ffield .flabel{font-size:11.5px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.4px;min-width:78px;}
+.fchip{background:var(--gray-100);border:1px solid var(--gray-200);color:var(--gray-600);border-radius:100px;padding:5px 12px;font-size:12.5px;cursor:pointer;font-family:inherit;transition:.12s;}
+.fchip:hover{border-color:var(--green-500);}
+.fchip.on{background:var(--green-100);border-color:var(--green-600);color:var(--green-700);font-weight:600;}
+.fchip.todas{background:none;text-decoration:underline;border-color:transparent;color:var(--green-700);}
+.gtofiltros select{background:#fff;border:1px solid var(--gray-300);border-radius:8px;padding:6px 9px;font-size:13px;color:var(--gray-900);}
+[data-theme="dark"] .gtofiltros select{background:var(--green-900);border-color:rgba(52,200,142,.22);color:var(--gray-900);}
 .chip{background:#fff;border:1px solid var(--gray-200);border-radius:12px;padding:14px 16px;min-height:104px;display:flex;flex-direction:column;}
 .chip .n{font-size:24px;font-weight:700;line-height:1;}
 .chip .l{font-size:12.5px;color:var(--gray-700);margin-top:5px;font-weight:700;}
@@ -161,7 +174,7 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   <h1 class="page-title" id="title">{{ nome or slug }}</h1>
   <p class="page-sub" id="sub">Carregando…</p>
   <a class="topbtn" href="/?run={{ slug }}"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg> Faturar dia</a>
-  <h2 class="seclabel" style="margin-top:24px">📎 Anexação &amp; Faturamento <span class="sn" id="anxSub"></span></h2>
+  <h2 class="sectitle" style="margin-top:24px">FATURAMENTO</h2>
   <div class="anxbar">
     <span id="anxLoteWrap" style="display:none"><span class="sep">varredura:</span>
       <select id="anxLote" onchange="verLote()" title="Ver uma varredura anterior"></select>
@@ -174,7 +187,7 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   <div class="chips" id="anxChips"><div class="empty">Carregando…</div></div>
 
   <div id="glosaTop" style="display:none">
-    <h2 class="seclabel" style="margin-top:26px">🩹 Glosas &amp; Recurso <span class="sn" id="glosaSub"></span>
+    <h2 class="sectitle" style="margin-top:26px">GLOSAS &amp; RECURSO
       <span class="acts">
         <a id="glosaXlsx" href="/glosas.xlsx">⬇ Excel</a>
         <a id="glosaPdf" href="/glosas.pdf">⬇ PDF</a>
@@ -187,8 +200,7 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 
   <div class="secdiv"></div>
   <h2 class="seclabel">📋 GTOs <span class="sn" id="anxTabLbl"></span></h2>
-  <div class="filtrobar" id="anxFiltro" style="display:none">Mostrando: <b id="anxFiltroNome"></b> · <span id="anxFiltroN"></span> GTO(s)
-    <button class="clearf" onclick="setCat('')">ver todas</button></div>
+  <div class="gtofiltros" id="gtoFiltros"></div>
   <div id="anxTabela"><div class="empty">Carregando…</div></div>
 
   <div id="glosaSec" style="display:none">
@@ -239,7 +251,7 @@ const GDESC={A_RECORRER:'Glosada — ainda dá pra recorrer',
   GLOSA_CONFIRMADA:'Glosa mantida no pagamento',
   NAO_RECURSAVEL:'Recuperação de valores — sem recurso',
   GLOSADA:'Recurso ainda não verificado'};
-let ANX=null, anxCat='';
+let ANX=null;
 function fmtHora(iso){if(!iso)return'';try{return new Date(iso).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return'';}}
 function fmtBRL(v){return (v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
 
@@ -263,16 +275,14 @@ async function carregarAnexacao(){
   if(!$('anxDe').value)$('anxDe').value=DE;
   if(!$('anxAte').value)$('anxAte').value=ATE;
   if(!j.total){
-    $('anxSub').textContent='';
-    $('anxChips').innerHTML='<div class="empty">Sem varredura ainda. Clique em “Atualizar agora”.</div>';
+    $('anxChips').innerHTML='<div class="empty">Sem varredura ainda. Clique em “Consultar período”.</div>';
     $('anxTabela').innerHTML=''; $('anxTabLbl').textContent=''; return;
   }
-  const cap=j.lotes&&j.lotes[0]?j.lotes[0].captured_at:null;
-  $('anxSub').textContent=`· ${j.total} GTOs · período de ${j.de} até ${j.ate}`+(cap?` · varrido ${new Date(cap).toLocaleString('pt-BR')}`:'');
   const ord=(j.categorias||[]).map(c=>c[0]), c=j.por_categoria||{};
+  buildGtoFiltros();
   $('anxChips').innerHTML=ord.map(k=>{const m=meta[k]||{};
     if(!(c[k]||0)&&k==='ERRO')return'';
-    const act=anxCat===k?' active':'';
+    const act=(fSit.size===1&&fSit.has(k))?' active':'';
     return `<div class="chip click ${ANXCL[k]||''}${act}" data-k="${k}" onclick="setCat('${k}')" title="Ver as GTOs: ${m.label||k}">
       <div class="n">${c[k]||0}</div><div class="l">${m.label||k}</div><div class="cd">${m.desc||''}</div></div>`;}).join('');
   $('anxDonutRow').style.display='';
@@ -283,24 +293,61 @@ async function carregarAnexacao(){
     const cp=new URLSearchParams(location.search).get('cat');
     if(cp&&(ANX.por_categoria||{})[cp]!==undefined)setCat(cp);}
 }
+
+// ── Filtros (multi) + ordenação da tabela de GTOs ────────────────────────────
+let fUni=new Set(), fStat=new Set(), fSit=new Set(), allUni=[], allStat=[], allSit=[], sortKey='paciente', filtrosInit=false;
+function buildGtoFiltros(){
+  const gs=ANX.gtos||[];
+  allUni=[...new Set(gs.map(g=>g.unidade))].sort();
+  allStat=[...new Set(gs.map(g=>g.status))].sort();
+  allSit=(ANX.categorias||[]).map(c=>c[0]).filter(k=>gs.some(g=>g.categoria===k));
+  if(!filtrosInit){filtrosInit=true;fUni=new Set(allUni);fStat=new Set(allStat);fSit=new Set(allSit);}
+  renderFiltros();
+}
+function renderFiltros(){
+  const meta=ANX.meta||{};
+  const grp=(g,vals,set,lab,titulo)=>`<div class="ffield"><span class="flabel">${titulo}:</span>`+
+    `<button class="fchip todas" data-g="${g}" data-all="1">Todas</button>`+
+    vals.map(v=>`<button class="fchip${set.has(v)?' on':''}" data-g="${g}" data-v="${encodeURIComponent(v)}">${lab(v)}</button>`).join('')+`</div>`;
+  $('gtoFiltros').innerHTML=
+    grp('uni',allUni,fUni,v=>v,'Unidade')+
+    grp('stat',allStat,fStat,v=>v,'Status')+
+    grp('sit',allSit,fSit,v=>(meta[v]||{}).label||v,'Situação')+
+    `<div class="ffield"><span class="flabel">Ordenar:</span>
+      <select id="gtoSort" onchange="setSort(this.value)">
+        <option value="paciente">Paciente (A–Z)</option>
+        <option value="data_desc">Data ↓ recente</option>
+        <option value="data_asc">Data ↑ antiga</option></select></div>`;
+  $('gtoSort').value=sortKey;
+  $('gtoFiltros').querySelectorAll('.fchip').forEach(b=>b.onclick=()=>{
+    const g=b.dataset.g, set=g==='uni'?fUni:g==='stat'?fStat:fSit, all=g==='uni'?allUni:g==='stat'?allStat:allSit;
+    if(b.dataset.all){all.forEach(x=>set.add(x));}
+    else{const v=decodeURIComponent(b.dataset.v); if(set.has(v))set.delete(v); else set.add(v);}
+    renderFiltros(); refreshCards(); renderAnxTab();
+  });
+}
+function setSort(v){sortKey=v;renderAnxTab();}
 function setCat(k){
-  anxCat=(anxCat===k)?'':k;
-  document.querySelectorAll('#anxChips .chip').forEach(x=>x.classList.toggle('active',x.dataset.k===anxCat));
-  renderAnxTab();
+  if(!k){fSit=new Set(allSit);}else{fSit=new Set([k]);}
+  renderFiltros(); refreshCards(); renderAnxTab();
   $('anxTabela').scrollIntoView({behavior:'smooth',block:'start'});
 }
+function refreshCards(){document.querySelectorAll('#anxChips .chip').forEach(x=>x.classList.toggle('active',fSit.size===1&&fSit.has(x.dataset.k)));}
+function dnum(br){if(!br)return 0;const p=br.split('/');return p.length===3?+(p[2]+p[1]+p[0]):0;}
 function renderAnxTab(){
   const meta=ANX.meta||{};
-  const rows=(ANX.gtos||[]).filter(g=>!anxCat||g.categoria===anxCat);
-  $('anxFiltro').style.display=anxCat?'':'none';
-  if(anxCat){$('anxFiltroNome').textContent=(meta[anxCat]||{}).label||anxCat;$('anxFiltroN').textContent=rows.length;}
-  $('anxTabLbl').textContent=anxCat?'':`· ${(ANX.gtos||[]).length} no total`;
+  let rows=(ANX.gtos||[]).filter(g=>fUni.has(g.unidade)&&fStat.has(g.status)&&fSit.has(g.categoria));
+  if(sortKey==='paciente')rows.sort((a,b)=>(a.paciente||'').localeCompare(b.paciente||'','pt'));
+  else if(sortKey==='data_desc')rows.sort((a,b)=>dnum(b.liberacao)-dnum(a.liberacao));
+  else if(sortKey==='data_asc')rows.sort((a,b)=>dnum(a.liberacao)-dnum(b.liberacao));
+  $('anxTabLbl').textContent=`· ${rows.length} de ${(ANX.gtos||[]).length}`;
   if(!rows.length){$('anxTabela').innerHTML='<div class="empty">Nenhuma GTO nesse filtro.</div>';return;}
   $('anxTabela').innerHTML=`<div class="daycard"><table><thead><tr>
-    <th>Unidade</th><th>GTO</th><th>Paciente</th><th>Status</th><th>Anexos</th><th>Situação</th></tr></thead><tbody>${
+    <th>Unidade</th><th>GTO</th><th>Liberação</th><th>Paciente</th><th>Status</th><th>Anexos</th><th>Situação</th></tr></thead><tbody>${
     rows.map(g=>{const m=meta[g.categoria]||{};
       return `<tr><td>${g.unidade}</td>
         <td><a class="gtolink" href="${PORTAL_GTO}${g.gto}" target="_blank" rel="noopener" title="Abrir no portal RedeUna (precisa estar logado na unidade)">${g.gto} ↗</a></td>
+        <td class="gto">${g.liberacao||'—'}</td>
         <td>${g.paciente||'—'}</td><td>${g.status||'—'}</td><td>${g.qtd_anexos}</td>
         <td><span class="badge ${ANXCL[g.categoria]||'outros'}">${m.label||g.categoria}</span></td></tr>`;}).join('')
     }</tbody></table></div>`;
@@ -342,9 +389,6 @@ async function carregarGlosas(){
   const meta=j.meta||{};
   if(j.situacoes&&j.situacoes.length)GSIT=j.situacoes.map(s=>s[0]);
   $('glosaTop').style.display=''; $('glosaSec').style.display='';
-  const cap=j.lotes&&j.lotes[0]?j.lotes[0].captured_at:null;
-  const gfim=j.dia||'', gini=gfim?('01/'+gfim.slice(3)):'';
-  $('glosaSub').textContent=`· ${j.total} glosas · 💰 ${fmtBRL(j.total_glosado)} glosado · período de ${gini} até ${gfim}`+(cap?` · atualizado ${new Date(cap).toLocaleString('pt-BR')}`:'');
   const s=j.por_situacao||{}, g=j.glosado_situacao||{};
   $('glosaChips').innerHTML=`<a class="chip" href="/glosas" style="cursor:pointer;text-decoration:none;color:inherit" title="Ver todas as glosas no painel">
       <div class="n">${j.total}</div><div class="l">Total de glosas</div>
