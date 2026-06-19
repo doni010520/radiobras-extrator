@@ -206,7 +206,9 @@ async function carregarGlosas(){
   const s=j.por_situacao||{};
   $('glosaChips').innerHTML=`<div class="chip"><div class="n">${j.total}</div><div class="l">Total glosas</div></div>`+
     GSIT.map(k=>{const c=GCL[k];const cls=['anex','lau','err','sim'].includes(c)?(' '+c):'';
-      return `<div class="chip${cls}"><div class="n">${s[k]||0}</div><div class="l">${(meta[k]||{}).label||k}</div></div>`;}).join('');
+      return `<a class="chip${cls}" href="/glosas?sit=${k}" style="cursor:pointer;text-decoration:none;color:inherit;display:block"
+        title="Ver as GTOs com status ${(meta[k]||{}).label||k}">
+        <div class="n">${s[k]||0}</div><div class="l">${(meta[k]||{}).label||k}</div></a>`;}).join('');
   $('glosaUnid').innerHTML=(j.por_unidade||[]).map(u=>{
     const segs=GSIT.map(k=>{const v=u[k]||0;if(!v)return'';
       return `<i class="s-${k}" style="width:${(v/u.total*100).toFixed(1)}%" title="${(meta[k]||{}).label||k}: ${v}"></i>`;}).join('');

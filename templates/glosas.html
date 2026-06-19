@@ -83,7 +83,27 @@
   .pill.ok{background:rgba(52,200,142,.16);color:var(--accent)}
   .pill.rej{background:rgba(224,123,57,.18);color:#e07b39}
   .empty{text-align:center;color:var(--muted);padding:50px 20px}
-  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+  /* donut de status */
+  .donut-wrap{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+  .donut{width:190px;height:190px;flex:0 0 auto;transform:rotate(-90deg)}
+  .donut .seg{cursor:pointer;transition:opacity .15s,stroke-width .15s}
+  .donut .seg:hover{opacity:.82;stroke-width:7}
+  .donut-center{font-weight:800}
+  .leg{display:flex;flex-direction:column;gap:7px;min-width:230px;flex:1}
+  .leg button{display:flex;align-items:center;gap:9px;background:none;border:1px solid transparent;
+       border-radius:8px;padding:6px 9px;cursor:pointer;color:var(--ink);font-size:13.5px;text-align:left;transition:.12s}
+  .leg button:hover{border-color:var(--line);background:rgba(127,127,127,.06)}
+  .leg button.active{border-color:var(--accent);background:rgba(52,200,142,.08)}
+  .leg .sw{width:13px;height:13px;border-radius:4px;flex:0 0 auto}
+  .leg .lq{margin-left:auto;font-weight:700;font-variant-numeric:tabular-nums}
+  .kpi.click{cursor:pointer;transition:.15s}
+  .kpi.click:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .kpi.click.active{border-color:var(--accent);box-shadow:0 0 0 2px rgba(52,200,142,.25)}
+  .gtolink{color:var(--accent);text-decoration:none;font-variant-numeric:tabular-nums;font-weight:600}
+  .gtolink:hover{text-decoration:underline}
+  .clearf{font-size:12.5px;color:var(--muted);cursor:pointer;text-decoration:underline;background:none;border:none}
+  .hint{font-size:12px;color:var(--muted);margin:8px 0 0}
   /* modal */
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:50}
   .modal.show{display:flex}
@@ -116,6 +136,14 @@
     <a class="btn primary" id="btnPdf" href="/glosas.pdf">⬇ PDF</a>
   </div>
 
+  <div class="panel" id="statusPanel" style="margin-bottom:18px">
+    <h3>Estado das GTOs por status <span class="hint" style="margin-left:6px">(clique para filtrar)</span></h3>
+    <div class="donut-wrap">
+      <svg class="donut" id="donut" viewBox="0 0 42 42"></svg>
+      <div class="leg" id="legenda2"></div>
+    </div>
+  </div>
+
   <div class="kpis" id="kpis"></div>
 
   <div class="grid2">
@@ -135,7 +163,9 @@
     <div class="filters">
       <select id="fUnidade" onchange="renderTabela()"><option value="">Todas as unidades</option></select>
       <select id="fSituacao" onchange="renderTabela()"><option value="">Todas as situações</option></select>
+      <button class="clearf" onclick="limparFiltro()">limpar filtro</button>
     </div>
+    <p class="hint">Clique no número da GTO para abri-la direto no portal RedeUna (é preciso estar logado na unidade correspondente).</p>
     <div id="tabela"></div>
   </div>
 </div>
@@ -160,6 +190,9 @@ function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-th
 applyTheme(document.documentElement.getAttribute('data-theme')||'dark');
 
 let SIT_ORDER=['A_RECORRER','RECURSO_OU_RESOLVIDA','RECURSO_REJEITADO','RESOLVIDA','GLOSA_CONFIRMADA','NAO_RECURSAVEL','GLOSADA'];
+const SIT_COLORS={A_RECORRER:'#e0a020',RECURSO_OU_RESOLVIDA:'#5aa6e0',RECURSO_REJEITADO:'#e07b39',RESOLVIDA:'#34C88E',GLOSA_CONFIRMADA:'#e06464',NAO_RECURSAVEL:'#b06b6b',GLOSADA:'#8395a6'};
+const PORTAL_GTO='https://credenciado.odontoprev.com.br/portal/guia/';
+let curFilter='';
 
 async function carregar(){
   const lote=$('lote').value;
@@ -184,7 +217,48 @@ async function carregar(){
     $('tabela').innerHTML='<div class="empty">Nenhuma glosa carregada.</div>';return;}
   const capTxt=cap?(' · atualizado '+new Date(cap).toLocaleString('pt-BR')):'';
   $('sub').textContent=`Período: do 1º dia do mês até ${DATA.dia} · 3 unidades${capTxt}`;
-  renderKpis(); renderUnidades(); renderMotivos(); fillFiltros(); renderTabela();
+  renderDonut(); renderKpis(); renderUnidades(); renderMotivos(); fillFiltros(); renderTabela();
+  if(!window._urlApplied){window._urlApplied=1;
+    const u=new URLSearchParams(location.search), su=u.get('unidade'), si=u.get('sit');
+    if(su)$('fUnidade').value=su;
+    if(si){$('fSituacao').value=si;curFilter=si;}
+    if(su||si){renderTabela();marcarAtivos();
+      document.querySelector('.panel:last-of-type').scrollIntoView({behavior:'smooth',block:'start'});}}
+}
+
+function renderDonut(){
+  const s=DATA.por_situacao||{}, tot=DATA.total||0;
+  let acc=0, svg=`<circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--line)" stroke-width="6"/>`;
+  SIT_ORDER.filter(k=>(s[k]||0)>0).forEach(k=>{
+    const pct=s[k]/tot*100;
+    svg+=`<circle class="seg" data-k="${k}" cx="21" cy="21" r="15.915" fill="none"
+      stroke="${SIT_COLORS[k]}" stroke-width="6"
+      stroke-dasharray="${pct.toFixed(2)} ${(100-pct).toFixed(2)}" stroke-dashoffset="${(100-acc).toFixed(2)}">
+      <title>${(META[k]||{}).label||k}: ${s[k]}</title></circle>`;
+    acc+=pct;
+  });
+  svg+=`<text class="donut-center" x="21" y="20.5" text-anchor="middle" font-size="7" transform="rotate(90 21 21)" fill="var(--ink)">${tot}</text>
+        <text x="21" y="25.5" text-anchor="middle" font-size="2.7" transform="rotate(90 21 21)" fill="var(--muted)">GTOs glosadas</text>`;
+  $('donut').innerHTML=svg;
+  $('donut').querySelectorAll('.seg').forEach(c=>c.onclick=()=>setSituacao(c.dataset.k));
+  $('legenda2').innerHTML=SIT_ORDER.map(k=>{
+    const v=s[k]||0, m=META[k]||{};
+    return `<button data-k="${k}" onclick="setSituacao('${k}')">
+      <span class="sw" style="background:${SIT_COLORS[k]}"></span>${m.label||k}
+      <span class="lq">${v}</span></button>`;
+  }).join('');
+  marcarAtivos();
+}
+
+function setSituacao(k){
+  curFilter=(curFilter===k)?'':k;
+  $('fSituacao').value=curFilter;
+  renderTabela(); marcarAtivos();
+  document.querySelector('.panel:last-of-type').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function marcarAtivos(){
+  document.querySelectorAll('.leg button').forEach(b=>b.classList.toggle('active',b.dataset.k===curFilter));
+  document.querySelectorAll('.kpi.click').forEach(c=>c.classList.toggle('active',c.dataset.k===curFilter));
 }
 
 function renderKpis(){
@@ -192,11 +266,12 @@ function renderKpis(){
   let h=`<div class="kpi"><div class="n">${DATA.total}</div><div class="l">Total de glosas</div>
          <div class="bar" style="background:var(--accent)"></div></div>`;
   for(const k of SIT_ORDER){
-    const m=META[k]||{}; const cls=m.cls||'neutral';
-    h+=`<div class="kpi"><div class="n">${s[k]||0}</div><div class="l">${(m.label||k)}</div>
+    const m=META[k]||{};
+    h+=`<div class="kpi click" data-k="${k}" onclick="setSituacao('${k}')" title="Filtrar ${m.label||k}">
+        <div class="n">${s[k]||0}</div><div class="l">${(m.label||k)}</div>
         <div class="bar seg-${k}"></div></div>`;
   }
-  $('kpis').innerHTML=h;
+  $('kpis').innerHTML=h; marcarAtivos();
 }
 function renderUnidades(){
   const us=DATA.por_unidade||[];
@@ -224,15 +299,20 @@ function fillFiltros(){
     u.dataset.filled='1';
   }
 }
+function limparFiltro(){curFilter='';$('fUnidade').value='';$('fSituacao').value='';renderTabela();marcarAtivos();}
 function renderTabela(){
   const fu=$('fUnidade').value, fs=$('fSituacao').value;
+  curFilter=fs; marcarAtivos();
   const rows=(DATA.eventos||[]).filter(e=>(!fu||e.unidade===fu)&&(!fs||e.situacao===fs));
   if(!rows.length){$('tabela').innerHTML='<div class="empty">Nenhuma glosa para o filtro.</div>';return;}
   $('tabela').innerHTML=`<table><thead><tr>
     <th>Unidade</th><th>Guia</th><th>Paciente</th><th>Procedimento</th><th>Motivo</th><th>Situação</th>
     </tr></thead><tbody>${rows.map(e=>{
       const m=META[e.situacao]||{};
-      return `<tr><td>${e.unidade}</td><td>${e.ficha}</td><td>${e.paciente||'—'}</td>
+      return `<tr><td>${e.unidade}</td>
+        <td><a class="gtolink" href="${PORTAL_GTO}${e.ficha}" target="_blank" rel="noopener"
+           title="Abrir esta GTO no portal RedeUna (precisa estar logado na unidade)">${e.ficha} ↗</a></td>
+        <td>${e.paciente||'—'}</td>
         <td>${e.evento||'—'}</td><td title="${e.glosa_cod}">${e.glosa_motivo||'—'}</td>
         <td><span class="pill ${m.cls||'neutral'}">${m.label||e.situacao}</span></td></tr>`;
     }).join('')}</tbody></table>`;
