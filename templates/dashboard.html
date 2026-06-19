@@ -17,7 +17,8 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 .icon-sm{width:16px;height:16px;}.icon-lg{width:24px;height:24px;}
 .topnav{background:var(--green-900);height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 32px;position:fixed;top:0;left:0;right:0;z-index:100;}
 .topnav-brand{display:flex;align-items:center;gap:12px;}
-.topnav-logo{width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--green-900);font-weight:700;font-size:14px;}
+.topnav-logo{height:46px;display:flex;align-items:center;justify-content:center;}
+.topnav-logo img{height:46px;width:auto;display:block;}
 .topnav-title{color:#fff;font-size:18px;font-weight:600;}
 .topnav-menu{display:flex;gap:8px;}
 .topnav-link{color:rgba(255,255,255,.7);text-decoration:none;padding:8px 16px;border-radius:6px;font-size:14px;font-weight:500;transition:all .2s;display:flex;align-items:center;gap:6px;cursor:pointer;}
@@ -170,7 +171,7 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 [data-theme="dark"] .card,[data-theme="dark"] .stat-card{border-color:rgba(52,200,142,.10);transition:border-color .2s,box-shadow .2s;}
 [data-theme="dark"] .card:hover,[data-theme="dark"] .stat-card:hover{border-color:rgba(52,200,142,.26);box-shadow:var(--glow);}
 [data-theme="dark"] .topnav{background:rgba(6,18,12,.85);backdrop-filter:saturate(130%) blur(10px);border-bottom:1px solid rgba(52,200,142,.16);box-shadow:0 4px 18px rgba(0,0,0,.4);}
-[data-theme="dark"] .topnav-logo{background:rgba(52,200,142,.10)!important;box-shadow:0 0 10px rgba(52,200,142,.22);}
+[data-theme="dark"] .topnav-logo{filter:drop-shadow(0 0 6px rgba(52,200,142,.25));}
 [data-theme="dark"] .brand-glyph{stroke:var(--neon);filter:drop-shadow(0 0 3px rgba(52,200,142,.4));}
 [data-theme="dark"] .tt-accent{color:var(--neon);text-shadow:0 0 6px rgba(52,200,142,.3);}
 [data-theme="dark"] .topnav-link:hover,[data-theme="dark"] .topnav-link.active{background:rgba(52,200,142,.1);color:#fff;}
@@ -215,7 +216,7 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 </svg>
 
 <nav class="topnav">
-  <div class="topnav-brand"><div class="topnav-logo"><svg class="brand-glyph" viewBox="0 0 24 24"><use href="#i-tooth"/></svg></div><span class="topnav-title">RadioBras<span class="tt-accent"> Digital</span></span></div>
+  <div class="topnav-brand"><div class="topnav-logo"><img src="/static/mascote.png" alt="RadioBras Digital"></div><span class="topnav-title">RadioBras<span class="tt-accent"> Digital</span></span></div>
   <div class="topnav-menu">
     <a class="topnav-link active">Dashboard</a>
     <a class="topnav-link" href="/gtos">GTOs</a>

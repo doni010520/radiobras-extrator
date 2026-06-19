@@ -47,6 +47,8 @@ relatorio*.json
 *.png
 *.jpg
 *.jpeg
+# Exceção: assets de marca (logo) — sem PII, precisam ir pro deploy.
+!static/*.png
 pagina_gtos.*
 gtos_dados.json
 gtos_resultados.html

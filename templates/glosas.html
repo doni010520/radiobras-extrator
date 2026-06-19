@@ -24,10 +24,10 @@
   a{color:var(--accent)}
   .wrap{max-width:1180px;margin:0 auto;padding:20px 18px 60px}
   .top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;flex-wrap:wrap}
-  .brand{display:flex;align-items:center;gap:10px}
+  .brand{display:flex;align-items:center;gap:12px}
   .brand h1{font-size:21px;margin:0;font-weight:700}
-  .brand .dot{width:10px;height:10px;border-radius:50%;background:var(--accent2);
-       box-shadow:0 0 8px var(--accent2)}
+  .brand img{height:44px;width:auto;display:block}
+  [data-theme="dark"] .brand img{filter:drop-shadow(0 0 6px rgba(52,200,142,.25))}
   .nav-right{display:flex;align-items:center;gap:8px}
   .sub{color:var(--muted);font-size:13px;margin:2px 0 18px}
   .btn{border:1px solid var(--line);background:var(--card);color:var(--ink);
@@ -120,7 +120,7 @@
 <body>
 <div class="wrap">
   <div class="top">
-    <div class="brand"><span class="dot"></span><h1>Panorama de Glosas</h1></div>
+    <div class="brand"><img src="/static/mascote.png" alt="RadioBras Digital"><h1>Panorama de Glosas</h1></div>
     <div class="nav-right">
       <a class="btn" href="/">← Dashboard</a>
       <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙</button>

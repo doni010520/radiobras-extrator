@@ -16,7 +16,8 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .icon{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
 .topnav{background:var(--green-900);height:64px;display:flex;align-items:center;justify-content:space-between;padding:0 32px;position:fixed;top:0;left:0;right:0;z-index:100;}
 .topnav-brand{display:flex;align-items:center;gap:12px;}
-.topnav-logo{width:36px;height:36px;background:#fff;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--green-900);font-weight:700;font-size:14px;}
+.topnav-logo{height:46px;display:flex;align-items:center;justify-content:center;}
+.topnav-logo img{height:46px;width:auto;display:block;}
 .topnav-title{color:#fff;font-size:18px;font-weight:600;}
 .topnav a{color:rgba(255,255,255,.85);text-decoration:none;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;}
 .main{margin-top:64px;padding:32px;max-width:1100px;margin-left:auto;margin-right:auto;}
@@ -91,7 +92,7 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 }
 [data-theme="dark"] body{background:radial-gradient(900px 500px at 85% -8%,rgba(52,200,142,.04),transparent 60%),var(--gray-50);color:var(--gray-900);}
 [data-theme="dark"] .topnav{background:rgba(6,18,12,.85);backdrop-filter:blur(10px);border-bottom:1px solid rgba(52,200,142,.16);box-shadow:0 4px 18px rgba(0,0,0,.4);}
-[data-theme="dark"] .topnav-logo{background:rgba(52,200,142,.10)!important;color:var(--neon)!important;box-shadow:0 0 10px rgba(52,200,142,.22);}
+[data-theme="dark"] .topnav-logo{filter:drop-shadow(0 0 6px rgba(52,200,142,.25));}
 [data-theme="dark"] .brand-glyph{stroke:var(--neon);filter:drop-shadow(0 0 3px rgba(52,200,142,.4));}
 [data-theme="dark"] .tt-accent{color:var(--neon);}
 [data-theme="dark"] .chip,[data-theme="dark"] .daycard{background:var(--green-900);border-color:rgba(52,200,142,.12);transition:border-color .2s,box-shadow .2s;}
@@ -109,7 +110,7 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 <symbol id="i-tooth" viewBox="0 0 24 24"><path d="M12 2C9.5 2 7.5 3.5 7 5.5 6.5 7.5 6 9 5 11s-1 4 0 6 2 4 3.5 5c.5.3 1 0 1-.5 0-1.5.5-3.5 1-5.5s1-3 1.5-3 1 1 1.5 3 1 4 1 5.5c0 .5.5.8 1 .5 1.5-1 2.5-3 3.5-5s1-4 0-6-1.5-3.5-2-5.5C16.5 3.5 14.5 2 12 2z"/></symbol></svg>
 
 <nav class="topnav">
-  <div class="topnav-brand"><div class="topnav-logo"><svg class="brand-glyph" viewBox="0 0 24 24" style="width:24px;height:24px"><use href="#i-tooth"/></svg></div><span class="topnav-title">RadioBras<span class="tt-accent"> Digital</span></span></div>
+  <div class="topnav-brand"><div class="topnav-logo"><img src="/static/mascote.png" alt="RadioBras Digital"></div><span class="topnav-title">RadioBras<span class="tt-accent"> Digital</span></span></div>
   <div class="nav-right"><button class="theme-toggle" id="themeBtn" onclick="toggleTheme()" title="Alternar tema">🌙</button><a href="/"><svg class="icon"><use href="#i-arrow-l"/></svg> Dashboard</a></div>
 </nav>
 
