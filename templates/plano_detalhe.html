@@ -149,10 +149,12 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   <p class="page-sub" id="sub">Carregando…</p>
   <h2 class="seclabel">📎 Anexação &amp; Faturamento <span class="sn" id="anxSub"></span></h2>
   <div class="anxbar">
-    <select id="anxLote" onchange="verLote()" title="Ver uma varredura anterior"></select>
-    <span class="sep">| varrer novo período:</span>
+    <span id="anxLoteWrap" style="display:none"><span class="sep">varredura:</span>
+      <select id="anxLote" onchange="verLote()" title="Ver uma varredura anterior"></select>
+      <span class="sep">|</span></span>
+    <span class="sep">varrer período:</span>
     <input type="date" id="anxDe"><span class="sep">até</span><input type="date" id="anxAte">
-    <a class="abtn" onclick="atualizarAnexacao();return false;">⟳ Varrer este período</a>
+    <a class="abtn" onclick="atualizarAnexacao();return false;">⟳ Varrer</a>
   </div>
   <div class="chips" id="anxChips"><div class="empty">Carregando…</div></div>
 
@@ -232,6 +234,7 @@ async function carregarAnexacao(){
     }).join('')||'<option value="">— sem varredura —</option>';
     $('anxLote').dataset.filled='1'; if(lote)$('anxLote').value=lote;
   }
+  $('anxLoteWrap').style.display=(j.lotes&&j.lotes.length>1)?'':'none';
   if(!$('anxDe').value)$('anxDe').value=DE;
   if(!$('anxAte').value)$('anxAte').value=ATE;
   if(!j.total){
