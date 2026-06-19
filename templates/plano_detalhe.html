@@ -55,9 +55,13 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .anxbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0 0 14px;font-size:13px;}
 .anxbar input[type=date],.anxbar select{background:#fff;border:1px solid var(--gray-300);border-radius:8px;padding:6px 9px;font-size:13px;color:var(--gray-900);}
 [data-theme="dark"] .anxbar input[type=date],[data-theme="dark"] .anxbar select{background:var(--green-900);border-color:rgba(52,200,142,.22);color:var(--gray-900);}
-.anxbar .abtn{color:var(--green-700);font-weight:600;text-decoration:none;cursor:pointer;}
-.anxbar .abtn:hover{text-decoration:underline;}
+.anxbar .abtn2{background:var(--green-700);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:.15s;}
+.anxbar .abtn2:hover{background:var(--green-600);box-shadow:0 2px 8px rgba(6,78,59,.2);}
 .anxbar .sep{color:var(--gray-400);}
+.topbtn{display:inline-flex;align-items:center;gap:9px;background:var(--green-700);color:#fff;text-decoration:none;padding:11px 20px;border-radius:10px;font-size:14px;font-weight:700;margin:2px 0 4px;transition:.2s;}
+.topbtn:hover{background:var(--green-600);transform:translateY(-1px);box-shadow:0 6px 18px rgba(6,78,59,.25);}
+.topbtn svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:2;}
+[data-theme="dark"] .topbtn{box-shadow:0 0 14px rgba(52,200,142,.22);}
 .daycard{background:#fff;border:1px solid var(--gray-200);border-radius:12px;margin-bottom:20px;overflow:hidden;}
 .dayhead{padding:14px 20px;border-bottom:1px solid var(--gray-100);display:flex;align-items:center;justify-content:space-between;gap:12px;}
 .dayhead .d{font-size:15px;font-weight:700;}
@@ -147,14 +151,15 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   <a class="back" href="/"><svg class="icon"><use href="#i-arrow-l"/></svg> Voltar ao dashboard</a>
   <h1 class="page-title" id="title">{{ nome or slug }}</h1>
   <p class="page-sub" id="sub">Carregando…</p>
-  <h2 class="seclabel">📎 Anexação &amp; Faturamento <span class="sn" id="anxSub"></span></h2>
+  <a class="topbtn" href="/?run={{ slug }}"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg> Faturar dia</a>
+  <h2 class="seclabel" style="margin-top:24px">📎 Anexação &amp; Faturamento <span class="sn" id="anxSub"></span></h2>
   <div class="anxbar">
     <span id="anxLoteWrap" style="display:none"><span class="sep">varredura:</span>
       <select id="anxLote" onchange="verLote()" title="Ver uma varredura anterior"></select>
       <span class="sep">|</span></span>
-    <span class="sep">varrer período:</span>
+    <span class="sep">período:</span>
     <input type="date" id="anxDe"><span class="sep">até</span><input type="date" id="anxAte">
-    <a class="abtn" onclick="atualizarAnexacao();return false;">⟳ Varrer</a>
+    <button class="abtn2" onclick="atualizarAnexacao()">🔍 Consultar período</button>
   </div>
   <div class="chips" id="anxChips"><div class="empty">Carregando…</div></div>
 
@@ -184,8 +189,6 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
     </div>
   </div>
 </main>
-
-<a class="fab" href="/?run={{ slug }}"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg> Executar Agora</a>
 
 <div class="modal" id="anxModal"><div class="box">
   <h3 id="anxMTitle" style="margin:0 0 8px"><span class="spin"></span> Varrendo as 3 unidades…</h3>
@@ -219,7 +222,7 @@ function fmtHora(iso){if(!iso)return'';try{return new Date(iso).toLocaleString('
 function fmtBRL(v){return (v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
 
 async function carregar(){
-  $('sub').textContent=`{{ nome or slug }} · acompanhamento das GTOs (anexação + glosas)`;
+  $('sub').textContent=`{{ nome or slug }} · acompanhamento das GTOs`;
   carregarAnexacao();
 }
 
@@ -251,6 +254,9 @@ async function carregarAnexacao(){
     return `<div class="chip click ${ANXCL[k]||''}${act}" data-k="${k}" onclick="setCat('${k}')" title="Ver as GTOs: ${m.label||k}">
       <div class="n">${c[k]||0}</div><div class="l">${m.label||k}</div><div class="cd">${m.desc||''}</div></div>`;}).join('');
   renderAnxTab();
+  if(!window._anxUrlApplied){window._anxUrlApplied=1;
+    const cp=new URLSearchParams(location.search).get('cat');
+    if(cp&&(ANX.por_categoria||{})[cp]!==undefined)setCat(cp);}
 }
 function setCat(k){
   anxCat=(anxCat===k)?'':k;
