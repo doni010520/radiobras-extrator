@@ -253,6 +253,53 @@ if os.environ.get("GLOSA_AUTO_UPDATE", "1") != "0":
     threading.Thread(target=_glosa_scheduler, daemon=True).start()
 
 
+def _anexacao_atualizou_hoje() -> bool:
+    try:
+        lotes = db.anexacao_lotes(1)
+        if not lotes or not lotes[0].get("captured_at"):
+            return False
+        d = datetime.fromisoformat(lotes[0]["captured_at"])
+        if _TZ:
+            if d.tzinfo is None:
+                from datetime import timezone as _tzc
+                d = d.replace(tzinfo=_tzc.utc)
+            d = d.astimezone(_TZ)
+            hoje = datetime.now(_TZ).date()
+        else:
+            hoje = datetime.now().date()
+        return d.date() == hoje
+    except Exception:
+        return False
+
+
+def _anexacao_scheduler():
+    """Varre anexação/faturamento das 3 unidades 1x/dia (após ANEXACAO_UPDATE_HOUR,
+    default 7h Brasília — escalonado da glosa p/ não rodarem juntas)."""
+    try:
+        hora = int(os.environ.get("ANEXACAO_UPDATE_HOUR", "7"))
+    except ValueError:
+        hora = 7
+    while not _glosa_stop.is_set():
+        try:
+            agora = datetime.now(_TZ) if _TZ else datetime.now()
+            if agora.hour >= hora and not _anexacao_atualizou_hoje():
+                hoje = agora.strftime("%d/%m/%Y")
+                de = "01/" + hoje[3:]
+                jid = "anxauto" + uuid.uuid4().hex[:8]
+                with _jobs_lock:
+                    _jobs[jid] = {"status": "queued", "log": [], "kind": "anexacao"}
+                app.logger.info("Anexação auto-update iniciando (%s a %s)…", de, hoje)
+                _run_anexacao_job(jid, de, hoje, [], 0)
+                app.logger.info("Anexação auto-update concluído.")
+        except Exception as e:
+            app.logger.error("Anexacao scheduler: %s", e)
+        _glosa_stop.wait(1800)
+
+
+if os.environ.get("ANEXACAO_AUTO_UPDATE", "1") != "0":
+    threading.Thread(target=_anexacao_scheduler, daemon=True).start()
+
+
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")

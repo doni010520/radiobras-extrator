@@ -52,6 +52,12 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .mbtn{border:1px solid var(--green-600);background:var(--green-600);color:#fff;border-radius:9px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--gray-200);border-top-color:var(--green-600);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px;}
 @keyframes sp{to{transform:rotate(360deg);}}
+.anxbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0 0 14px;font-size:13px;}
+.anxbar input[type=date],.anxbar select{background:#fff;border:1px solid var(--gray-300);border-radius:8px;padding:6px 9px;font-size:13px;color:var(--gray-900);}
+[data-theme="dark"] .anxbar input[type=date],[data-theme="dark"] .anxbar select{background:var(--green-900);border-color:rgba(52,200,142,.22);color:var(--gray-900);}
+.anxbar .abtn{color:var(--green-700);font-weight:600;text-decoration:none;cursor:pointer;}
+.anxbar .abtn:hover{text-decoration:underline;}
+.anxbar .sep{color:var(--gray-400);}
 .daycard{background:#fff;border:1px solid var(--gray-200);border-radius:12px;margin-bottom:20px;overflow:hidden;}
 .dayhead{padding:14px 20px;border-bottom:1px solid var(--gray-100);display:flex;align-items:center;justify-content:space-between;gap:12px;}
 .dayhead .d{font-size:15px;font-weight:700;}
@@ -141,8 +147,13 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   <a class="back" href="/"><svg class="icon"><use href="#i-arrow-l"/></svg> Voltar ao dashboard</a>
   <h1 class="page-title" id="title">{{ nome or slug }}</h1>
   <p class="page-sub" id="sub">Carregando…</p>
-  <h2 class="seclabel">📎 Anexação &amp; Faturamento <span class="sn" id="anxSub"></span>
-    <span class="acts"><a href="#" onclick="atualizarAnexacao();return false;">⟳ Atualizar agora</a></span></h2>
+  <h2 class="seclabel">📎 Anexação &amp; Faturamento <span class="sn" id="anxSub"></span></h2>
+  <div class="anxbar">
+    <select id="anxLote" onchange="verLote()" title="Ver uma varredura anterior"></select>
+    <span class="sep">| varrer novo período:</span>
+    <input type="date" id="anxDe"><span class="sep">até</span><input type="date" id="anxAte">
+    <a class="abtn" onclick="atualizarAnexacao();return false;">⟳ Varrer este período</a>
+  </div>
   <div class="chips" id="anxChips"><div class="empty">Carregando…</div></div>
 
   <div id="glosaTop" style="display:none">
@@ -211,8 +222,18 @@ async function carregar(){
 }
 
 async function carregarAnexacao(){
-  let j;try{j=await (await fetch('/api/anexacao')).json();}catch(e){$('anxChips').innerHTML='<div class="empty">Falha ao carregar.</div>';return;}
+  const lote=$('anxLote').value||'';
+  let j;try{j=await (await fetch('/api/anexacao'+(lote?('?lote='+lote):''))).json();}catch(e){$('anxChips').innerHTML='<div class="empty">Falha ao carregar.</div>';return;}
   ANX=j; const meta=j.meta||{};
+  if(!$('anxLote').dataset.filled){
+    $('anxLote').innerHTML=(j.lotes||[]).map(l=>{
+      const dt=l.captured_at?new Date(l.captured_at).toLocaleString('pt-BR'):l.lote;
+      return `<option value="${l.lote}">${dt} · ${l.total} GTOs (${l.de}–${l.ate})</option>`;
+    }).join('')||'<option value="">— sem varredura —</option>';
+    $('anxLote').dataset.filled='1'; if(lote)$('anxLote').value=lote;
+  }
+  if(!$('anxDe').value)$('anxDe').value=DE;
+  if(!$('anxAte').value)$('anxAte').value=ATE;
   if(!j.total){
     $('anxSub').textContent='';
     $('anxChips').innerHTML='<div class="empty">Sem varredura ainda. Clique em “Atualizar agora”.</div>';
@@ -253,12 +274,14 @@ function renderAnxTab(){
 
 // Atualizar — varredura em background
 let anxPollT=null;
+function verLote(){carregarAnexacao();}
 async function atualizarAnexacao(){
-  if(!confirm('Varredura das 3 unidades: abre cada GTO pra ler os anexos (só leitura, não anexa nada). Pode levar bastante tempo. Iniciar?'))return;
+  const de=$('anxDe').value?brOf($('anxDe').value):'', ate=$('anxAte').value?brOf($('anxAte').value):'';
+  if(!confirm(`Varredura das 3 unidades no período ${de||'(mês)'} a ${ate||'(hoje)'}: abre cada GTO pra ler os anexos (só leitura). Pode levar bastante tempo. Iniciar?`))return;
   $('anxModal').classList.add('show'); $('anxMClose').style.display='none';
   $('anxMTitle').innerHTML='<span class="spin"></span> Varrendo as 3 unidades…';
   $('anxMLog').textContent='Iniciando…';
-  let j;try{j=await (await fetch('/anexacao/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})})).json();}
+  let j;try{j=await (await fetch('/anexacao/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({de,ate})})).json();}
   catch(e){$('anxMLog').textContent='Falha ao iniciar.';$('anxMClose').style.display='';return;}
   if(j.error){$('anxMLog').textContent='Erro: '+j.error;$('anxMClose').style.display='';return;}
   anxPollT=setInterval(()=>anxPoll(j.job_id),3000); anxPoll(j.job_id);
@@ -271,7 +294,7 @@ async function anxPoll(id){
     clearInterval(anxPollT);
     $('anxMTitle').innerHTML=(j.status==='done')?'✓ Varredura concluída':'✕ Falhou';
     $('anxMClose').style.display='';
-    if(j.status==='done')carregarAnexacao();
+    if(j.status==='done'){$('anxLote').dataset.filled='';$('anxLote').value='';carregarAnexacao();}
   }
 }
 function fecharAnxModal(){$('anxModal').classList.remove('show');}
