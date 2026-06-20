@@ -36,7 +36,7 @@ from extrator_arquivos import (
 from extrator_odontoprev import (
     login_odonto, get_credentials_odonto, abrir_consultar_gtos, consultar_periodo,
     listar_gtos, abrir_gto, ler_dados_gto, upload_arquivos, normaliza_nome,
-    _anexos_nomes,
+    _anexos_nomes, _anexos_count,
 )
 from extrair_anexos_dia import anexos_do_paciente
 from gto_utils import is_gto_pdf, extrair_observacao
@@ -44,6 +44,15 @@ from solicitacao_utils import gto_solicitante, gto_exames, analisar_paciente, ca
 from laudo_utils import exames_pendentes_reais
 
 STATUS_ALVO = "REPASSE"  # só GTOs em "análise de repasse"
+
+
+def _prefixo_casa(a_norm: str, b_norm: str) -> bool:
+    """True se um nome normalizado é prefixo (na MESMA ordem) do outro — ex.:
+    'MANUELA LOPES DA SILVA' ⊂ 'MANUELA LOPES DA SILVA RAMOS'. Exige o nome curto
+    ter >=2 tokens e ser prefixo estrito do longo (não casa diferença no meio)."""
+    ta, tb = (a_norm or "").split(), (b_norm or "").split()
+    longo, curto = (ta, tb) if len(ta) >= len(tb) else (tb, ta)
+    return len(curto) >= 2 and len(longo) > len(curto) and longo[:len(curto)] == curto
 
 
 def _ja_anexado_por_nos(nomes) -> bool:
@@ -119,6 +128,7 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                             gp = abrir_gto(page, g["gto"], _refrescar=None)
                             gp.wait_for_timeout(800)  # deixa a seção de anexos renderizar
                             nomes = _anexos_nomes(gp)
+                            cnt = _anexos_count(gp)
                             try:
                                 gp.close()
                             except Exception:
@@ -134,6 +144,16 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                                 "status": "JA_ANEXADO", "solicitacao": None,
                                 "revisao_humana": "",
                                 "detalhe": "já tinha laudo+imagens nossos — pulada (não re-baixou)",
+                            })
+                        elif cnt >= 2:
+                            # já faturada (>=2 anexos, mesmo que não sejam nossos):
+                            # não reprocessa nem marca pendente — evita o caso MANUELA.
+                            log(f"   [checagem {i}/{n}] GTO {g['gto']}: já tem {cnt} anexos — pular")
+                            itens.append({
+                                "gto": g["gto"], "nome_gto": g["nome"], "arquivos": [],
+                                "status": "JA_ANEXADO", "solicitacao": None,
+                                "revisao_humana": "",
+                                "detalhe": f"já tinha {cnt} anexos (pré-existentes) — pulada",
                             })
                         else:
                             log(f"   [checagem {i}/{n}] GTO {g['gto']}: pendente")
@@ -181,6 +201,19 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                             "solicitacao": None, "status": "", "detalhe": "",
                             "revisao_humana": ""}
                     cands = by_norm.get(g["nome_norm"], [])
+                    if not cands:
+                        # match tolerante por PREFIXO (sobrenome a mais/a menos no
+                        # OdontoPrev vs PRORADIS — caso MANUELA ...DA SILVA [RAMOS]).
+                        vistos_cod, pref = set(), []
+                        for key, lst in by_norm.items():
+                            if _prefixo_casa(key, g["nome_norm"]):
+                                for p in lst:
+                                    if p["cod_pac"] not in vistos_cod:
+                                        vistos_cod.add(p["cod_pac"]); pref.append(p)
+                        if pref:
+                            cands = pref
+                            log(f"   [MATCH-PREFIXO] GTO {g['gto']} {g['nome']!r} ~ "
+                                f"{[p['nome'] for p in cands]}")
                     if len(cands) > 1:
                         item["status"] = "AMBIGUO"
                         log(f"   [AMBÍGUO] GTO {g['gto']} {g['nome']!r}")
@@ -198,6 +231,28 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                         # não aparece no analítico financeiro — mas está nos laudos).
                         wl = listar_worklist_por_pacientes(pg, data, [g["nome"]])
                         accs = sorted({w["accession"] for w in wl if w.get("accession")})
+                        # nome do OdontoPrev pode ter sobrenome a mais que o PRORADIS:
+                        # encurta (tira o último token) e re-busca até achar exames.
+                        toks = g["nome"].split()
+                        while not accs and len(toks) > 2:
+                            toks = toks[:-1]
+                            wl = listar_worklist_por_pacientes(pg, data, [" ".join(toks)])
+                            accs = sorted({w["accession"] for w in wl if w.get("accession")})
+                        # mantém só exames cujo nome CASA (igual ou prefixo) com a GTO;
+                        # se sobrar mais de um paciente distinto -> ambíguo (revisão).
+                        casam: dict = {}
+                        for w in wl:
+                            if not w.get("accession"):
+                                continue
+                            wn = normaliza_nome(w.get("nome", ""))
+                            if wn == g["nome_norm"] or _prefixo_casa(wn, g["nome_norm"]):
+                                casam.setdefault(wn, []).append(w["accession"])
+                        if len(casam) > 1:
+                            item["status"] = "AMBIGUO"
+                            log(f"   [AMBÍGUO-LAUDOS] GTO {g['gto']} {g['nome']!r}: "
+                                f"vários pacientes nos laudos {list(casam)}")
+                            itens.append(item); continue
+                        accs = sorted({a for v in casam.values() for a in v}) if casam else []
                         if not accs:
                             item["status"] = "SEM_MATCH"
                             log(f"   [SEM MATCH] GTO {g['gto']} {g['nome']!r} "
