@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pt-BR">
+{% macro brl(v) %}R$ {{ "{:,.2f}".format(v or 0).replace(",","§").replace(".",",").replace("§",".") }}{% endmacro %}
+<head>
+<meta charset="utf-8">
+<title>Relatórios — RADIOBRAS</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2430;margin:0;padding:24px 28px;background:#fff}
+  h1{font-size:22px;margin:0 0 2px}
+  .sub{color:#5a6b7b;font-size:12.5px;margin-bottom:18px}
+  h2{font-size:15px;margin:20px 0 9px;border-bottom:2px solid #e3e8ee;padding-bottom:5px}
+  .kpis{display:flex;flex-wrap:wrap;gap:9px;margin-bottom:6px}
+  .kpi{border:1px solid #e3e8ee;border-radius:10px;padding:9px 13px;min-width:135px}
+  .kpi .n{font-size:21px;font-weight:750}.kpi .l{font-size:11px;color:#5a6b7b}
+  table{width:100%;border-collapse:collapse;font-size:11.5px;margin-bottom:6px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #e8edf2}
+  th{background:#f4f6f8;color:#3a4756;font-size:10.5px;text-transform:uppercase}
+  td.num,th.num{text-align:right}
+  .foot{margin-top:22px;color:#8595a6;font-size:10.5px;border-top:1px solid #e3e8ee;padding-top:8px}
+  .green{color:#1f9d6b}.bad{color:#d24b4b}.warn{color:#b87400}
+</style>
+</head>
+<body>
+  {% set r = d.resumo %}
+  <h1>📊 Relatórios — RADIOBRAS</h1>
+  <div class="sub">{{ r.total_gtos }} GTOs no período · {{ r.glosas }} glosas · {{ brl(r.glosado_total) }} glosado
+    {% if d.anx.de %}· Faturamento {{ d.anx.de }}–{{ d.anx.ate }}{% endif %}
+    {% if d.glo.dia %}· Glosas 1º do mês até {{ d.glo.dia }}{% endif %}</div>
+
+  <h2>💰 Resumo executivo</h2>
+  <div class="kpis">
+    <div class="kpi"><div class="n">{{ r.total_gtos }}</div><div class="l">Total de GTOs</div></div>
+    <div class="kpi"><div class="n green">{{ r.faturadas }}</div><div class="l">Faturadas (2+ anexos)</div></div>
+    <div class="kpi"><div class="n warn">{{ r.a_faturar }}</div><div class="l">A faturar (1 anexo)</div></div>
+    <div class="kpi"><div class="n bad">{{ brl(r.glosado_total) }}</div><div class="l">Glosado</div></div>
+    <div class="kpi"><div class="n">{{ brl(r.recuperavel) }}</div><div class="l">Recuperável ({{ r.a_recorrer_n }} a recorrer)</div></div>
+    <div class="kpi"><div class="n bad">{{ brl(r.perda_confirmada) }}</div><div class="l">Perda confirmada</div></div>
+  </div>
+
+  <h2>Por unidade</h2>
+  <table><thead><tr><th>Unidade</th><th class="num">GTOs</th><th class="num">Faturadas</th>
+    <th class="num">A faturar</th><th class="num">Glosas</th><th class="num">Glosado</th></tr></thead><tbody>
+    {% for u in d.por_unidade %}
+    <tr><td>{{ u.unidade }}</td><td class="num">{{ u.total }}</td><td class="num">{{ u.faturada }}</td>
+      <td class="num">{{ u.a_faturar }}</td><td class="num">{{ u.glosas }}</td><td class="num">{{ brl(u.glosado) }}</td></tr>
+    {% endfor %}
+  </tbody></table>
+
+  <h2>✅ Pendências</h2>
+  <p class="sub">A faturar: <b>{{ d.pendencias.a_faturar|length }}</b> GTO(s) (falta o 2º anexo) ·
+     A recorrer: <b>{{ d.pendencias.a_recorrer|length }}</b> glosa(s) (abrir recurso).</p>
+
+  <h2>🩹 Glosas por motivo (causa-raiz)</h2>
+  <table><thead><tr><th>Cód.</th><th>Motivo</th><th class="num">Qtd</th></tr></thead><tbody>
+    {% for m in d.motivos_glosa %}
+    <tr><td>{{ m.glosa_cod }}</td><td>{{ m.glosa_motivo }}</td><td class="num">{{ m.total }}</td></tr>
+    {% endfor %}
+  </tbody></table>
+
+  <div class="foot">RADIOBRAS · relatório gerado automaticamente do app (faturamento + glosas/recurso). Sem LLM.</div>
+</body>
+</html>

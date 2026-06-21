@@ -670,6 +670,84 @@ def glosas_atualizar_status(job_id: str):
                         "error": j.get("error")})
 
 
+# ── Relatórios (hub) ──────────────────────────────────────────────────────────
+
+def _relatorios_data() -> dict:
+    """Junta faturamento (varredura) + glosas num pacote único p/ os relatórios."""
+    anx = db.anexacao_panorama()
+    glo = db.glosa_panorama()
+    cat = anx.get("por_categoria", {}) or {}
+    gsit = glo.get("glosado_situacao", {}) or {}
+    sit = glo.get("por_situacao", {}) or {}
+    # por unidade: cruza faturamento (anx) com glosado (glo)
+    glo_uni = {u["unidade"]: u for u in glo.get("por_unidade", [])}
+    por_unidade = []
+    for u in anx.get("por_unidade", []):
+        gu = glo_uni.get(u["unidade"], {})
+        por_unidade.append({
+            "unidade": u["unidade"], "total": u["total"],
+            "faturada": u.get("FATURADA", 0), "a_faturar": u.get("A_FATURAR", 0),
+            "sem_anexo": u.get("SEM_ANEXO", 0), "liberada": u.get("LIBERADA", 0),
+            "cancelada": u.get("CANCELADA", 0),
+            "glosas": gu.get("total", 0), "glosado": round(gu.get("glosado", 0), 2),
+        })
+    return {
+        "anx": anx, "glo": glo,
+        "resumo": {
+            "total_gtos": anx.get("total", 0),
+            "faturadas": cat.get("FATURADA", 0), "a_faturar": cat.get("A_FATURAR", 0),
+            "sem_anexo": cat.get("SEM_ANEXO", 0), "liberadas": cat.get("LIBERADA", 0),
+            "canceladas": cat.get("CANCELADA", 0),
+            "glosas": glo.get("total", 0),
+            "glosado_total": glo.get("total_glosado", 0),
+            "recuperavel": round(gsit.get("A_RECORRER", 0), 2),
+            "perda_confirmada": round(gsit.get("GLOSA_CONFIRMADA", 0), 2),
+            "a_recorrer_n": sit.get("A_RECORRER", 0),
+            "glosa_confirmada_n": sit.get("GLOSA_CONFIRMADA", 0),
+        },
+        "por_unidade": por_unidade,
+        "pendencias": {
+            "a_faturar": db.anexacao_gtos(categoria="A_FATURAR"),
+            "a_recorrer": [e for e in db.glosa_eventos() if e["situacao"] == "A_RECORRER"],
+        },
+        "motivos_glosa": glo.get("por_motivo", []),
+        "meta_sit": SITUACAO_META, "meta_cat": CATEGORIA_META,
+    }
+
+
+@app.route("/relatorios")
+def relatorios_page():
+    return render_template("relatorios.html")
+
+
+@app.route("/api/relatorios")
+def api_relatorios():
+    try:
+        return jsonify(_relatorios_data())
+    except Exception as exc:
+        app.logger.error("Erro em /api/relatorios: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/relatorios.pdf")
+def relatorios_pdf():
+    data = _relatorios_data()
+    html = render_template("relatorios_pdf.html", d=data)
+    from playwright.sync_api import sync_playwright
+    try:
+        with sync_playwright() as pw:
+            br = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            pg = br.new_page()
+            pg.set_content(html, wait_until="networkidle")
+            pdf_bytes = pg.pdf(format="A4", print_background=True,
+                               margin={"top": "12mm", "bottom": "12mm", "left": "10mm", "right": "10mm"})
+            br.close()
+    except Exception as exc:
+        return (f"Falha ao gerar PDF: {exc}", 500)
+    return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
+                     as_attachment=True, download_name="relatorios_radiobras.pdf")
+
+
 # ── Anexação / Faturamento (varredura só-leitura) ─────────────────────────────
 
 CATEGORIA_META = {
