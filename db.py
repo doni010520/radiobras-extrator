@@ -478,6 +478,23 @@ def salvar_glosas(lote: str, dia: str, eventos: list) -> int:
         return len(eventos)
 
 
+def prune_glosa(keep_lote: str, dia: str) -> int:
+    """Remove lotes de glosa do MESMO mês de `dia` (sweep cumulativo 1º→data),
+    exceto keep_lote. Mantém lotes de outros meses."""
+    if not dia or dia.count("/") != 2:
+        return 0
+    mes = "/".join(dia.split("/")[1:])  # MM/YYYY
+    with SessionLocal() as s:
+        lotes = [r[0] for r in s.query(GlosaEvento.lote).filter(
+            GlosaEvento.dia.like("%/" + mes), GlosaEvento.lote != keep_lote).distinct().all()]
+        n = 0
+        for l in lotes:
+            n += s.query(GlosaEvento).filter(
+                GlosaEvento.lote == l).delete(synchronize_session=False)
+        s.commit()
+        return n
+
+
 def glosa_lotes(limite: int = 30) -> list:
     """Lotes de extração (mais recente primeiro) com data e total de eventos."""
     with SessionLocal() as s:
@@ -578,6 +595,18 @@ def salvar_anexacao(lote: str, de: str, ate: str, gtos: list) -> int:
             ))
         s.commit()
         return len(gtos)
+
+
+def prune_anexacao(keep_lote: str, de: str) -> int:
+    """Remove varreduras antigas do MESMO início de período (de) — a varredura é
+    cumulativa (1º do mês até hoje), então a nova substitui as anteriores do mês.
+    Mantém varreduras de outros períodos (queries intencionais)."""
+    with SessionLocal() as s:
+        n = s.query(AnexacaoGto).filter(
+            AnexacaoGto.de == de, AnexacaoGto.lote != keep_lote).delete(
+            synchronize_session=False)
+        s.commit()
+        return n
 
 
 def anexacao_lotes(limite: int = 30) -> list:

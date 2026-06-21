@@ -164,6 +164,12 @@ def _run_glosa_job(job_id: str, dia: str, contas: list, checar: bool,
                 db.salvar_glosas(lote, dia, r["eventos"])
                 total += len(r["eventos"])
                 progress(f"[{label}] gravado ({len(r['eventos'])}).")
+        try:
+            rem = db.prune_glosa(lote, dia)
+            if rem:
+                progress(f"limpeza: {rem} evento(s) de lotes antigos do mês removidos.")
+        except Exception as e:
+            app.logger.error("prune glosa: %s", e)
         with _jobs_lock:
             _jobs[job_id].update({"status": "done", "lote": lote, "total": total})
     except Exception as exc:
@@ -196,6 +202,13 @@ def _run_anexacao_job(job_id: str, de: str, ate: str, contas: list, limite: int)
                 db.salvar_anexacao(lote, de, ate, r["gtos"])
                 total += len(r["gtos"])
                 progress(f"[{label}] gravado ({len(r['gtos'])}).")
+        # varredura cumulativa do mês -> remove snapshots antigos do mesmo período
+        try:
+            rem = db.prune_anexacao(lote, de)
+            if rem:
+                progress(f"limpeza: {rem} registro(s) de varreduras antigas do período removidos.")
+        except Exception as e:
+            app.logger.error("prune anexacao: %s", e)
         with _jobs_lock:
             _jobs[job_id].update({"status": "done", "lote": lote, "total": total})
     except Exception as exc:
