@@ -20,7 +20,7 @@ body{font-family:'Source Sans Pro',-apple-system,sans-serif;background:var(--gra
 .topnav-logo img{height:46px;width:auto;display:block;}
 .topnav-title{color:#fff;font-size:18px;font-weight:600;}
 .topnav a{color:rgba(255,255,255,.85);text-decoration:none;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px;}
-.main{margin-top:64px;padding:32px;max-width:1100px;margin-left:auto;margin-right:auto;}
+.main{padding:32px;max-width:1100px;margin-left:auto;margin-right:auto;}
 .back{color:var(--green-700);text-decoration:none;font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:6px;margin-bottom:14px;}
 .page-title{font-size:26px;font-weight:700;}
 .page-sub{font-size:14px;color:var(--gray-500);margin-bottom:24px;}
@@ -178,13 +178,9 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 <svg style="display:none"><symbol id="i-arrow-l" viewBox="0 0 24 24"><path d="M15 19l-7-7 7-7"/></symbol>
 <symbol id="i-tooth" viewBox="0 0 24 24"><path d="M12 2C9.5 2 7.5 3.5 7 5.5 6.5 7.5 6 9 5 11s-1 4 0 6 2 4 3.5 5c.5.3 1 0 1-.5 0-1.5.5-3.5 1-5.5s1-3 1.5-3 1 1 1.5 3 1 4 1 5.5c0 .5.5.8 1 .5 1.5-1 2.5-3 3.5-5s1-4 0-6-1.5-3.5-2-5.5C16.5 3.5 14.5 2 12 2z"/></symbol></svg>
 
-<nav class="topnav">
-  <div class="topnav-brand"><div class="topnav-logo"><img src="/static/mascote.png" alt="RadioBras Digital"></div><span class="topnav-title">RadioBras<span class="tt-accent"> Digital</span></span></div>
-  <div class="nav-right"><button class="theme-toggle" id="themeBtn" onclick="toggleTheme()" title="Alternar tema">🌙</button><a href="/"><svg class="icon"><use href="#i-arrow-l"/></svg> Dashboard</a></div>
-</nav>
+{% include '_topnav.html' %}
 
 <main class="main">
-  <a class="back" href="/"><svg class="icon"><use href="#i-arrow-l"/></svg> Voltar ao dashboard</a>
   <h1 class="page-title" id="title">{{ nome or slug }}</h1>
   <p class="page-sub" id="sub">Carregando…</p>
   <a class="topbtn" href="/?run={{ slug }}"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg> Faturar dia</a>

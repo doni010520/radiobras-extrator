@@ -27,7 +27,7 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 .topnav-right{display:flex;align-items:center;gap:16px;}
 .topnav-date{color:rgba(255,255,255,.7);font-size:13px;text-transform:capitalize;}
 .topnav-avatar{width:36px;height:36px;background:var(--green-600);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:14px;border:2px solid rgba(255,255,255,.2);}
-.main{margin-top:64px;padding:32px;max-width:1400px;margin-left:auto;margin-right:auto;}
+.main{padding:32px;max-width:1400px;margin-left:auto;margin-right:auto;}
 .page-header{margin-bottom:32px;}
 .page-title{font-size:28px;font-weight:700;margin-bottom:4px;}
 .page-subtitle{font-size:15px;color:var(--gray-500);}
@@ -217,17 +217,7 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 <symbol id="i-tooth" viewBox="0 0 24 24"><path d="M12 2C9.5 2 7.5 3.5 7 5.5 6.5 7.5 6 9 5 11s-1 4 0 6 2 4 3.5 5c.5.3 1 0 1-.5 0-1.5.5-3.5 1-5.5s1-3 1.5-3 1 1 1.5 3 1 4 1 5.5c0 .5.5.8 1 .5 1.5-1 2.5-3 3.5-5s1-4 0-6-1.5-3.5-2-5.5C16.5 3.5 14.5 2 12 2z"/></symbol>
 </svg>
 
-<nav class="topnav">
-  <div class="topnav-brand"><div class="topnav-logo"><img src="/static/mascote.png" alt="RadioBras Digital"></div><span class="topnav-title">RadioBras<span class="tt-accent"> Digital</span></span></div>
-  <div class="topnav-menu">
-    <a class="topnav-link active">Dashboard</a>
-    <a class="topnav-link" href="/gtos">GTOs</a>
-    <a class="topnav-link" href="/gtos">Revisão <span class="topnav-badge" id="nav-rev">0</span></a>
-    <a class="topnav-link" href="/glosas">Glosas</a>
-    <a class="topnav-link" href="/relatorios">Relatórios</a>
-  </div>
-  <div class="topnav-right"><button class="theme-toggle" id="themeBtn" onclick="toggleTheme()" title="Alternar tema claro/escuro">🌙</button><span class="topnav-date" id="topdate"></span><div class="topnav-avatar">RB</div></div>
-</nav>
+{% include '_topnav.html' %}
 
 <main class="main">
   <div class="page-header">
@@ -307,7 +297,7 @@ applyTheme(document.documentElement.getAttribute('data-theme')||'light');
 let pendingRun=new URLSearchParams(location.search).get('run');
 function isoHoje(){const d=new Date(),p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;}
 function isoParaBR(iso){const [y,m,d]=iso.split('-');return `${d}/${m}/${y}`;}
-$('topdate').textContent=new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'});
+/* data e tema agora vêm da barra superior compartilhada (_topnav.html) */
 
 function statCard(c,icon,val,label){return `<div class="stat-card"><div class="stat-header"><div class="stat-icon ${c}"><svg class="icon-lg"><use href="${icon}"/></svg></div></div><div class="stat-value">${val}</div><div class="stat-label">${label}</div></div>`;}
 function fmtHora(iso){if(!iso)return'';try{return new Date(iso).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});}catch(e){return'';}}
@@ -362,7 +352,7 @@ function renderBars(lista){
   const comDados=lista.filter(p=>p.total>0);
   const totGeral=comDados.reduce((s,p)=>s+p.total,0);
   const totRev=comDados.reduce((s,p)=>s+(p.revisao||0),0);
-  $('nav-rev').textContent=totRev;
+  var _nr=$('rbNavRev');if(_nr)_nr.textContent=totRev;
   $('subtitle').textContent=totGeral
     ?`${totGeral} GTO(s) processada(s) no período · ${comDados.length} plano(s) com atividade`
     :'Nenhuma GTO processada no período selecionado.';

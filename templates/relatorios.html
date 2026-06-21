@@ -4,10 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Relatórios — RADIOBRAS</title>
+<script>(function(){try{var t=localStorage.getItem('rb-theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
 <style>
   :root{--bg:#f4f6f8;--card:#fff;--ink:#1c2430;--muted:#5a6b7b;--line:#e3e8ee;
     --green:#1f9d6b;--green-d:#047857;--warn:#d98a00;--bad:#d24b4b;--info:#3b82c4;--neutral:#7a889a;
     --shadow:0 2px 12px rgba(20,30,45,.07);}
+  [data-theme="dark"]{--bg:#0e1419;--card:#161e26;--ink:#e7eef5;--muted:#92a3b3;--line:#243039;
+    --green:#34C88E;--green-d:#34C88E;--warn:#e0a020;--bad:#e06464;--info:#5aa6e0;--neutral:#8395a6;
+    --shadow:0 3px 14px rgba(0,0,0,.4);color-scheme:dark;}
   *{box-sizing:border-box}
   body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);}
   a{color:var(--green-d);text-decoration:none}
@@ -50,10 +54,11 @@
 </style>
 </head>
 <body>
+{% include '_topnav.html' %}
 <div class="wrap">
   <div class="top">
     <div><h1>📊 Relatórios</h1></div>
-    <div style="display:flex;gap:8px"><a class="btn" href="/">← Dashboard</a><a class="btn primary" href="/relatorios.pdf">⬇ Exportar PDF</a></div>
+    <div style="display:flex;gap:8px"><a class="btn primary" href="/relatorios.pdf">⬇ Exportar PDF</a></div>
   </div>
   <div class="sub" id="sub">Carregando…</div>
   <div class="nav">

@@ -1,0 +1,56 @@
+<style>
+  .rbnav{background:#064E3B;height:64px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 32px;position:fixed;top:0;left:0;right:0;z-index:1000;box-shadow:0 2px 10px rgba(0,0,0,.14);
+    font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+  [data-theme="dark"] .rbnav{background:rgba(6,18,12,.92);backdrop-filter:saturate(130%) blur(10px);
+    border-bottom:1px solid rgba(52,200,142,.16);}
+  body{padding-top:64px;}
+  .rbnav-brand{display:flex;align-items:center;gap:11px;text-decoration:none;}
+  .rbnav-logo img{height:44px;width:auto;display:block;}
+  .rbnav-title{color:#fff;font-size:18px;font-weight:600;white-space:nowrap;}
+  .rbnav-title b{color:#34C88E;font-weight:700;}
+  .rbnav-menu{display:flex;gap:6px;}
+  .rbnav-link{color:rgba(255,255,255,.72);text-decoration:none;padding:8px 15px;border-radius:7px;
+    font-size:14px;font-weight:500;transition:.2s;display:flex;align-items:center;gap:6px;cursor:pointer;}
+  .rbnav-link:hover,.rbnav-link.active{background:rgba(255,255,255,.12);color:#fff;}
+  [data-theme="dark"] .rbnav-link:hover,[data-theme="dark"] .rbnav-link.active{background:rgba(52,200,142,.15);}
+  .rbnav-badge{background:#EF4444;color:#fff;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;}
+  .rbnav-right{display:flex;align-items:center;gap:14px;}
+  .rbnav-date{color:rgba(255,255,255,.7);font-size:13px;text-transform:capitalize;white-space:nowrap;}
+  .rbnav-toggle{background:none;border:none;cursor:pointer;font-size:17px;line-height:1;padding:6px;border-radius:8px;color:#fff;}
+  .rbnav-toggle:hover{background:rgba(255,255,255,.12);}
+  @media(max-width:920px){.rbnav{padding:0 14px;}.rbnav-title{display:none;}.rbnav-date{display:none;}
+    .rbnav-menu{gap:2px;}.rbnav-link{padding:8px 10px;font-size:13px;}}
+</style>
+<nav class="rbnav">
+  <a class="rbnav-brand" href="/"><span class="rbnav-logo"><img src="/static/mascote.png" alt="RadioBras"></span>
+    <span class="rbnav-title">RadioBras<b> Digital</b></span></a>
+  <div class="rbnav-menu">
+    <a class="rbnav-link" href="/" data-path="/">Dashboard</a>
+    <a class="rbnav-link" href="/gtos" data-path="/gtos">GTOs</a>
+    <a class="rbnav-link" href="/gtos" data-path="/revisao">Revisão <span class="rbnav-badge" id="rbNavRev">0</span></a>
+    <a class="rbnav-link" href="/glosas" data-path="/glosas">Glosas</a>
+    <a class="rbnav-link" href="/relatorios" data-path="/relatorios">Relatórios</a>
+  </div>
+  <div class="rbnav-right">
+    <button class="rbnav-toggle" id="rbThemeBtn" onclick="rbTheme()" title="Alternar tema claro/escuro">🌙</button>
+    <span class="rbnav-date" id="rbNavDate"></span>
+  </div>
+</nav>
+<script>
+  function rbTheme(){var el=document.documentElement;var t=(el.getAttribute('data-theme')==='dark')?'light':'dark';
+    el.setAttribute('data-theme',t);try{localStorage.setItem('rb-theme',t);}catch(e){}
+    var b=document.getElementById('rbThemeBtn');if(b)b.textContent=(t==='dark'?'☀️':'🌙');}
+  (function(){
+    var cur=document.documentElement.getAttribute('data-theme')||'light';
+    var tb=document.getElementById('rbThemeBtn');if(tb)tb.textContent=(cur==='dark'?'☀️':'🌙');
+    var p=location.pathname;
+    document.querySelectorAll('.rbnav-link').forEach(function(a){
+      var dp=a.getAttribute('data-path');
+      var on=(dp==='/')?(p==='/'||p.indexOf('/plano')===0):(p.indexOf(dp)===0);
+      if(on)a.classList.add('active');
+    });
+    var d=document.getElementById('rbNavDate');
+    if(d){try{d.textContent=new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'});}catch(e){}}
+  })();
+</script>

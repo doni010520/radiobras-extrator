@@ -120,13 +120,10 @@
 </style>
 </head>
 <body>
+{% include '_topnav.html' %}
 <div class="wrap">
   <div class="top">
-    <div class="brand"><img src="/static/mascote.png" alt="RadioBras Digital"><h1>Panorama de Glosas</h1></div>
-    <div class="nav-right">
-      <a class="btn" href="/">← Dashboard</a>
-      <button class="theme-toggle" id="themeBtn" onclick="toggleTheme()">🌙</button>
-    </div>
+    <div class="brand"><h1>Panorama de Glosas</h1></div>
   </div>
   <div class="sub" id="sub">Carregando…</div>
 
@@ -190,7 +187,7 @@ let DATA=null, META={};
 function $(id){return document.getElementById(id)}
 function fmtBRL(v){return (v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});}
 function applyTheme(t){document.documentElement.setAttribute('data-theme',t);
-  try{localStorage.setItem('rb-theme',t)}catch(e){}; $('themeBtn').textContent=(t==='dark')?'🌙':'☀️';}
+  try{localStorage.setItem('rb-theme',t)}catch(e){}; var b=$('themeBtn');if(b)b.textContent=(t==='dark')?'🌙':'☀️';}
 function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark')}
 applyTheme(document.documentElement.getAttribute('data-theme')||'light');
 
