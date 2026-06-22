@@ -110,35 +110,50 @@ def parse_groups(html: str) -> dict:
 
 def _login_playwright(pw, email: str, password: str):
     """
-    Faz login via Playwright e retorna (browser, ctx, page).
-    Usa wait_for_url + wait_for_timeout conforme spec (nao networkidle pos-login).
+    Faz login via Playwright e retorna (browser, ctx, page). Resiliente: tenta até
+    3x (lentidão/hiccup do SmartRIS é intermitente). O submit usa no_wait_after
+    (não bloqueia na navegação — quem confirma o login é o polling de URL).
     """
-    browser = pw.chromium.launch(
-        headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
-    )
-    ctx = browser.new_context(locale="pt-BR", timezone_id="America/Sao_Paulo")
-    page = ctx.new_page()
-    # domcontentloaded em vez de networkidle: o SmartRIS faz polling/websocket
-    # que nunca "aquieta", então networkidle estoura timeout de forma intermitente.
-    page.goto(f"{BASE}/", wait_until="domcontentloaded", timeout=60000)
-    page.fill('input[name="username"]', email)
-    page.fill('input[name="password"]', password)
-    page.click('button[type="submit"], input[type="submit"]')
-    # Aguarda sair da página de login por POLLING de URL (robusto contra o polling
-    # de rede que faz networkidle nunca disparar). Até 60s.
-    deadline = 60
-    ok = False
-    for _ in range(deadline * 2):
-        u = page.url
-        if "/login" not in u and "checklogin" not in u:
-            ok = True
-            break
-        page.wait_for_timeout(500)
-    page.wait_for_timeout(1500)
-    if not ok or "/login" in page.url or "checklogin" in page.url:
-        browser.close()
-        raise RuntimeError(f"Falha no login — URL pos-submit: {page.url}")
-    return browser, ctx, page
+    last = None
+    for tentativa in range(1, 4):
+        browser = pw.chromium.launch(
+            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+        try:
+            ctx = browser.new_context(locale="pt-BR", timezone_id="America/Sao_Paulo")
+            page = ctx.new_page()
+            # domcontentloaded em vez de networkidle: o SmartRIS faz polling/websocket
+            # que nunca "aquieta", então networkidle estoura timeout intermitente.
+            page.goto(f"{BASE}/", wait_until="domcontentloaded", timeout=60000)
+            page.fill('input[name="username"]', email)
+            page.fill('input[name="password"]', password)
+            # no_wait_after: o click dispara navegação que às vezes "pendura" 30s —
+            # não esperamos por ela aqui; o polling de URL abaixo confirma o login.
+            try:
+                page.click('button[type="submit"], input[type="submit"]',
+                           no_wait_after=True, timeout=15000)
+            except Exception:
+                pass  # mesmo se o click reclamar de navegação, segue pro polling
+            ok = False
+            for _ in range(120):  # até ~60s
+                u = page.url
+                if "/login" not in u and "checklogin" not in u:
+                    ok = True
+                    break
+                page.wait_for_timeout(500)
+            page.wait_for_timeout(1500)
+            if ok and "/login" not in page.url and "checklogin" not in page.url:
+                return browser, ctx, page
+            last = RuntimeError(f"Falha no login — URL pos-submit: {page.url}")
+        except Exception as e:
+            last = e
+        try:
+            browser.close()
+        except Exception:
+            pass
+        if tentativa < 3:
+            time.sleep(4)  # backoff antes de tentar de novo
+    raise last or RuntimeError("Falha no login PRORADIS após 3 tentativas")
 
 
 def _is_logged_out(page) -> bool:

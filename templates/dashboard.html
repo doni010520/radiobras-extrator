@@ -407,7 +407,9 @@ async function poll(id){
   (j.log||[]).slice(seen).forEach(logLine);seen=(j.log||[]).length;
   if(j.status==='running'||j.status==='queued'){$('runtxt').textContent=j.status==='queued'?'Na fila…':'Processando…';return;}
   clearInterval(timer);$('runspin').style.display='none';
-  if(j.status==='error'){$('runtxt').textContent='Erro';$('errbox').classList.add('show');$('errbox').textContent=j.error||'Falha.';}
+  if(j.status==='error'){$('runtxt').textContent='Não concluído';$('errbox').classList.add('show');
+    $('errbox').innerHTML='⚠️ '+(j.error||'Não foi possível concluir o processamento.')
+      +'<br><span style="opacity:.85;font-size:12px">Código: <b>'+(j.error_code||'—')+'</b> · pode tentar de novo. Se persistir, passe esse código — os detalhes ficam registrados nos logs.</span>';}
   else if(j.status==='done'){$('runtxt').textContent=(j.dry_run?'Simulação concluída':'Dia fechado')+' ✓';}
   if(j.status==='done'&&j.run_id){
     abrirRelatorio(j.run_id);   // apresenta o relatório automaticamente

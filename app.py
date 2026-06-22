@@ -892,7 +892,10 @@ def fechar_status(job_id: str):
     resp: dict = {"status": job["status"], "log": job.get("log", [])}
     resp["run_id"] = job.get("run_id")
     if job["status"] == "error":
-        resp["error"] = job.get("error", "")
+        # NÃO vaza o traceback/erro técnico pro usuário — só uma mensagem amigável
+        # + um código (run_id) p/ a equipe achar os detalhes nos logs (DB/diag).
+        resp["error"] = "Não foi possível concluir o processamento."
+        resp["error_code"] = str(job.get("run_id") or job_id)
     if job["status"] == "done":
         rel = job.get("relatorio", {})
         resp["resumo"] = rel.get("resumo", {})
