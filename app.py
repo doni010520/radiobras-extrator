@@ -47,10 +47,12 @@ try:
     db.init_db()
     app.logger.info("Banco inicializado (%s).", db.DATABASE_URL.split("@")[-1])
     # Toda execução em 'running' no startup é zumbi (o processo que a iniciou
-    # morreu) — marca como erro p/ não ficar presa no histórico.
-    _z = db.limpar_runs_travadas()
-    if _z:
-        app.logger.info("Limpas %d execução(ões) travada(s) no startup.", _z)
+    # morreu) — marca como erro. SÓ sob gunicorn (produção): evita que um
+    # `import app` local (teste) marque execuções reais do servidor.
+    if "gunicorn" in sys.modules:
+        _z = db.limpar_runs_travadas()
+        if _z:
+            app.logger.info("Limpas %d execução(ões) travada(s) no startup.", _z)
 except Exception as _e:
     app.logger.error("Falha ao inicializar banco: %s", _e)
 
