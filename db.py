@@ -200,6 +200,25 @@ def finalizar_run_erro(run_id: int, msg: str, log_texto: str = None) -> None:
         s.commit()
 
 
+def limpar_runs_travadas(horas: float = None) -> int:
+    """Marca como 'error' execuções presas em 'running'. Sem `horas`: TODAS (uso no
+    startup — o processo que as iniciou já morreu, são zumbis). Com `horas`: só as
+    que estão em running há mais que isso (pega travamentos sem reinício)."""
+    from datetime import timedelta
+    with SessionLocal() as s:
+        q = s.query(Run).filter(Run.status == "running")
+        if horas is not None:
+            q = q.filter(Run.started_at < _now() - timedelta(hours=horas))
+        rs = q.all()
+        for r in rs:
+            r.status = "error"
+            r.finished_at = _now()
+            r.erro_msg = ((r.erro_msg or "") +
+                          "\n[limpeza automática] execução interrompida (não finalizou).").strip()
+        s.commit()
+        return len(rs)
+
+
 def runs_recentes(limite: int = 15) -> list:
     """Últimas execuções de QUALQUER status (done/error/running) — p/ diagnóstico."""
     with SessionLocal() as s:

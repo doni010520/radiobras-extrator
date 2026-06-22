@@ -46,6 +46,11 @@ from config import CONVENIOS, SEGMENTOS
 try:
     db.init_db()
     app.logger.info("Banco inicializado (%s).", db.DATABASE_URL.split("@")[-1])
+    # Toda execução em 'running' no startup é zumbi (o processo que a iniciou
+    # morreu) — marca como erro p/ não ficar presa no histórico.
+    _z = db.limpar_runs_travadas()
+    if _z:
+        app.logger.info("Limpas %d execução(ões) travada(s) no startup.", _z)
 except Exception as _e:
     app.logger.error("Falha ao inicializar banco: %s", _e)
 
@@ -247,6 +252,11 @@ def _glosa_scheduler():
         hora = 6
     while not _glosa_stop.is_set():
         try:
+            # guarda periódico: execução presa em running há +3h = travada
+            try:
+                db.limpar_runs_travadas(horas=3)
+            except Exception:
+                pass
             agora = datetime.now(_TZ) if _TZ else datetime.now()
             if agora.hour >= hora and not _glosa_atualizou_hoje():
                 dia = agora.strftime("%d/%m/%Y")
