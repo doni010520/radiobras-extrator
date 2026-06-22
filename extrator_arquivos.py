@@ -268,12 +268,18 @@ def listar_worklist_dia(page, data: str) -> list:
             'filtro_data_inicio': inicio,
             'filtro_data_fim': fim,
         });
-        const r = await fetch('/ris/reports_list/get_list', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: body.toString(),
-            credentials: 'include'
-        });
+        const _ac = new AbortController();
+        const _to = setTimeout(() => _ac.abort(), 25000);
+        let r;
+        try {
+            r = await fetch('/ris/reports_list/get_list', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: body.toString(),
+                credentials: 'include',
+                signal: _ac.signal
+            });
+        } finally { clearTimeout(_to); }
         return await r.text();
     }"""
 
@@ -300,12 +306,18 @@ _JS_WL_NOME = """async ([nome, inicio, fim, tipo]) => {
         'filtro_data_inicio': inicio,
         'filtro_data_fim': fim,
     });
-    const r = await fetch('/ris/reports_list/get_list', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: body.toString(),
-        credentials: 'include'
-    });
+    const _ac = new AbortController();
+    const _to = setTimeout(() => _ac.abort(), 25000);
+    let r;
+    try {
+        r = await fetch('/ris/reports_list/get_list', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: body.toString(),
+            credentials: 'include',
+            signal: _ac.signal
+        });
+    } finally { clearTimeout(_to); }
     return await r.text();
 }"""
 

@@ -175,6 +175,10 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
         email, password = get_credentials()
         with sync_playwright() as pw:
             br, ctx, pg = _login_playwright(pw, email, password)
+            # Timeouts no contexto (valem p/ pg e popups): nenhuma operação do
+            # PRORADIS pendura pra sempre — um paciente travado estoura e segue.
+            ctx.set_default_timeout(45000)
+            ctx.set_default_navigation_timeout(60000)
             try:
                 df = _get_relatorio_analitico(pg, convenios, segmentos, data)
                 cod_col = "Cód. Pac" if "Cód. Pac" in df.columns else df.columns[1]
@@ -195,7 +199,7 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                     if len(nm) > len(pac["nome"]):
                         pac["nome"] = nm
 
-                for g in alvos:
+                def _proc(g):
                     _tp = time.monotonic()
                     item = {"gto": g["gto"], "nome_gto": g["nome"], "arquivos": [],
                             "solicitacao": None, "status": "", "detalhe": "",
@@ -217,7 +221,7 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                     if len(cands) > 1:
                         item["status"] = "AMBIGUO"
                         log(f"   [AMBÍGUO] GTO {g['gto']} {g['nome']!r}")
-                        itens.append(item); continue
+                        return item
 
                     # (a) localizar paciente + worklist (laudo + imagens)
                     if cands:
@@ -251,13 +255,13 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                             item["status"] = "AMBIGUO"
                             log(f"   [AMBÍGUO-LAUDOS] GTO {g['gto']} {g['nome']!r}: "
                                 f"vários pacientes nos laudos {list(casam)}")
-                            itens.append(item); continue
+                            return item
                         accs = sorted({a for v in casam.values() for a in v}) if casam else []
                         if not accs:
                             item["status"] = "SEM_MATCH"
                             log(f"   [SEM MATCH] GTO {g['gto']} {g['nome']!r} "
                                 "(nem no analítico nem nos laudos)")
-                            itens.append(item); continue
+                            return item
                         pac = {"nome": g["nome"], "cod_pac": "WL" + accs[0],
                                "accessions": accs}
                         item["detalhe"] = "encontrado nos laudos (fora do analítico REDE UNNA)"
@@ -417,7 +421,23 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                     log(f"      {item['status']} | laudo={tem_laudo} imgs={n_imgs} "
                         f"| solic={sol_dec} | arquivos={len(arquivos)} "
                         f"({time.monotonic() - _tp:.0f}s)")
-                    itens.append(item)
+                    return item
+
+                # Cada paciente isolado: se travar/expirar, vira "a revisar" e
+                # SEGUE pro próximo — nunca congela a fila inteira (caso EDUARDA).
+                for g in alvos:
+                    _ini = time.monotonic()
+                    try:
+                        itens.append(_proc(g))
+                    except Exception as e:
+                        log(f"   [ERRO/TIMEOUT] GTO {g['gto']} {g['nome']!r}: "
+                            f"{str(e)[:140]} ({time.monotonic() - _ini:.0f}s) -> revisão")
+                        itens.append({
+                            "gto": g["gto"], "nome_gto": g["nome"], "arquivos": [],
+                            "solicitacao": None, "status": "ERRO",
+                            "detalhe": f"processamento interrompido/expirou: {str(e)[:140]}",
+                            "revisao_humana": "processamento falhou ou expirou — conferir manualmente",
+                        })
             finally:
                 br.close()
         log(f"   Fase 2 (PRORADIS) concluída em {time.monotonic() - _t_fase2:.0f}s "
