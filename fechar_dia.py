@@ -169,80 +169,10 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
 
         log(f"   Fase 1 (lista + checagem) concluída em {_dt()}.")
 
-        # ── Fase 2 + 3 em PIPELINE ─────────────────────────────────────────────
-        # download (PRORADIS) e anexação (OdontoPrev) ao MESMO TEMPO: o downloader
-        # (fluxo principal) empurra cada paciente pronto numa fila; o anexador
-        # (thread) consome e anexa enquanto o próximo já baixa. Sistemas diferentes,
-        # não competem -> a anexação "esconde" o tempo de download.
-        from queue import Queue as _Queue
-        import threading as _threading
+        # ── Fase 2: PRORADIS — montar arquivos por paciente ───────────────────
         _t_fase2 = time.monotonic()
-        _t_pipe = time.monotonic()
-        ready_q = _Queue()
-        _SENT = object()
-        log(f"[2/3]+[3/3] Pipeline: download + anexação simultâneos | {len(alvos)} paciente(s)...")
+        log(f"[2/3] PRORADIS: baixando p/ {len(alvos)} paciente(s)...")
         email, password = get_credentials()
-
-        def _fase3_consumidor():
-            _b = None; page = None; nav = False; nav_falhou = False
-            try:
-                with sync_playwright() as pw3:
-                    while True:
-                        item = ready_q.get()
-                        if item is _SENT:
-                            break
-                        itens.append(item)   # SEMPRE drena a fila (relatório completo)
-                        if dry_run:
-                            if item.get("status") == "PRONTO":
-                                log(f"   [DRY] GTO {item['gto']} <- {item.get('arquivos')}")
-                            continue
-                        if item.get("status") != "PRONTO" or not item.get("_paths"):
-                            continue
-                        if not nav and not nav_falhou:
-                            try:
-                                _b, _c, page = login_odonto(pw3, ouser, opwd)
-                                abrir_consultar_gtos(page)
-                                consultar_periodo(page, data)
-                                nav = True
-                            except Exception as e:
-                                nav_falhou = True
-                                log(f"   [FASE 3] login OdontoPrev falhou: {str(e)[:140]} "
-                                    "— itens prontos ficam p/ anexar manual")
-                        if nav_falhou:
-                            item["detalhe"] = (item.get("detalhe", "") +
-                                               " | anexação automática indisponível").strip(" |")
-                            item["revisao_humana"] = (item.get("revisao_humana", "") +
-                                " | pronto, mas não anexado (anexar manualmente)").strip(" |")
-                            continue
-                        try:
-                            gp = abrir_gto(page, item["gto"],
-                                           _refrescar=lambda: consultar_periodo(page, data))
-                            r = upload_arquivos(gp, item["_paths"])
-                            item["upload"] = r
-                            item["status"] = "ENVIADO" if r.get("ok") else "ERRO_UPLOAD"
-                            nv, jx = len(r.get("enviados", [])), len(r.get("ja_anexados", []))
-                            log(f"   [{item['status']}] GTO {item['gto']}: enviados={nv} "
-                                f"ja_anexados={jx} anexos "
-                                f"{r.get('anexos_antes')}->{r.get('anexos_depois')}")
-                            try:
-                                gp.close()
-                            except Exception:
-                                pass
-                        except Exception as e:
-                            item["status"] = "ERRO"
-                            item["detalhe"] = str(e)
-                            log(f"   [ERRO-ANEXAR] GTO {item['gto']}: {str(e)[:140]}")
-                    if _b:
-                        try:
-                            _b.close()
-                        except Exception:
-                            pass
-            except Exception as e:
-                log(f"   [FASE 3] consumidor falhou: {str(e)[:140]}")
-
-        _cons = _threading.Thread(target=_fase3_consumidor, daemon=True)
-        _cons.start()
-
         with sync_playwright() as pw:
             br, ctx, pg = _login_playwright(pw, email, password)
             # Timeouts no contexto (valem p/ pg e popups): nenhuma operação do
@@ -498,11 +428,11 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                 for g in alvos:
                     _ini = time.monotonic()
                     try:
-                        ready_q.put(_proc(g))
+                        itens.append(_proc(g))
                     except Exception as e:
                         log(f"   [ERRO/TIMEOUT] GTO {g['gto']} {g['nome']!r}: "
                             f"{str(e)[:140]} ({time.monotonic() - _ini:.0f}s) -> revisão")
-                        ready_q.put({
+                        itens.append({
                             "gto": g["gto"], "nome_gto": g["nome"], "arquivos": [],
                             "solicitacao": None, "status": "ERRO",
                             "detalhe": f"processamento interrompido/expirou: {str(e)[:140]}",
@@ -510,12 +440,45 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                         })
             finally:
                 br.close()
-        log(f"   Fase 2 (download) concluída em {time.monotonic() - _t_fase2:.0f}s.")
-        # sinaliza fim ao anexador e espera ele terminar de anexar a fila
-        ready_q.put(_SENT)
-        _cons.join(timeout=2400)
-        log(f"   Pipeline (Fase 2+3) total: {time.monotonic() - _t_pipe:.0f}s "
-            f"(geral {_dt()}).")
+        log(f"   Fase 2 (PRORADIS) concluída em {time.monotonic() - _t_fase2:.0f}s "
+            f"(total {_dt()}).")
+
+        # ── Fase 3: OdontoPrev — anexar ───────────────────────────────────────
+        prontos = [i for i in itens if i["status"] == "PRONTO" and i.get("_paths")]
+        log(f"\n[3/3] OdontoPrev: {'[DRY-RUN] ' if dry_run else ''}"
+            f"anexar em {len(prontos)} GTO(s)...")
+        if not dry_run and prontos:
+            with sync_playwright() as pw:
+                b, c, page = login_odonto(pw, ouser, opwd)
+                try:
+                    abrir_consultar_gtos(page)
+                    consultar_periodo(page, data)
+                    def _refrescar():
+                        consultar_periodo(page, data)
+                    for item in prontos:
+                        try:
+                            gp = abrir_gto(page, item["gto"], _refrescar=_refrescar)
+                            r = upload_arquivos(gp, item["_paths"])
+                            item["upload"] = r
+                            item["status"] = "ENVIADO" if r.get("ok") else "ERRO_UPLOAD"
+                            nv, jx = len(r.get("enviados", [])), len(r.get("ja_anexados", []))
+                            log(f"   [{item['status']}] GTO {item['gto']}: "
+                                f"enviados={nv} ja_anexados={jx} "
+                                f"anexos {r.get('anexos_antes')}->{r.get('anexos_depois')}")
+                            try:
+                                gp.close()
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            item["status"] = "ERRO"
+                            item["detalhe"] = str(e)
+                            log(f"   [ERRO] GTO {item['gto']}: {e}")
+                finally:
+                    b.close()
+        elif dry_run:
+            for item in prontos:
+                log(f"   [DRY] GTO {item['gto']} <- {item['arquivos']}")
+        log(f"   Tempo total: {_dt()}.")
 
         # ── Relatório ─────────────────────────────────────────────────────────
         def cnt(s):
