@@ -95,6 +95,8 @@ def _ler_solic_gemini(gem, pg, ctx, pac):
     sess.headers.update({"User-Agent": "Mozilla/5.0", "Referer": f"{BASE}/patients"})
     lidas = 0
     for it in lista:
+        if lidas >= 3:   # teto p/ não estourar rate-limit da free tier no teste
+            break
         ext = it["filename"].lower().rsplit(".", 1)[-1] if "." in it["filename"] else ""
         mime = {"pdf": "application/pdf", "png": "image/png",
                 "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
