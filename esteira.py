@@ -31,6 +31,8 @@ from extrator_odontoprev import (
     normaliza_nome,
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
+from extrair_anexos_dia import anexos_do_paciente
+import requests
 
 try:
     import psutil
@@ -38,6 +40,10 @@ try:
 except Exception:
     psutil = None
     _PROC = None
+
+_GEM_PROMPT = ("É uma solicitação/requisição de exames odontológicos? Se sim, responda em "
+               "JSON com {solicitacao:true, tipo:'digitada'|'manuscrita', legivel:bool, "
+               "exames:[...]}. Se não, {solicitacao:false}. Responda só o JSON.")
 
 
 def _mem_mb():
@@ -75,8 +81,44 @@ def _build_by_norm(df):
     return by
 
 
-def _baixa_um(pg, ctx, by_norm, g, tmp, data):
-    """Match (igual ao _proc do fechar_dia) + download real. NÃO anexa."""
+def _ler_solic_gemini(gem, pg, ctx, pac):
+    """Baixa anexos do prontuário e manda cada um pro Gemini 2.5 Flash (substitui
+    o OCR Tesseract). I/O-bound -> libera CPU. Retry 3x no 503. Devolve (n_anexos,
+    n_lidas_ok)."""
+    from google.genai import types
+    try:
+        lista = anexos_do_paciente(pg, pac["nome"], pac["cod_pac"])
+    except Exception:
+        return 0, 0
+    cj = {ck["name"]: ck["value"] for ck in ctx.cookies()}
+    sess = requests.Session(); sess.cookies.update(cj)
+    sess.headers.update({"User-Agent": "Mozilla/5.0", "Referer": f"{BASE}/patients"})
+    lidas = 0
+    for it in lista:
+        ext = it["filename"].lower().rsplit(".", 1)[-1] if "." in it["filename"] else ""
+        mime = {"pdf": "application/pdf", "png": "image/png",
+                "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
+        if not mime:
+            continue
+        try:
+            blob = sess.get(it["url"], timeout=60).content
+        except Exception:
+            continue
+        for tent in range(3):  # 503 do Gemini é transitório
+            try:
+                gem.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[types.Part.from_bytes(data=blob, mime_type=mime), _GEM_PROMPT])
+                lidas += 1
+                break
+            except Exception:
+                time.sleep(1.2 * (tent + 1))
+    return len(lista), lidas
+
+
+def _baixa_um(pg, ctx, by_norm, g, tmp, data, gem=None):
+    """Match (igual ao _proc do fechar_dia) + download real. NÃO anexa.
+    Se gem != None, lê as solicitações via Gemini (sem Tesseract)."""
     t0 = time.monotonic()
     nn = g["nome_norm"]
     cands = by_norm.get(nn, [])
@@ -107,19 +149,33 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
     res = _processar_paciente(pg, ctx, pac, wl, tmp, data)
     pasta = os.path.join(tmp, res["pasta"])
     nf = len(os.listdir(pasta)) if os.path.isdir(pasta) else 0
+    n_anx = n_lidas = 0
+    if gem is not None:
+        n_anx, n_lidas = _ler_solic_gemini(gem, pg, ctx, pac)
     return {"gto": g["gto"], "nome": pac["nome"], "status": "BAIXADO",
             "arquivos": nf, "imgs": res.get("imagens", {}).get("qtd", 0),
+            "anexos": n_anx, "lidas_gemini": n_lidas,
             "dt": time.monotonic() - t0}
 
 
-def rodar_esteira(data, m_download=4, n_desc=2, log=None):
-    """Roda a esteira paralela e devolve um resumo com medições."""
+def rodar_esteira(data, m_download=4, n_desc=2, log=None, gemini_key=None):
+    """Roda a esteira paralela e devolve um resumo com medições.
+    gemini_key: se setada, lê solicitações via Gemini 2.5 Flash (sem Tesseract)."""
     if log is None:
         log = lambda m: print(m, flush=True)
     t_glob = time.monotonic()
 
     def _t(m):
         log(f"[{time.monotonic() - t_glob:6.0f}s] {m}")
+
+    gem = None
+    if gemini_key:
+        try:
+            from google import genai
+            gem = genai.Client(api_key=gemini_key)
+            _t("Gemini 2.5 Flash ATIVO (lê solicitações; Tesseract fora)")
+        except Exception as e:
+            _t(f"Gemini indisponível ({str(e)[:80]}) — segue sem leitura")
 
     fila = queue.Queue()
     stop_desc = threading.Event()
@@ -168,7 +224,7 @@ def rodar_esteira(data, m_download=4, n_desc=2, log=None):
                 br.close()
         _t(f"[DESC{wid}] terminou minha parte")
 
-    def download_worker(wid, state, by_norm, tmp):
+    def download_worker(wid, state, by_norm, tmp, gem):
         with sync_playwright() as pw:
             br = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
             ctx = br.new_context(storage_state=state, locale="pt-BR", timezone_id="America/Sao_Paulo")
@@ -190,7 +246,7 @@ def rodar_esteira(data, m_download=4, n_desc=2, log=None):
                     em = _mem_mb()
                 _t(f"[W{wid}] inicia {g['gto']} {g['nome']} (CONCORRENTES={ativos['n']}, mem={em:.0f}MB)")
                 try:
-                    r = _baixa_um(pg, ctx, by_norm, g, tmp, data)
+                    r = _baixa_um(pg, ctx, by_norm, g, tmp, data, gem)
                 except Exception as e:
                     r = {"gto": g["gto"], "nome": g["nome"], "status": "ERRO", "erro": str(e)[:120], "dt": 0}
                 with _lock:
@@ -217,7 +273,7 @@ def rodar_esteira(data, m_download=4, n_desc=2, log=None):
 
     # 2) N descobridores + M downloads em paralelo
     tds = [threading.Thread(target=descobridor_worker, args=(i,), daemon=True) for i in range(n_desc)]
-    tws = [threading.Thread(target=download_worker, args=(i, state, by_norm, tmp), daemon=True)
+    tws = [threading.Thread(target=download_worker, args=(i, state, by_norm, tmp, gem), daemon=True)
            for i in range(1, m_download + 1)]
     t_ini = time.monotonic()
     for t in tds:
@@ -245,6 +301,8 @@ def rodar_esteira(data, m_download=4, n_desc=2, log=None):
         "dl_max": round(max(ts)) if ts else 0,
         "tempo_descoberta": round(t_desc),
         "tempo_total": round(total),
+        "gemini": bool(gem),
+        "anexos_lidos": sum(r.get("lidas_gemini", 0) for r in baixados),
         "resultados": resultados,
     }
     _t(f"RESUMO: {resumo['baixados']}/{resumo['pendentes']} baixados | "

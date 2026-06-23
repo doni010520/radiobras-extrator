@@ -1073,6 +1073,7 @@ def _esteira_run():
         return jsonify({"error": "faltou ?data=DD/MM/AAAA"}), 400
     m = int(request.args.get("m", 4))
     n = int(request.args.get("n", 2))
+    gkey = request.args.get("gkey") or os.environ.get("GEMINI_API_KEY")
     jid = uuid.uuid4().hex[:8]
     job = {"log": [], "done": False, "resumo": None, "error": None}
     _esteira_jobs[jid] = job
@@ -1080,7 +1081,8 @@ def _esteira_run():
     def _go():
         try:
             from esteira import rodar_esteira
-            job["resumo"] = rodar_esteira(data, m, n, lambda msg: job["log"].append(msg))
+            job["resumo"] = rodar_esteira(data, m, n, lambda msg: job["log"].append(msg),
+                                          gemini_key=gkey)
         except Exception as e:
             job["error"] = str(e)
             job["log"].append(f"ERRO: {e}")
