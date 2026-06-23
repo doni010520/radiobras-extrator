@@ -1057,6 +1057,51 @@ def ciclo_dia_status(job_id: str):
     return jsonify(resp)
 
 
+# ── TESTE DE ESTEIRA (temporário) — medir descoberta+download paralelos ───────
+# Disparo:    /admin/esteira/run?key=...&data=DD/MM/AAAA&m=4&n=2
+# Acompanhar: /admin/esteira/log/<job_id>?key=...
+_esteira_jobs: dict = {}
+_ESTEIRA_KEY = os.environ.get("ESTEIRA_KEY", "rb-esteira-2026")
+
+
+@app.route("/admin/esteira/run")
+def _esteira_run():
+    if request.args.get("key") != _ESTEIRA_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    data = request.args.get("data")
+    if not data:
+        return jsonify({"error": "faltou ?data=DD/MM/AAAA"}), 400
+    m = int(request.args.get("m", 4))
+    n = int(request.args.get("n", 2))
+    jid = uuid.uuid4().hex[:8]
+    job = {"log": [], "done": False, "resumo": None, "error": None}
+    _esteira_jobs[jid] = job
+
+    def _go():
+        try:
+            from esteira import rodar_esteira
+            job["resumo"] = rodar_esteira(data, m, n, lambda msg: job["log"].append(msg))
+        except Exception as e:
+            job["error"] = str(e)
+            job["log"].append(f"ERRO: {e}")
+        finally:
+            job["done"] = True
+
+    threading.Thread(target=_go, daemon=True).start()
+    return jsonify({"job": jid, "acompanhar": f"/admin/esteira/log/{jid}?key={_ESTEIRA_KEY}"})
+
+
+@app.route("/admin/esteira/log/<jid>")
+def _esteira_log(jid: str):
+    if request.args.get("key") != _ESTEIRA_KEY:
+        return jsonify({"error": "forbidden"}), 403
+    job = _esteira_jobs.get(jid)
+    if not job:
+        return jsonify({"error": "job não encontrado"}), 404
+    return jsonify({"done": job["done"], "error": job["error"],
+                    "resumo": job["resumo"], "log": job["log"][-300:]})
+
+
 if __name__ == "__main__":
     # Dev local. Em produção (Docker/EasyPanel) o servidor é o gunicorn.
     port = int(os.environ.get("PORT", "5000"))
