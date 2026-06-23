@@ -1,15 +1,18 @@
 """
-esteira.py — Esteira PARALELA das 2 primeiras etapas (descoberta + download),
-reusável (chamável de uma rota/job). NÃO anexa.
+esteira.py — Pipeline PARALELO de 3 estágios (descoberta -> download -> leitura).
+NÃO anexa. Cada estágio tem fila + pool próprios, então rodam sobrepostos.
 
-  DESCOBERTA: N sessões OdontoPrev independentes; cada uma carrega a tabela do
-     dia e abre SÓ o seu fatiado (gto % N == wid) -> robusto a ordenação.
-     Cada pendente cai na fila.
-  DOWNLOAD: M workers PRORADIS (sessão compartilhada via storage_state); cada
-     worker pega da fila, baixa laudo+imagens (real), e ao terminar pega o
-     próximo (vaga liberou -> entra outro).
+  DESCOBERTA  (N sessões OdontoPrev): abre cada GTO alvo, conta anexos, pendente
+              -> fila_pend.
+  DOWNLOAD    (M sessões PRORADIS, sessão compartilhada): baixa laudo+imagens
+              (rápido, ~13s) e ENTREGA pra fila_leit (não fica preso na leitura).
+  LEITURA     (K sessões PRORADIS + Gemini 2.5 Flash): baixa anexos do prontuário
+              e lê as solicitações via Gemini (I/O-bound; substitui o Tesseract).
 
-rodar_esteira(data, m_download, n_desc, log) -> dict (resumo + medições).
+A separação da leitura num pool próprio é o ponto: o download não trava na
+leitura, e a leitura escala sozinha (limitada pela cota do Gemini, não pela CPU).
+
+rodar_esteira(data, m_download, n_desc, k_leitura, log, gemini_key) -> resumo.
 """
 import os
 import queue
@@ -17,6 +20,7 @@ import tempfile
 import threading
 import time
 
+import requests
 from playwright.sync_api import sync_playwright
 
 from config import CONVENIOS, SEGMENTOS
@@ -32,7 +36,6 @@ from extrator_odontoprev import (
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
-import requests
 
 try:
     import psutil
@@ -42,8 +45,9 @@ except Exception:
     _PROC = None
 
 _GEM_PROMPT = ("É uma solicitação/requisição de exames odontológicos? Se sim, responda em "
-               "JSON com {solicitacao:true, tipo:'digitada'|'manuscrita', legivel:bool, "
-               "exames:[...]}. Se não, {solicitacao:false}. Responda só o JSON.")
+               "JSON {solicitacao:true, tipo:'digitada'|'manuscrita', legivel:bool, exames:[...]}. "
+               "Se não, {solicitacao:false}. Responda só o JSON.")
+_MAX_LEITURAS = 5  # teto de anexos lidos por paciente (mesmo no tier pago)
 
 
 def _mem_mb():
@@ -81,10 +85,47 @@ def _build_by_norm(df):
     return by
 
 
-def _ler_solic_gemini(gem, pg, ctx, pac):
-    """Baixa anexos do prontuário e manda cada um pro Gemini 2.5 Flash (substitui
-    o OCR Tesseract). I/O-bound -> libera CPU. Retry 3x no 503. Devolve (n_anexos,
-    n_lidas_ok)."""
+def _baixa_um(pg, ctx, by_norm, g, tmp, data):
+    """ESTÁGIO 2 (download only): match + baixa laudo+imagens. Devolve item com
+    _pac embutido (p/ o estágio de leitura). NÃO lê solicitação aqui."""
+    t0 = time.monotonic()
+    nn = g["nome_norm"]
+    cands = by_norm.get(nn, [])
+    if not cands:
+        vistos, pref = set(), []
+        for key, lst in by_norm.items():
+            if _prefixo_casa(key, nn):
+                for p in lst:
+                    if p["cod_pac"] not in vistos:
+                        vistos.add(p["cod_pac"]); pref.append(p)
+        cands = pref
+    if len(cands) > 1:
+        return {"gto": g["gto"], "nome": g["nome"], "status": "AMBIGUO", "dt_dl": time.monotonic() - t0}
+    if cands:
+        pac = cands[0]
+        wl = listar_worklist_por_pacientes(pg, data, [pac["nome"]])
+    else:
+        wl = listar_worklist_por_pacientes(pg, data, [g["nome"]])
+        accs = sorted({w["accession"] for w in wl if w.get("accession")})
+        toks = g["nome"].split()
+        while not accs and len(toks) > 2:
+            toks = toks[:-1]
+            wl = listar_worklist_por_pacientes(pg, data, [" ".join(toks)])
+            accs = sorted({w["accession"] for w in wl if w.get("accession")})
+        if not accs:
+            return {"gto": g["gto"], "nome": g["nome"], "status": "SEM_MATCH", "dt_dl": time.monotonic() - t0}
+        pac = {"nome": g["nome"], "cod_pac": "WL" + accs[0], "accessions": accs}
+    res = _processar_paciente(pg, ctx, pac, wl, tmp, data)
+    pasta = os.path.join(tmp, res["pasta"])
+    nf = len(os.listdir(pasta)) if os.path.isdir(pasta) else 0
+    return {"gto": g["gto"], "nome": pac["nome"], "status": "BAIXADO",
+            "arquivos": nf, "imgs": res.get("imagens", {}).get("qtd", 0),
+            "_pac": pac, "dt_dl": time.monotonic() - t0}
+
+
+def _ler_solic(gem, pg, ctx, pac):
+    """ESTÁGIO 3 (leitura): baixa anexos do prontuário e lê cada um no Gemini 2.5
+    Flash (I/O-bound; sem Tesseract). Retry 3x no 503. Devolve (n_anexos, n_lidas)."""
     from google.genai import types
     try:
         lista = anexos_do_paciente(pg, pac["nome"], pac["cod_pac"])
@@ -95,7 +136,7 @@ def _ler_solic_gemini(gem, pg, ctx, pac):
     sess.headers.update({"User-Agent": "Mozilla/5.0", "Referer": f"{BASE}/patients"})
     lidas = 0
     for it in lista:
-        if lidas >= 3:   # teto p/ não estourar rate-limit da free tier no teste
+        if lidas >= _MAX_LEITURAS:
             break
         ext = it["filename"].lower().rsplit(".", 1)[-1] if "." in it["filename"] else ""
         mime = {"pdf": "application/pdf", "png": "image/png",
@@ -114,55 +155,13 @@ def _ler_solic_gemini(gem, pg, ctx, pac):
                 lidas += 1
                 break
             except Exception:
-                time.sleep(1.2 * (tent + 1))
+                time.sleep(1.0 * (tent + 1))
     return len(lista), lidas
 
 
-def _baixa_um(pg, ctx, by_norm, g, tmp, data, gem=None):
-    """Match (igual ao _proc do fechar_dia) + download real. NÃO anexa.
-    Se gem != None, lê as solicitações via Gemini (sem Tesseract)."""
-    t0 = time.monotonic()
-    nn = g["nome_norm"]
-    cands = by_norm.get(nn, [])
-    if not cands:
-        vistos, pref = set(), []
-        for key, lst in by_norm.items():
-            if _prefixo_casa(key, nn):
-                for p in lst:
-                    if p["cod_pac"] not in vistos:
-                        vistos.add(p["cod_pac"]); pref.append(p)
-        cands = pref
-    if len(cands) > 1:
-        return {"gto": g["gto"], "nome": g["nome"], "status": "AMBIGUO", "dt": time.monotonic() - t0}
-    if cands:
-        pac = cands[0]
-        wl = listar_worklist_por_pacientes(pg, data, [pac["nome"]])
-    else:
-        wl = listar_worklist_por_pacientes(pg, data, [g["nome"]])
-        accs = sorted({w["accession"] for w in wl if w.get("accession")})
-        toks = g["nome"].split()
-        while not accs and len(toks) > 2:
-            toks = toks[:-1]
-            wl = listar_worklist_por_pacientes(pg, data, [" ".join(toks)])
-            accs = sorted({w["accession"] for w in wl if w.get("accession")})
-        if not accs:
-            return {"gto": g["gto"], "nome": g["nome"], "status": "SEM_MATCH", "dt": time.monotonic() - t0}
-        pac = {"nome": g["nome"], "cod_pac": "WL" + accs[0], "accessions": accs}
-    res = _processar_paciente(pg, ctx, pac, wl, tmp, data)
-    pasta = os.path.join(tmp, res["pasta"])
-    nf = len(os.listdir(pasta)) if os.path.isdir(pasta) else 0
-    n_anx = n_lidas = 0
-    if gem is not None:
-        n_anx, n_lidas = _ler_solic_gemini(gem, pg, ctx, pac)
-    return {"gto": g["gto"], "nome": pac["nome"], "status": "BAIXADO",
-            "arquivos": nf, "imgs": res.get("imagens", {}).get("qtd", 0),
-            "anexos": n_anx, "lidas_gemini": n_lidas,
-            "dt": time.monotonic() - t0}
-
-
-def rodar_esteira(data, m_download=4, n_desc=2, log=None, gemini_key=None):
-    """Roda a esteira paralela e devolve um resumo com medições.
-    gemini_key: se setada, lê solicitações via Gemini 2.5 Flash (sem Tesseract)."""
+def rodar_esteira(data, m_download=3, n_desc=3, k_leitura=4, log=None, gemini_key=None):
+    """Pipeline de 3 estágios. gemini_key liga o estágio de leitura (sem ela, só
+    descoberta+download)."""
     if log is None:
         log = lambda m: print(m, flush=True)
     t_glob = time.monotonic()
@@ -175,18 +174,22 @@ def rodar_esteira(data, m_download=4, n_desc=2, log=None, gemini_key=None):
         try:
             from google import genai
             gem = genai.Client(api_key=gemini_key)
-            _t("Gemini 2.5 Flash ATIVO (lê solicitações; Tesseract fora)")
+            _t(f"Gemini 2.5 Flash ATIVO | pool de leitura K={k_leitura} (Tesseract fora)")
         except Exception as e:
-            _t(f"Gemini indisponível ({str(e)[:80]}) — segue sem leitura")
+            _t(f"Gemini indisponível ({str(e)[:80]}) — roda sem leitura")
 
-    fila = queue.Queue()
+    fila_pend = queue.Queue()
+    fila_leit = queue.Queue()
     stop_desc = threading.Event()
+    stop_dl = threading.Event()
     _lock = threading.Lock()
     resultados = []
-    ativos = {"n": 0, "pico": 0}
-    n_pendentes = {"n": 0}
+    n_pend = {"n": 0}
+    ativos_dl = {"n": 0, "pico": 0}
+    ativos_le = {"n": 0, "pico": 0}
 
-    def descobridor_worker(wid):
+    # ---- ESTÁGIO 1: descoberta (OdontoPrev) ----
+    def descobridor(wid):
         user, pwd = get_credentials_odonto()
         with sync_playwright() as pw:
             br, ctx, pg = login_odonto(pw, user, pwd)
@@ -197,7 +200,7 @@ def rodar_esteira(data, m_download=4, n_desc=2, log=None, gemini_key=None):
                 do_dia = [g for g in gtos if g.get("liberacao") == data] or gtos
                 alvos = [g for g in do_dia if "REPASSE" in g["status"].upper()]
                 meus = [g for g in alvos if g["gto"].isdigit() and int(g["gto"]) % n_desc == wid]
-                _t(f"[DESC{wid}] {len(alvos)} alvo(s) no dia | eu cuido de {len(meus)}")
+                _t(f"[DESC{wid}] {len(alvos)} alvo(s) | eu cuido de {len(meus)}")
                 for g in meus:
                     try:
                         gp = abrir_gto(pg, g["gto"], _refrescar=None)
@@ -210,58 +213,94 @@ def rodar_esteira(data, m_download=4, n_desc=2, log=None, gemini_key=None):
                     except Exception:
                         g["nome_norm"] = normaliza_nome(g["nome"])
                         with _lock:
-                            n_pendentes["n"] += 1
-                        fila.put(g)
-                        _t(f"[DESC{wid}] GTO {g['gto']} não abriu -> manda processar")
+                            n_pend["n"] += 1
+                        fila_pend.put(g)
                         continue
                     if _ja_anexado_por_nos(nomes) or cnt >= 2:
-                        _t(f"[DESC{wid}] GTO {g['gto']} {g['nome']}: já completa -> pula")
+                        _t(f"[DESC{wid}] GTO {g['gto']}: já completa -> pula")
                         continue
                     g["nome_norm"] = normaliza_nome(g["nome"])
                     with _lock:
-                        n_pendentes["n"] += 1
-                    _t(f"[DESC{wid}] >>> PENDENTE {g['gto']} {g['nome']} -> FILA (fila={fila.qsize()})")
-                    fila.put(g)
+                        n_pend["n"] += 1
+                    _t(f"[DESC{wid}] >>> PENDENTE {g['gto']} {g['nome']} -> fila_pend")
+                    fila_pend.put(g)
             finally:
                 br.close()
-        _t(f"[DESC{wid}] terminou minha parte")
 
-    def download_worker(wid, state, by_norm, tmp, gem):
+    # ---- ESTÁGIO 2: download (PRORADIS) ----
+    def baixador(wid, state, by_norm, tmp):
         with sync_playwright() as pw:
             br = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
             ctx = br.new_context(storage_state=state, locale="pt-BR", timezone_id="America/Sao_Paulo")
             ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
             pg = ctx.new_page()
-            # pousar no domínio do PRORADIS: a worklist faz fetch('/ris/...') relativo
             pg.goto(f"{BASE}/admin_reports", wait_until="domcontentloaded", timeout=60000)
             pg.wait_for_timeout(800)
             while True:
                 try:
-                    g = fila.get(timeout=2)
+                    g = fila_pend.get(timeout=2)
                 except queue.Empty:
-                    if stop_desc.is_set() and fila.empty():
+                    if stop_desc.is_set() and fila_pend.empty():
                         break
                     continue
                 with _lock:
-                    ativos["n"] += 1
-                    ativos["pico"] = max(ativos["pico"], ativos["n"])
-                    em = _mem_mb()
-                _t(f"[W{wid}] inicia {g['gto']} {g['nome']} (CONCORRENTES={ativos['n']}, mem={em:.0f}MB)")
+                    ativos_dl["n"] += 1; ativos_dl["pico"] = max(ativos_dl["pico"], ativos_dl["n"])
                 try:
-                    r = _baixa_um(pg, ctx, by_norm, g, tmp, data, gem)
+                    r = _baixa_um(pg, ctx, by_norm, g, tmp, data)
                 except Exception as e:
-                    r = {"gto": g["gto"], "nome": g["nome"], "status": "ERRO", "erro": str(e)[:120], "dt": 0}
+                    r = {"gto": g["gto"], "nome": g["nome"], "status": "ERRO", "erro": str(e)[:120]}
                 with _lock:
-                    ativos["n"] -= 1
-                    resultados.append(r)
-                _t(f"[W{wid}] FIM {g['gto']} -> {r['status']} ({r.get('arquivos', 0)} arq, {r.get('dt', 0):.0f}s)")
+                    ativos_dl["n"] -= 1
+                _t(f"[DL{wid}] {g['gto']} -> {r['status']} ({r.get('dt_dl', 0):.0f}s)")
+                if gem is not None and r.get("status") == "BAIXADO" and r.get("_pac"):
+                    fila_leit.put(r)         # entrega pro estágio de leitura
+                else:
+                    with _lock:
+                        resultados.append(r)
             try:
                 br.close()
             except Exception:
                 pass
 
-    # 1) PRORADIS: relatório analítico (by_norm) + storage_state
-    _t(f"=== ESTEIRA {data} | descoberta={n_desc} | download={m_download} ===")
+    # ---- ESTÁGIO 3: leitura (PRORADIS + Gemini) ----
+    def leitor(wid, state):
+        with sync_playwright() as pw:
+            br = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            ctx = br.new_context(storage_state=state, locale="pt-BR", timezone_id="America/Sao_Paulo")
+            ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
+            pg = ctx.new_page()
+            pg.goto(f"{BASE}/admin_reports", wait_until="domcontentloaded", timeout=60000)
+            pg.wait_for_timeout(800)
+            while True:
+                try:
+                    item = fila_leit.get(timeout=2)
+                except queue.Empty:
+                    if stop_dl.is_set() and fila_leit.empty():
+                        break
+                    continue
+                with _lock:
+                    ativos_le["n"] += 1; ativos_le["pico"] = max(ativos_le["pico"], ativos_le["n"])
+                    em = _mem_mb()
+                t0 = time.monotonic()
+                try:
+                    n_anx, n_lidas = _ler_solic(gem, pg, ctx, item["_pac"])
+                except Exception as e:
+                    n_anx, n_lidas = 0, 0
+                    item["leitura_erro"] = str(e)[:100]
+                item["anexos"] = n_anx; item["lidas_gemini"] = n_lidas
+                item["dt_leitura"] = time.monotonic() - t0
+                with _lock:
+                    ativos_le["n"] -= 1
+                    resultados.append(item)
+                _t(f"[LE{wid}] {item['gto']} -> {n_lidas}/{n_anx} lidas "
+                   f"({item['dt_leitura']:.0f}s, leitores={ativos_le['n'] + 1}, mem={em:.0f}MB)")
+            try:
+                br.close()
+            except Exception:
+                pass
+
+    # ---- 1) PRORADIS: relatório analítico (by_norm) + storage_state ----
+    _t(f"=== PIPELINE {data} | desc={n_desc} dl={m_download} leit={k_leitura if gem else 0} ===")
     email, password = get_credentials()
     with sync_playwright() as pw0:
         br0, ctx0, pg0 = _login_playwright(pw0, email, password)
@@ -270,44 +309,43 @@ def rodar_esteira(data, m_download=4, n_desc=2, log=None, gemini_key=None):
         by_norm = _build_by_norm(df)
         state = ctx0.storage_state()
         br0.close()
-    _t(f"PRORADIS ok | by_norm={len(by_norm)} pacientes | cookies={len(state.get('cookies', []))}")
+    _t(f"PRORADIS ok | by_norm={len(by_norm)} | cookies={len(state.get('cookies', []))}")
     tmp = tempfile.mkdtemp(prefix="_esteira_")
 
-    # 2) N descobridores + M downloads em paralelo
-    tds = [threading.Thread(target=descobridor_worker, args=(i,), daemon=True) for i in range(n_desc)]
-    tws = [threading.Thread(target=download_worker, args=(i, state, by_norm, tmp, gem), daemon=True)
+    # ---- 2) lança os 3 pools ----
+    tds = [threading.Thread(target=descobridor, args=(i,), daemon=True) for i in range(n_desc)]
+    tws = [threading.Thread(target=baixador, args=(i, state, by_norm, tmp), daemon=True)
            for i in range(1, m_download + 1)]
+    tls = ([threading.Thread(target=leitor, args=(i, state), daemon=True)
+            for i in range(1, k_leitura + 1)] if gem else [])
     t_ini = time.monotonic()
-    for t in tds:
-        t.start()
-    for t in tws:
+    for t in tds + tws + tls:
         t.start()
     for t in tds:
         t.join()
     t_desc = time.monotonic() - t_ini
     stop_desc.set()
-    _t(f"[DESC] descoberta COMPLETA em {t_desc:.0f}s ({n_desc} sessão/oes)")
     for t in tws:
+        t.join()
+    t_dl = time.monotonic() - t_ini
+    stop_dl.set()
+    for t in tls:
         t.join()
     total = time.monotonic() - t_ini
 
     baixados = [r for r in resultados if r["status"] == "BAIXADO"]
-    ts = [r["dt"] for r in baixados]
     resumo = {
         "data": data, "n_desc": n_desc, "m_download": m_download,
-        "pendentes": n_pendentes["n"], "baixados": len(baixados),
+        "k_leitura": k_leitura if gem else 0, "gemini": bool(gem),
+        "pendentes": n_pend["n"], "baixados": len(baixados),
         "outros": len(resultados) - len(baixados),
-        "pico_download": ativos["pico"],
-        "dl_min": round(min(ts)) if ts else 0,
-        "dl_med": round(sum(ts) / len(ts)) if ts else 0,
-        "dl_max": round(max(ts)) if ts else 0,
-        "tempo_descoberta": round(t_desc),
-        "tempo_total": round(total),
-        "gemini": bool(gem),
+        "pico_download": ativos_dl["pico"], "pico_leitura": ativos_le["pico"],
         "anexos_lidos": sum(r.get("lidas_gemini", 0) for r in baixados),
-        "resultados": resultados,
+        "tempo_descoberta": round(t_desc), "tempo_ate_download": round(t_dl),
+        "tempo_total": round(total), "resultados": resultados,
     }
     _t(f"RESUMO: {resumo['baixados']}/{resumo['pendentes']} baixados | "
-       f"pico={resumo['pico_download']} | descoberta={resumo['tempo_descoberta']}s | "
+       f"pico dl={resumo['pico_download']} leit={resumo['pico_leitura']} | "
+       f"desc={resumo['tempo_descoberta']}s download={resumo['tempo_ate_download']}s "
        f"TOTAL={resumo['tempo_total']}s")
     return resumo
