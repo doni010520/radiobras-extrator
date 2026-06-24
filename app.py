@@ -1114,20 +1114,31 @@ def _esteira_revisao(jid: str):
     if not job or not job.get("resumo"):
         return "job não encontrado ou ainda rodando", 404
     r = job["resumo"]
-    decs = sorted(r.get("decisoes", []), key=lambda x: (not x.get("anexar_solic"), x.get("gto")))
+    _ord = {"auto": 0, "justificativa": 1, "revisao": 2}
+    decs = sorted(r.get("decisoes", []), key=lambda x: (_ord.get(x.get("categoria"), 3), x.get("gto")))
     h = ["<html><head><meta charset=utf-8><title>Revisão</title><style>",
          "body{font-family:sans-serif;background:#111;color:#eee;margin:18px}",
          ".card{border:1px solid #333;border-radius:8px;padding:12px;margin:12px 0;background:#1a1a1a}",
-         ".auto{border-left:6px solid #2ecc71}.rev{border-left:6px solid #e67e22}",
+         ".auto{border-left:6px solid #2ecc71}.justificativa{border-left:6px solid #3498db}.revisao{border-left:6px solid #e67e22}",
          "img,embed{max-height:360px;max-width:47%;border:2px solid #333;margin:4px;background:#fff;vertical-align:top}",
-         ".chosen{border:4px solid #2ecc71}.h{color:#999;font-size:13px;margin:4px 0}b{color:#fff}</style></head><body>",
-         f"<h2>Revisão — {r.get('data')} | {r.get('solic_auto')} AUTO / {r.get('solic_revisao')} revisão</h2>"]
+         ".chosen{border:4px solid #2ecc71}.h{color:#999;font-size:13px;margin:4px 0}b{color:#fff}",
+         ".aviso{background:#222;border:1px solid #444;padding:10px;border-radius:6px;color:#ddd}</style></head><body>",
+         f"<h2>Revisão — {r.get('data')} | {r.get('solic_auto')} solic-auto / "
+         f"{r.get('justificativa')} c/ justificativa / {r.get('revisao')} revisão</h2>",
+         "<div class='aviso'>⚠️ O que é anexado no RedeUna: <b>laudo + imagens</b> (sempre) e, "
+         "<b>só quando a GTO não tem justificativa</b>, a <b>solicitação destacada em verde</b>. "
+         "Os outros anexos abaixo são apenas o que o Gemini analisou pra escolher — <b>NENHUM deles é "
+         "anexado</b>.</div>"]
     for x in decs:
         g = x.get("gemini") or {}
-        cls = "auto" if x.get("anexar_solic") else "rev"
-        tag_dec = (f"→ <span style='color:#2ecc71'>ANEXA: {x.get('solicitacao')}</span>"
-                   if x.get("anexar_solic") else "→ <span style='color:#e67e22'>REVISÃO</span>")
-        h.append(f"<div class='card {cls}'><b>GTO {x['gto']} — {x['paciente']}</b> {tag_dec}")
+        cat = x.get("categoria", "revisao")
+        if cat == "auto":
+            tag_dec = f"→ <span style='color:#2ecc71'>ANEXA solicitação: {x.get('solicitacao')}</span>"
+        elif cat == "justificativa":
+            tag_dec = "→ <span style='color:#3498db'>GTO TEM JUSTIFICATIVA — só laudo+imgs (solicitação dispensada)</span>"
+        else:
+            tag_dec = "→ <span style='color:#e67e22'>REVISÃO humana</span>"
+        h.append(f"<div class='card {cat}'><b>GTO {x['gto']} — {x['paciente']}</b> {tag_dec}")
         h.append(f"<div class='h'>exames GTO: {x.get('gto_exames')} &nbsp;|&nbsp; Gemini: "
                  f"tipo={g.get('tipo')} legível={g.get('legivel')} batem={g.get('exames_batem')} "
                  f"conf={g.get('confianca')}<br>lidos: {g.get('exames_lidos')}<br>"

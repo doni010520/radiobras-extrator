@@ -36,7 +36,7 @@ from extrator_odontoprev import (
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
-from gto_utils import is_gto_pdf
+from gto_utils import is_gto_pdf, extrair_observacao
 from solicitacao_utils import gto_exames
 import json
 import re
@@ -152,7 +152,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None):
     from google.genai import types
     out = {"anexos": 0, "gto_exames": [], "decisao": None, "erro": None,
            "plano_laudo_imgs": [], "plano_solicitacao": None,
-           "candidatos": [], "solic_idx": None}
+           "candidatos": [], "solic_idx": None, "justificativa": None}
     if pasta_dl and os.path.isdir(pasta_dl):
         out["plano_laudo_imgs"] = sorted(os.listdir(pasta_dl))
     try:
@@ -164,7 +164,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None):
     sess = requests.Session(); sess.cookies.update(cj)
     sess.headers.update({"User-Agent": "Mozilla/5.0", "Referer": f"{BASE}/patients"})
     att_dir = tempfile.mkdtemp(prefix="_att_")
-    cands, gto_ex = [], set()
+    cands_raw, gto_ex, justif_ok = [], set(), False
     for it in lista[:8]:
         ext = it["filename"].lower().rsplit(".", 1)[-1] if "." in it["filename"] else ""
         try:
@@ -174,27 +174,45 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None):
         path = os.path.join(att_dir, re.sub(r"[^A-Za-z0-9._-]+", "_", it["filename"]) or it["id"])
         with open(path, "wb") as f:
             f.write(blob)
-        if ext == "pdf" and is_gto_pdf(path):     # pdf da GTO -> contexto de exames
+        if ext == "pdf" and is_gto_pdf(path):     # pdf da GTO -> exames + justificativa
             try:
                 gto_ex |= gto_exames(path)
+            except Exception:
+                pass
+            try:
+                if extrair_observacao(path).get("status") == "PREENCHIDO":
+                    justif_ok = True
             except Exception:
                 pass
             continue
         mime = {"pdf": "application/pdf", "png": "image/png",
                 "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
         if mime:
-            saved = None
-            if review_dir and gto is not None:
-                gdir = os.path.join(review_dir, str(gto))
-                os.makedirs(gdir, exist_ok=True)
-                saved = f"{len(cands)}__{re.sub(r'[^A-Za-z0-9._-]+', '_', it['filename']) or 'anexo'}"
-                try:
-                    with open(os.path.join(gdir, saved), "wb") as f:
-                        f.write(blob)
-                except Exception:
-                    saved = None
-            cands.append((it["filename"], mime, blob, saved))
+            cands_raw.append((it["filename"], mime, blob))
     out["gto_exames"] = sorted(gto_ex)
+
+    # REGRA: GTO com justificativa (campo 49) -> solicitação DISPENSADA. Nem toca
+    # nos anexos do prontuário (não salva, não manda pro Gemini). Só laudo+imgs.
+    if justif_ok:
+        out["justificativa"] = "PREENCHIDA"
+        out["decisao"] = {"anexar": False, "justificativa": True,
+                          "motivo": "GTO tem justificativa (campo 49) — solicitação dispensada"}
+        return out
+
+    # sem justificativa -> precisa da solicitação: agora sim salva candidatos + Gemini
+    cands = []
+    for fn, mime, blob in cands_raw:
+        saved = None
+        if review_dir and gto is not None:
+            gdir = os.path.join(review_dir, str(gto))
+            os.makedirs(gdir, exist_ok=True)
+            saved = f"{len(cands)}__{re.sub(r'[^A-Za-z0-9._-]+', '_', fn) or 'anexo'}"
+            try:
+                with open(os.path.join(gdir, saved), "wb") as f:
+                    f.write(blob)
+            except Exception:
+                saved = None
+        cands.append((fn, mime, blob, saved))
     out["candidatos"] = [{"idx": i, "nome": c[0], "arquivo": c[3]} for i, c in enumerate(cands)]
     if not cands:
         out["decisao"] = {"anexar": False, "motivo": "sem anexo candidato a solicitação"}
@@ -383,8 +401,12 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     ativos_le["n"] -= 1
                     resultados.append(item)
                 d = dec.get("decisao") or {}
-                solic = (f"SOLIC={dec['plano_solicitacao']}" if dec.get("plano_solicitacao")
-                         else "solic->REVISÃO")
+                if dec.get("justificativa"):
+                    solic = "JUSTIFICATIVA (solic dispensada)"
+                elif dec.get("plano_solicitacao"):
+                    solic = f"SOLIC={dec['plano_solicitacao']}"
+                else:
+                    solic = "solic->REVISÃO"
                 _t(f"[DEC{wid}] {item['gto']} {item['nome'][:22]} | laudo+img={len(dec.get('plano_laudo_imgs', []))} "
                    f"| {solic} | conf={d.get('confianca')} batem={d.get('exames_batem')} "
                    f"({item['dt_decisao']:.0f}s, mem={em:.0f}MB)")
@@ -444,16 +466,24 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
 
     baixados = [r for r in resultados if r["status"] == "BAIXADO"]
     com_solic = [r for r in baixados if (r.get("decisao") or {}).get("plano_solicitacao")]
+    com_justif = [r for r in baixados if (r.get("decisao") or {}).get("justificativa")]
     # painel das decisões (pro dry-run que você revisa)
     decisoes = []
     for r in baixados:
         dec = r.get("decisao") or {}
         d = dec.get("decisao") or {}
+        if dec.get("justificativa"):
+            cat = "justificativa"
+        elif dec.get("plano_solicitacao"):
+            cat = "auto"
+        else:
+            cat = "revisao"
         decisoes.append({
-            "gto": r["gto"], "paciente": r["nome"],
+            "gto": r["gto"], "paciente": r["nome"], "categoria": cat,
             "laudo_imgs": dec.get("plano_laudo_imgs", []),
             "solicitacao": dec.get("plano_solicitacao"),
             "anexar_solic": bool(dec.get("plano_solicitacao")),
+            "justificativa": dec.get("justificativa"),
             "gto_exames": dec.get("gto_exames", []),
             "candidatos": dec.get("candidatos", []),
             "solic_idx": dec.get("solic_idx"),
@@ -461,19 +491,20 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                        "exames_lidos", "exames_batem", "confianca", "anexar", "motivo")},
             "erro": dec.get("erro"),
         })
+    n_rev = len(baixados) - len(com_solic) - len(com_justif)
     resumo = {
         "data": data, "n_desc": n_desc, "m_download": m_download,
         "k_leitura": k_leitura if gem else 0, "gemini": bool(gem),
         "pendentes": n_pend["n"], "baixados": len(baixados),
         "outros": len(resultados) - len(baixados),
-        "solic_auto": len(com_solic), "solic_revisao": len(baixados) - len(com_solic),
+        "solic_auto": len(com_solic), "justificativa": len(com_justif), "revisao": n_rev,
         "pico_download": ativos_dl["pico"], "pico_leitura": ativos_le["pico"],
         "tempo_descoberta": round(t_desc), "tempo_ate_download": round(t_dl),
         "tempo_total": round(total), "decisoes": decisoes, "resultados": resultados,
     }
     _t(f"RESUMO: {resumo['baixados']}/{resumo['pendentes']} baixados | "
-       f"solicitação: {resumo['solic_auto']} auto / {resumo['solic_revisao']} revisão | "
-       f"pico dl={resumo['pico_download']} leit={resumo['pico_leitura']} | "
+       f"{resumo['solic_auto']} solic-auto / {resumo['justificativa']} c-justificativa / "
+       f"{resumo['revisao']} revisão | pico dl={resumo['pico_download']} leit={resumo['pico_leitura']} | "
        f"desc={resumo['tempo_descoberta']}s download={resumo['tempo_ate_download']}s "
        f"TOTAL={resumo['tempo_total']}s")
     return resumo
