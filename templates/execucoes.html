@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Faturamento — Execuções</title>
+<style>
+  :root{--verde:#0f7a4f;--bg:#f4f6f5;--card:#fff;--linha:#e6ebe8;--txt:#1f2a26;--sub:#6b7a73}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,sans-serif}
+  .wrap{max-width:1100px;margin:0 auto;padding:20px}
+  h1{margin:6px 0 16px}
+  .cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--linha);border-radius:10px;padding:14px 18px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  .card .n{font-size:26px;font-weight:700;color:var(--verde)}
+  .card .l{color:var(--sub);font-size:13px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--linha);font-size:14px}
+  th{background:#eef3f0;color:var(--sub)}
+  a{color:var(--verde);text-decoration:none}
+  .tag{font-size:12px;background:#fdf3e3;color:#a86a00;padding:2px 6px;border-radius:4px}
+  .sub{color:var(--sub);font-size:12px}
+</style>
+</head>
+<body>
+{% include '_topnav.html' %}
+<div class="wrap">
+  <h1>Faturamento — Execuções</h1>
+  <div class="cards">
+    <div class="card"><div class="n">{{ tot.n }}</div><div class="l">execuções</div></div>
+    <div class="card"><div class="n">{{ tot.faturadas }}</div><div class="l">GTOs faturadas</div></div>
+    <div class="card"><div class="n">{{ tot.nao_faturadas }}</div><div class="l">não faturadas</div></div>
+    <div class="card"><div class="n">{{ (tot.tempo_medio//60) }}m{{ '%02d'|format(tot.tempo_medio%60) }}</div><div class="l">tempo médio / execução</div></div>
+  </div>
+  <table>
+    <tr><th>Quando</th><th>Dia</th><th>Faturadas</th><th>Não faturadas</th><th>Tempo</th><th></th></tr>
+    {% for e in execs %}
+    <tr>
+      <td>{{ e.quando }}{% if e.dry_run %} <span class="tag">simulação</span>{% endif %}</td>
+      <td>{{ e.dia }}</td>
+      <td style="color:var(--verde);font-weight:600">{{ e.faturadas }}</td>
+      <td style="color:#a86a00">{{ e.nao_faturadas }}</td>
+      <td>{{ (e.tempo_total//60) }}m{{ '%02d'|format(e.tempo_total%60) }}
+        <span class="sub">(desc {{ e.tempo_descoberta }}s · dl {{ e.tempo_download }}s)</span></td>
+      <td><a href="/relatorios/execucao/{{ e.id }}">ver →</a></td>
+    </tr>
+    {% endfor %}
+    {% if not execs %}<tr><td colspan="6" style="color:var(--sub)">Nenhuma execução registrada ainda.</td></tr>{% endif %}
+  </table>
+</div>
+</body>
+</html>

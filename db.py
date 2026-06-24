@@ -120,6 +120,116 @@ class AnexacaoGto(Base):
     categoria = Column(String(20), index=True)
 
 
+class Execucao(Base):
+    """Uma execução do pipeline novo (descoberta->download->decisão->anexação)."""
+    __tablename__ = "execucoes"
+    id = Column(Integer, primary_key=True)
+    dia = Column(String(10), index=True)             # DD/MM/AAAA processado
+    criado_em = Column(DateTime(timezone=True), default=_now, index=True)
+    dry_run = Column(Boolean, default=False)
+    tempo_total = Column(Integer, default=0)          # segundos
+    tempo_descoberta = Column(Integer, default=0)
+    tempo_download = Column(Integer, default=0)
+    pendentes = Column(Integer, default=0)
+    faturadas = Column(Integer, default=0)            # anexadas OK
+    nao_faturadas = Column(Integer, default=0)
+    m_download = Column(Integer, default=0)
+    k_leitura = Column(Integer, default=0)
+    itens = relationship("ExecucaoItem", back_populates="execucao",
+                         cascade="all, delete-orphan")
+
+
+class ExecucaoItem(Base):
+    __tablename__ = "execucao_itens"
+    id = Column(Integer, primary_key=True)
+    execucao_id = Column(Integer, ForeignKey("execucoes.id", ondelete="CASCADE"), index=True)
+    gto = Column(String(30))
+    paciente = Column(String(200))
+    categoria = Column(String(20))          # auto | justificativa | sem_solicitacao | revisao
+    faturado = Column(Boolean, default=False)
+    motivo = Column(Text)                   # por que NÃO faturou (quando aplicável)
+    solicitacao = Column(String(250))       # arquivo anexado (quando AUTO)
+    exames_gto = Column(Text)
+    exames_lidos = Column(Text)
+    n_arquivos = Column(Integer, default=0)
+    execucao = relationship("Execucao", back_populates="itens")
+
+
+def salvar_execucao(resumo: dict) -> int:
+    """Persiste uma execução (resumo do rodar_esteira) + seus itens."""
+    with SessionLocal() as s:
+        baix = resumo.get("baixados", 0)
+        ex = Execucao(
+            dia=resumo.get("data"), dry_run=bool(resumo.get("dry_run", True)),
+            tempo_total=int(resumo.get("tempo_total", 0)),
+            tempo_descoberta=int(resumo.get("tempo_descoberta", 0)),
+            tempo_download=int(resumo.get("tempo_ate_download", 0)),
+            pendentes=int(resumo.get("pendentes", 0)),
+            faturadas=int(resumo.get("anexado_ok", 0)),
+            nao_faturadas=int(baix - resumo.get("anexado_ok", 0)),
+            m_download=int(resumo.get("m_download", 0) or 0),
+            k_leitura=int(resumo.get("k_leitura", 0) or 0),
+        )
+        for x in resumo.get("decisoes", []):
+            g = x.get("gemini") or {}
+            faturado = x.get("anexado") == "OK"
+            cat = x.get("categoria")
+            if faturado:
+                motivo = ""
+            elif cat == "sem_solicitacao":
+                motivo = "Sem solicitação no prontuário"
+            elif cat == "justificativa":
+                motivo = ""  # foi faturado por justificativa (se anexado)
+            else:
+                motivo = g.get("motivo") or x.get("erro") or "revisão humana"
+            ex.itens.append(ExecucaoItem(
+                gto=str(x.get("gto")), paciente=x.get("paciente"),
+                categoria=cat, faturado=faturado, motivo=motivo,
+                solicitacao=x.get("solicitacao"),
+                exames_gto=", ".join(x.get("gto_exames") or []),
+                exames_lidos=", ".join(g.get("exames_lidos") or []),
+                n_arquivos=len(x.get("laudo_imgs") or []) + (1 if x.get("solicitacao") else 0),
+            ))
+        s.add(ex)
+        s.commit()
+        return ex.id
+
+
+def listar_execucoes(limit: int = 100) -> list:
+    """Histórico de execuções (consolidado) — mais recentes primeiro."""
+    with SessionLocal() as s:
+        rows = s.query(Execucao).order_by(Execucao.criado_em.desc()).limit(limit).all()
+        return [{
+            "id": e.id, "dia": e.dia, "criado_em": e.criado_em, "dry_run": e.dry_run,
+            "tempo_total": e.tempo_total, "tempo_descoberta": e.tempo_descoberta,
+            "tempo_download": e.tempo_download, "pendentes": e.pendentes,
+            "faturadas": e.faturadas, "nao_faturadas": e.nao_faturadas,
+        } for e in rows]
+
+
+def get_execucao(eid: int) -> dict | None:
+    """Detalhe de uma execução + itens (faturadas e não faturadas)."""
+    with SessionLocal() as s:
+        e = s.get(Execucao, eid)
+        if not e:
+            return None
+        itens = [{
+            "gto": it.gto, "paciente": it.paciente, "categoria": it.categoria,
+            "faturado": it.faturado, "motivo": it.motivo, "solicitacao": it.solicitacao,
+            "exames_gto": it.exames_gto, "exames_lidos": it.exames_lidos,
+            "n_arquivos": it.n_arquivos,
+        } for it in e.itens]
+        return {
+            "id": e.id, "dia": e.dia, "criado_em": e.criado_em, "dry_run": e.dry_run,
+            "tempo_total": e.tempo_total, "tempo_descoberta": e.tempo_descoberta,
+            "tempo_download": e.tempo_download, "pendentes": e.pendentes,
+            "faturadas": e.faturadas, "nao_faturadas": e.nao_faturadas,
+            "m_download": e.m_download, "k_leitura": e.k_leitura,
+            "faturadas_itens": [i for i in itens if i["faturado"]],
+            "nao_faturadas_itens": [i for i in itens if not i["faturado"]],
+        }
+
+
 def init_db():
     Base.metadata.create_all(engine)
     _ensure_columns()

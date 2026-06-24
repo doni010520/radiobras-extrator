@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Execução {{ ex.dia }}</title>
+<style>
+  :root{--verde:#0f7a4f;--bg:#f4f6f5;--card:#fff;--linha:#e6ebe8;--txt:#1f2a26;--sub:#6b7a73}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,sans-serif}
+  .wrap{max-width:1100px;margin:0 auto;padding:20px}
+  h1{margin:6px 0 4px}
+  .meta{color:var(--sub);font-size:13px;margin-bottom:12px}
+  .cards{display:flex;gap:12px;flex-wrap:wrap;margin:14px 0}
+  .card{background:var(--card);border:1px solid var(--linha);border-radius:10px;padding:14px 18px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  .card .n{font-size:26px;font-weight:700}
+  .card .l{color:var(--sub);font-size:13px}
+  .sec{margin-top:22px}
+  .sec h2{font-size:18px;margin:0 0 8px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--linha);font-size:14px;vertical-align:top}
+  th{background:#eef3f0;color:var(--sub)}
+  a{color:var(--verde);text-decoration:none}
+  .fatrow{border-left:4px solid var(--verde)}
+  .nfatrow{border-left:4px solid #a86a00}
+  @media print{a{display:none}}
+</style>
+</head>
+<body>
+{% if not pdf %}{% include '_topnav.html' %}{% endif %}
+<div class="wrap">
+  <h1>Execução — {{ ex.dia }}</h1>
+  <div class="meta">
+    {{ ex.quando }}{% if ex.dry_run %} · <b>SIMULAÇÃO (não anexou)</b>{% endif %}
+    · tempo total <b>{{ (ex.tempo_total//60) }}m{{ '%02d'|format(ex.tempo_total%60) }}</b>
+    (descoberta {{ ex.tempo_descoberta }}s · download {{ ex.tempo_download }}s)
+    · download M={{ ex.m_download }} / leitura K={{ ex.k_leitura }}
+  </div>
+  {% if not pdf %}<p><a href="/relatorios/execucao/{{ ex.id }}.pdf">📄 Exportar PDF</a> &nbsp;·&nbsp;
+    <a href="/relatorios/execucoes">← todas as execuções</a></p>{% endif %}
+
+  <div class="cards">
+    <div class="card"><div class="n">{{ ex.pendentes }}</div><div class="l">pendentes</div></div>
+    <div class="card"><div class="n" style="color:var(--verde)">{{ ex.faturadas }}</div><div class="l">faturadas</div></div>
+    <div class="card"><div class="n" style="color:#a86a00">{{ ex.nao_faturadas }}</div><div class="l">não faturadas</div></div>
+  </div>
+
+  <div class="sec">
+    <h2>✅ Faturadas ({{ ex.faturadas_itens|length }})</h2>
+    <table>
+      <tr><th>GTO</th><th>Paciente</th><th>Exames</th><th>O que foi anexado</th></tr>
+      {% for i in ex.faturadas_itens %}
+      <tr class="fatrow">
+        <td>{{ i.gto }}</td><td>{{ i.paciente }}</td><td>{{ i.exames_gto }}</td>
+        <td>{% if i.categoria == 'justificativa' %}laudo + imagens <span style="color:var(--sub)">(GTO com justificativa — solicitação dispensada)</span>
+            {% else %}laudo + imagens + solicitação{% if i.solicitacao %} <span style="color:var(--sub)">({{ i.solicitacao }})</span>{% endif %}{% endif %}</td>
+      </tr>
+      {% endfor %}
+      {% if not ex.faturadas_itens %}<tr><td colspan="4" style="color:var(--sub)">—</td></tr>{% endif %}
+    </table>
+  </div>
+
+  <div class="sec">
+    <h2>🚫 Não faturadas ({{ ex.nao_faturadas_itens|length }})</h2>
+    <table>
+      <tr><th>GTO</th><th>Paciente</th><th>Motivo</th></tr>
+      {% for i in ex.nao_faturadas_itens %}
+      <tr class="nfatrow"><td>{{ i.gto }}</td><td>{{ i.paciente }}</td><td>{{ i.motivo }}</td></tr>
+      {% endfor %}
+      {% if not ex.nao_faturadas_itens %}<tr><td colspan="3" style="color:var(--sub)">—</td></tr>{% endif %}
+    </table>
+  </div>
+</div>
+</body>
+</html>

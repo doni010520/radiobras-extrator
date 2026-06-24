@@ -553,10 +553,13 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             cat = "justificativa"
         elif dec.get("plano_solicitacao"):
             cat = "auto"
+        elif d.get("indice_solicitacao") is None:
+            cat = "sem_solicitacao"
         else:
             cat = "revisao"
         decisoes.append({
             "gto": r["gto"], "paciente": r["nome"], "categoria": cat,
+            "anexado": r.get("anexado"),
             "laudo_imgs": dec.get("plano_laudo_imgs", []),
             "solicitacao": dec.get("plano_solicitacao"),
             "anexar_solic": bool(dec.get("plano_solicitacao")),

@@ -455,6 +455,65 @@ def relatorio_run_pdf(run_id: int):
                      as_attachment=True, download_name=nome)
 
 
+# ── Relatório de execuções (pipeline novo) — dentro de /relatorios ────────────
+def _fmt_quando(dt):
+    """Datetime UTC -> 'DD/MM/AAAA HH:MM' no horário de Brasília (UTC-3)."""
+    if not dt:
+        return ""
+    try:
+        from datetime import timedelta
+        return (dt - timedelta(hours=3)).strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return str(dt)
+
+
+@app.route("/relatorios/execucoes")
+def relatorios_execucoes():
+    execs = db.listar_execucoes(300)
+    for e in execs:
+        e["quando"] = _fmt_quando(e.get("criado_em"))
+    tot = {
+        "n": len(execs),
+        "faturadas": sum(e["faturadas"] for e in execs),
+        "nao_faturadas": sum(e["nao_faturadas"] for e in execs),
+        "tempo_total": sum(e["tempo_total"] for e in execs),
+        "tempo_medio": round(sum(e["tempo_total"] for e in execs) / len(execs)) if execs else 0,
+    }
+    return render_template("execucoes.html", execs=execs, tot=tot)
+
+
+@app.route("/relatorios/execucao/<int:eid>")
+def relatorios_execucao(eid: int):
+    ex = db.get_execucao(eid)
+    if not ex:
+        return ("Execução não encontrada.", 404)
+    ex["quando"] = _fmt_quando(ex.get("criado_em"))
+    return render_template("execucao.html", ex=ex, pdf=False)
+
+
+@app.route("/relatorios/execucao/<int:eid>.pdf")
+def relatorios_execucao_pdf(eid: int):
+    ex = db.get_execucao(eid)
+    if not ex:
+        return ("Execução não encontrada.", 404)
+    ex["quando"] = _fmt_quando(ex.get("criado_em"))
+    html = render_template("execucao.html", ex=ex, pdf=True)
+    from playwright.sync_api import sync_playwright
+    try:
+        with sync_playwright() as pw:
+            br = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            pg = br.new_page()
+            pg.set_content(html, wait_until="networkidle")
+            pdf_bytes = pg.pdf(format="A4", print_background=True,
+                               margin={"top": "12mm", "bottom": "12mm", "left": "10mm", "right": "10mm"})
+            br.close()
+    except Exception as exc:
+        return (f"Falha ao gerar PDF: {exc}", 500)
+    nome = f"execucao_{(ex.get('dia') or '').replace('/', '-')}_{eid}.pdf"
+    return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
+                     as_attachment=True, download_name=nome)
+
+
 # ── APIs do Dashboard ─────────────────────────────────────────────────────────
 
 @app.route("/api/dashboard")
@@ -1088,6 +1147,12 @@ def _esteira_run():
             job["resumo"] = rodar_esteira(data, m, n, k, lambda msg: job["log"].append(msg),
                                           gemini_key=gkey, review_dir=review_dir,
                                           k_attach=k2, dry_run=dry)
+            if not dry and k2 > 0 and job["resumo"]:   # só persiste execução REAL
+                try:
+                    job["execucao_id"] = db.salvar_execucao(job["resumo"])
+                    job["log"].append(f"(execução salva: #{job['execucao_id']})")
+                except Exception as e:
+                    job["log"].append(f"(falha ao salvar execução: {str(e)[:100]})")
         except Exception as e:
             job["error"] = str(e)
             job["log"].append(f"ERRO: {e}")
