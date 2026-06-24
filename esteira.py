@@ -36,6 +36,10 @@ from extrator_odontoprev import (
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
+from gto_utils import is_gto_pdf
+from solicitacao_utils import gto_exames
+import json
+import re
 
 try:
     import psutil
@@ -120,43 +124,88 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
     nf = len(os.listdir(pasta)) if os.path.isdir(pasta) else 0
     return {"gto": g["gto"], "nome": pac["nome"], "status": "BAIXADO",
             "arquivos": nf, "imgs": res.get("imagens", {}).get("qtd", 0),
-            "_pac": pac, "dt_dl": time.monotonic() - t0}
+            "_pac": pac, "_pasta": pasta, "dt_dl": time.monotonic() - t0}
 
 
-def _ler_solic(gem, pg, ctx, pac):
-    """ESTÁGIO 3 (leitura): baixa anexos do prontuário e lê cada um no Gemini 2.5
-    Flash (I/O-bound; sem Tesseract). Retry 3x no 503. Devolve (n_anexos, n_lidas)."""
+_DECISAO_PROMPT = """Acima estão VÁRIOS anexos do prontuário, indexados ([anexo 0], [anexo 1], ...).
+CONTEXTO DA GTO -> paciente: {paciente} | exames esperados: {exames}
+
+Você é auditor de solicitações odontológicas. Identifique QUAL anexo é a SOLICITAÇÃO/
+REQUISIÇÃO de exames que corresponde a ESTA GTO (mesmo paciente, exames compatíveis) e
+decida se pode ser anexada com segurança. Ignore laudos, raios-x e documentos antigos
+que não batem.
+
+Responda APENAS JSON (sem markdown):
+{{"indice_solicitacao": <int do anexo certo, ou null>, "tipo": "digitada"|"manuscrita"|null,
+"legivel": <bool>, "paciente_lido": "<str ou null>", "exames_lidos": [<str>],
+"exames_batem": <bool>, "confianca": "alta"|"media"|"baixa", "anexar": <bool>, "motivo": "<curto>"}}
+
+Regra: anexar=true SÓ se é a solicitação certa desta GTO, legível, exames batem e confiança
+alta. Em qualquer dúvida -> anexar=false (vai pra revisão humana)."""
+
+
+def _decidir(gem, pg, ctx, pac, pasta_dl):
+    """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
+    manda TUDO pro Gemini escolher a solicitação certa + decidir. NÃO anexa.
+    Devolve plano (laudo+imgs sempre; solicitação se a IA confiar) + a decisão."""
     from google.genai import types
+    out = {"anexos": 0, "gto_exames": [], "decisao": None, "erro": None,
+           "plano_laudo_imgs": [], "plano_solicitacao": None}
+    if pasta_dl and os.path.isdir(pasta_dl):
+        out["plano_laudo_imgs"] = sorted(os.listdir(pasta_dl))
     try:
         lista = anexos_do_paciente(pg, pac["nome"], pac["cod_pac"])
-    except Exception:
-        return 0, 0
+    except Exception as e:
+        out["erro"] = f"anexos: {str(e)[:80]}"; return out
+    out["anexos"] = len(lista)
     cj = {ck["name"]: ck["value"] for ck in ctx.cookies()}
     sess = requests.Session(); sess.cookies.update(cj)
     sess.headers.update({"User-Agent": "Mozilla/5.0", "Referer": f"{BASE}/patients"})
-    lidas = 0
-    for it in lista:
-        if lidas >= _MAX_LEITURAS:
-            break
+    att_dir = tempfile.mkdtemp(prefix="_att_")
+    cands, gto_ex = [], set()
+    for it in lista[:8]:
         ext = it["filename"].lower().rsplit(".", 1)[-1] if "." in it["filename"] else ""
-        mime = {"pdf": "application/pdf", "png": "image/png",
-                "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
-        if not mime:
-            continue
         try:
             blob = sess.get(it["url"], timeout=60).content
         except Exception:
             continue
-        for tent in range(3):  # 503 do Gemini é transitório
+        path = os.path.join(att_dir, re.sub(r"[^A-Za-z0-9._-]+", "_", it["filename"]) or it["id"])
+        with open(path, "wb") as f:
+            f.write(blob)
+        if ext == "pdf" and is_gto_pdf(path):     # pdf da GTO -> contexto de exames
             try:
-                gem.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=[types.Part.from_bytes(data=blob, mime_type=mime), _GEM_PROMPT])
-                lidas += 1
-                break
+                gto_ex |= gto_exames(path)
             except Exception:
-                time.sleep(1.0 * (tent + 1))
-    return len(lista), lidas
+                pass
+            continue
+        mime = {"pdf": "application/pdf", "png": "image/png",
+                "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
+        if mime:
+            cands.append((it["filename"], mime, blob))
+    out["gto_exames"] = sorted(gto_ex)
+    if not cands:
+        out["decisao"] = {"anexar": False, "motivo": "sem anexo candidato a solicitação"}
+        return out
+    contents = []
+    for i, (fn, mime, blob) in enumerate(cands):
+        contents.append(f"[anexo {i}] {fn}")
+        contents.append(types.Part.from_bytes(data=blob, mime_type=mime))
+    contents.append(_DECISAO_PROMPT.format(
+        paciente=pac["nome"], exames=(sorted(gto_ex) or "(GTO ilegível)")))
+    for tent in range(3):
+        try:
+            r = gem.models.generate_content(model="gemini-2.5-flash", contents=contents)
+            txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
+            dec = json.loads(txt)
+            out["decisao"] = dec
+            idx = dec.get("indice_solicitacao")
+            if dec.get("anexar") and isinstance(idx, int) and 0 <= idx < len(cands):
+                out["plano_solicitacao"] = cands[idx][0]
+            break
+        except Exception as e:
+            out["erro"] = f"gemini: {str(e)[:80]}"
+            time.sleep(1.0 * (tent + 1))
+    return out
 
 
 def rodar_esteira(data, m_download=3, n_desc=3, k_leitura=4, log=None, gemini_key=None):
@@ -283,17 +332,21 @@ def rodar_esteira(data, m_download=3, n_desc=3, k_leitura=4, log=None, gemini_ke
                     em = _mem_mb()
                 t0 = time.monotonic()
                 try:
-                    n_anx, n_lidas = _ler_solic(gem, pg, ctx, item["_pac"])
+                    dec = _decidir(gem, pg, ctx, item["_pac"], item.get("_pasta"))
                 except Exception as e:
-                    n_anx, n_lidas = 0, 0
-                    item["leitura_erro"] = str(e)[:100]
-                item["anexos"] = n_anx; item["lidas_gemini"] = n_lidas
-                item["dt_leitura"] = time.monotonic() - t0
+                    dec = {"erro": str(e)[:100], "decisao": None, "anexos": 0,
+                           "gto_exames": [], "plano_laudo_imgs": [], "plano_solicitacao": None}
+                item["decisao"] = dec
+                item["dt_decisao"] = time.monotonic() - t0
                 with _lock:
                     ativos_le["n"] -= 1
                     resultados.append(item)
-                _t(f"[LE{wid}] {item['gto']} -> {n_lidas}/{n_anx} lidas "
-                   f"({item['dt_leitura']:.0f}s, leitores={ativos_le['n'] + 1}, mem={em:.0f}MB)")
+                d = dec.get("decisao") or {}
+                solic = (f"SOLIC={dec['plano_solicitacao']}" if dec.get("plano_solicitacao")
+                         else "solic->REVISÃO")
+                _t(f"[DEC{wid}] {item['gto']} {item['nome'][:22]} | laudo+img={len(dec.get('plano_laudo_imgs', []))} "
+                   f"| {solic} | conf={d.get('confianca')} batem={d.get('exames_batem')} "
+                   f"({item['dt_decisao']:.0f}s, mem={em:.0f}MB)")
             try:
                 br.close()
             except Exception:
@@ -334,17 +387,34 @@ def rodar_esteira(data, m_download=3, n_desc=3, k_leitura=4, log=None, gemini_ke
     total = time.monotonic() - t_ini
 
     baixados = [r for r in resultados if r["status"] == "BAIXADO"]
+    com_solic = [r for r in baixados if (r.get("decisao") or {}).get("plano_solicitacao")]
+    # painel das decisões (pro dry-run que você revisa)
+    decisoes = []
+    for r in baixados:
+        dec = r.get("decisao") or {}
+        d = dec.get("decisao") or {}
+        decisoes.append({
+            "gto": r["gto"], "paciente": r["nome"],
+            "laudo_imgs": dec.get("plano_laudo_imgs", []),
+            "solicitacao": dec.get("plano_solicitacao"),
+            "anexar_solic": bool(dec.get("plano_solicitacao")),
+            "gto_exames": dec.get("gto_exames", []),
+            "gemini": {k: d.get(k) for k in ("tipo", "legivel", "paciente_lido",
+                       "exames_lidos", "exames_batem", "confianca", "anexar", "motivo")},
+            "erro": dec.get("erro"),
+        })
     resumo = {
         "data": data, "n_desc": n_desc, "m_download": m_download,
         "k_leitura": k_leitura if gem else 0, "gemini": bool(gem),
         "pendentes": n_pend["n"], "baixados": len(baixados),
         "outros": len(resultados) - len(baixados),
+        "solic_auto": len(com_solic), "solic_revisao": len(baixados) - len(com_solic),
         "pico_download": ativos_dl["pico"], "pico_leitura": ativos_le["pico"],
-        "anexos_lidos": sum(r.get("lidas_gemini", 0) for r in baixados),
         "tempo_descoberta": round(t_desc), "tempo_ate_download": round(t_dl),
-        "tempo_total": round(total), "resultados": resultados,
+        "tempo_total": round(total), "decisoes": decisoes, "resultados": resultados,
     }
     _t(f"RESUMO: {resumo['baixados']}/{resumo['pendentes']} baixados | "
+       f"solicitação: {resumo['solic_auto']} auto / {resumo['solic_revisao']} revisão | "
        f"pico dl={resumo['pico_download']} leit={resumo['pico_leitura']} | "
        f"desc={resumo['tempo_descoberta']}s download={resumo['tempo_ate_download']}s "
        f"TOTAL={resumo['tempo_total']}s")
