@@ -177,7 +177,7 @@ def salvar_execucao(resumo: dict) -> int:
             if faturado:
                 motivo = ""
             elif cat == "sem_solicitacao":
-                motivo = "Sem solicitação no prontuário"
+                motivo = "Sem solicitação e sem justificativa (campo 49 vazio)"
             elif cat == "justificativa":
                 motivo = ""  # foi faturado por justificativa (se anexado)
             else:

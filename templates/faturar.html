@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Faturar dia</title>
+<style>
+  :root{--verde:#0f7a4f;--bg:#f4f6f5;--card:#fff;--linha:#e6ebe8;--txt:#1f2a26;--sub:#6b7a73}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,sans-serif}
+  .wrap{max-width:900px;margin:0 auto;padding:20px}
+  h1{margin:6px 0 4px}
+  .lead{color:var(--sub);margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--linha);border-radius:12px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  input[type=date]{padding:9px 12px;border:1px solid var(--linha);border-radius:8px;font-size:15px}
+  .btn{border:0;border-radius:8px;padding:11px 18px;font-size:15px;font-weight:600;cursor:pointer}
+  .prim{background:var(--verde);color:#fff}
+  .sec{background:#eef3f0;color:var(--verde)}
+  .btn:disabled{opacity:.5;cursor:default}
+  #prog{display:none;margin-top:18px}
+  #status{font-weight:600;margin-bottom:8px}
+  .logbox{background:#0f1411;color:#7CFC9E;font-family:ui-monospace,Menlo,monospace;font-size:12px;height:260px;overflow:auto;padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5}
+  #done{margin-top:12px;font-size:16px}
+  #done a{color:var(--verde);font-weight:600}
+</style>
+</head>
+<body>
+{% include '_topnav.html' %}
+<div class="wrap">
+  <h1>Faturar dia</h1>
+  <div class="lead">Roda o pipeline completo (descoberta → download → decisão com IA → anexação) e fatura as GTOs do dia no OdontoPrev.</div>
+  <div class="card">
+    <div class="row">
+      <label>Dia: <input type="date" id="dia"></label>
+      <button class="btn prim" id="bReal" onclick="run(false)">▶ Faturar (real)</button>
+      <button class="btn sec" id="bDry" onclick="run(true)">👁 Simular primeiro (revisar)</button>
+    </div>
+    <div id="prog">
+      <div id="status">Iniciando…</div>
+      <div class="logbox" id="log"></div>
+      <div id="done"></div>
+    </div>
+  </div>
+</div>
+<script>
+function fmtData(v){ if(!v) return ''; const p=v.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
+let timer=null;
+function setBusy(b){ document.getElementById('bReal').disabled=b; document.getElementById('bDry').disabled=b; }
+async function run(dry){
+  const dia=fmtData(document.getElementById('dia').value);
+  if(!dia){ alert('Escolha o dia.'); return; }
+  if(!dry && !confirm('Faturar o dia '+dia+' DE VERDADE? (anexa no OdontoPrev — não tem desfazer)')) return;
+  setBusy(true);
+  document.getElementById('prog').style.display='block';
+  document.getElementById('done').innerHTML='';
+  document.getElementById('log').textContent='';
+  document.getElementById('status').textContent='Rodando '+dia+(dry?' (simulação)':' (REAL)')+'…';
+  try{
+    const r=await fetch('/faturar/run?data='+encodeURIComponent(dia)+'&dry='+(dry?1:0));
+    const j=await r.json();
+    if(j.error){ document.getElementById('status').textContent='Erro: '+j.error; setBusy(false); return; }
+    poll(j.job, dry);
+  }catch(e){ document.getElementById('status').textContent='Erro de rede.'; setBusy(false); }
+}
+function poll(jid, dry){
+  if(timer) clearInterval(timer);
+  timer=setInterval(async()=>{
+    try{
+      const r=await fetch('/faturar/status/'+jid); const j=await r.json();
+      document.getElementById('log').textContent=(j.log||[]).join('\n');
+      const lb=document.getElementById('log'); lb.scrollTop=lb.scrollHeight;
+      if(j.done){
+        clearInterval(timer); setBusy(false);
+        const s=j.resumo||{};
+        document.getElementById('status').textContent='Concluído.';
+        let html='';
+        if(j.error){ html='<b style="color:#b3261e">Erro:</b> '+j.error; }
+        else if(dry){ html='<b>Simulação:</b> '+(s.solic_auto||0)+' faturaria / '+(s.justificativa||0)+' c/ justificativa / '+(s.revisao||0)+' revisão &nbsp;·&nbsp; <a href="/admin/esteira/revisao/'+jid+'?key=rb-esteira-2026" target="_blank">ver decisões 👁</a>'; }
+        else{ html='<b style="color:#0f7a4f">✓ Faturado:</b> '+(s.anexado_ok||0)+' GTOs em '+(s.tempo_total||0)+'s &nbsp;·&nbsp; <a href="/relatorios/execucao/'+(j.execucao_id||'')+'">ver relatório →</a>'; }
+        document.getElementById('done').innerHTML=html;
+      }
+    }catch(e){}
+  },3000);
+}
+</script>
+</body>
+</html>

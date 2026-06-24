@@ -514,6 +514,60 @@ def relatorios_execucao_pdf(eid: int):
                      as_attachment=True, download_name=nome)
 
 
+# ── Faturar dia (UI do pipeline novo) ─────────────────────────────────────────
+@app.route("/faturar")
+def faturar_page():
+    return render_template("faturar.html")
+
+
+@app.route("/faturar/run")
+def faturar_run():
+    data = request.args.get("data")
+    if not data:
+        return jsonify({"error": "informe a data"}), 400
+    dry = request.args.get("dry", "0") != "0"
+    jid = uuid.uuid4().hex[:8]
+    review_dir = f"/tmp/esteira_rev/{jid}"
+    job = {"log": [], "done": False, "resumo": None, "error": None,
+           "review_dir": review_dir, "execucao_id": None}
+    _esteira_jobs[jid] = job
+    gkey = os.environ.get("GEMINI_API_KEY")
+
+    def _go():
+        try:
+            from esteira import rodar_esteira
+            job["resumo"] = rodar_esteira(data, 6, 3, 5, lambda m: job["log"].append(m),
+                                          gemini_key=gkey, review_dir=review_dir,
+                                          k_attach=3, dry_run=dry)
+            if not dry and job["resumo"]:
+                try:
+                    job["execucao_id"] = db.salvar_execucao(job["resumo"])
+                except Exception as e:
+                    job["log"].append(f"(falha ao salvar: {str(e)[:80]})")
+        except Exception as e:
+            job["error"] = str(e)
+            job["log"].append(f"ERRO: {str(e)[:140]}")
+        finally:
+            job["done"] = True
+
+    threading.Thread(target=_go, daemon=True).start()
+    return jsonify({"job": jid})
+
+
+@app.route("/faturar/status/<jid>")
+def faturar_status(jid: str):
+    job = _esteira_jobs.get(jid)
+    if not job:
+        return jsonify({"error": "job não encontrado"}), 404
+    r = job.get("resumo") or {}
+    return jsonify({
+        "done": job["done"], "error": job["error"],
+        "log": job["log"][-80:], "execucao_id": job.get("execucao_id"),
+        "resumo": {k: r.get(k) for k in ("solic_auto", "justificativa", "revisao",
+                   "anexado_ok", "tempo_total", "pendentes")} if r else None,
+    })
+
+
 # ── APIs do Dashboard ─────────────────────────────────────────────────────────
 
 @app.route("/api/dashboard")
