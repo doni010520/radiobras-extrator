@@ -184,8 +184,16 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
     sess = requests.Session(); sess.cookies.update(cj)
     sess.headers.update({"User-Agent": "Mozilla/5.0", "Referer": f"{BASE}/patients"})
     att_dir = tempfile.mkdtemp(prefix="_att_")
+    # ordena do MAIS NOVO pro mais antigo (id desc): garante que a solicitação
+    # recente entre mesmo em prontuário grande/com histórico de anos.
+    def _id_key(it):
+        try:
+            return int(re.sub(r"\D", "", str(it.get("id", ""))) or 0)
+        except Exception:
+            return 0
+    lista = sorted(lista, key=_id_key, reverse=True)
     cands_raw, gto_ex, justif_ok = [], set(), False
-    for it in lista[:8]:
+    for it in lista[:30]:
         ext = it["filename"].lower().rsplit(".", 1)[-1] if "." in it["filename"] else ""
         try:
             blob = sess.get(it["url"], timeout=60).content
@@ -220,8 +228,9 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
         return out
 
     # sem justificativa -> precisa da solicitação: agora sim salva candidatos + Gemini
+    # (os 15 mais novos — já ordenados do mais recente pro mais antigo)
     cands = []
-    for fn, mime, blob in cands_raw:
+    for fn, mime, blob in cands_raw[:15]:
         saved = None
         if review_dir and gto is not None:
             gdir = os.path.join(review_dir, str(gto))
