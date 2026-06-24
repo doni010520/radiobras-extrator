@@ -1120,15 +1120,21 @@ def _esteira_revisao(jid: str):
          "body{font-family:sans-serif;background:#111;color:#eee;margin:18px}",
          ".card{border:1px solid #333;border-radius:8px;padding:12px;margin:12px 0;background:#1a1a1a}",
          ".auto{border-left:6px solid #2ecc71}.justificativa{border-left:6px solid #3498db}.revisao{border-left:6px solid #e67e22}",
-         "img,embed{max-height:360px;max-width:47%;border:2px solid #333;margin:4px;background:#fff;vertical-align:top}",
+         "img,embed{max-height:360px;max-width:47%;border:2px solid #333;margin:4px;background:#fff;vertical-align:top;cursor:zoom-in}",
          ".chosen{border:4px solid #2ecc71}.h{color:#999;font-size:13px;margin:4px 0}b{color:#fff}",
-         ".aviso{background:#222;border:1px solid #444;padding:10px;border-radius:6px;color:#ddd}</style></head><body>",
+         ".aviso{background:#222;border:1px solid #444;padding:10px;border-radius:6px;color:#ddd}",
+         "#lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:99;text-align:center;cursor:zoom-out}",
+         "#lb img{max-height:96vh;max-width:96vw;margin-top:2vh;border:0}",
+         ".btn{display:inline-block;background:#c0392b;color:#fff;padding:8px 14px;border-radius:6px;text-decoration:none;margin:6px 0}"
+         "</style></head><body>",
          f"<h2>Revisão — {r.get('data')} | {r.get('solic_auto')} solic-auto / "
          f"{r.get('justificativa')} c/ justificativa / {r.get('revisao')} revisão</h2>",
+         f"<a class='btn' href='/admin/esteira/descartar/{jid}?key={_ESTEIRA_KEY}' "
+         "onclick=\"return confirm('Apagar os arquivos desta revisão?')\">🗑️ Descartar arquivos</a>",
          "<div class='aviso'>⚠️ O que é anexado no RedeUna: <b>laudo + imagens</b> (sempre) e, "
          "<b>só quando a GTO não tem justificativa</b>, a <b>solicitação destacada em verde</b>. "
          "Os outros anexos abaixo são apenas o que o Gemini analisou pra escolher — <b>NENHUM deles é "
-         "anexado</b>.</div>"]
+         "anexado</b>. (Clique numa imagem pra ampliar.)</div>"]
     for x in decs:
         g = x.get("gemini") or {}
         cat = x.get("categoria", "revisao")
@@ -1152,8 +1158,26 @@ def _esteira_revisao(jid: str):
             h.append(f"<span style='display:inline-block;width:47%;text-align:center'>"
                      f"<{tg} class='{chosen}' src='{src}'><div class='h'>[{c['idx']}] {c['nome']}</div></span>")
         h.append("</div>")
+    h.append("<div id=lb onclick=\"this.style.display='none'\"><img id=lbi></div>")
+    h.append("<script>document.addEventListener('click',function(e){"
+             "if(e.target.tagName=='IMG'&&e.target.id!='lbi'){"
+             "document.getElementById('lbi').src=e.target.src;"
+             "document.getElementById('lb').style.display='block';}});</script>")
     h.append("</body></html>")
     return "".join(h)
+
+
+@app.route("/admin/esteira/descartar/<jid>")
+def _esteira_descartar(jid: str):
+    if request.args.get("key") != _ESTEIRA_KEY:
+        return "forbidden", 403
+    job = _esteira_jobs.get(jid)
+    base = (job or {}).get("review_dir") or f"/tmp/esteira_rev/{jid}"
+    import shutil
+    shutil.rmtree(base, ignore_errors=True)
+    if job:
+        job["resumo"] = None  # libera memória do resumo também
+    return "Arquivos descartados. ✓ (pode fechar a aba)"
 
 
 @app.route("/admin/esteira/arquivo/<jid>/<gto>/<path:fname>")
