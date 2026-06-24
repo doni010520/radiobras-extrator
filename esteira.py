@@ -32,7 +32,7 @@ from extrator_arquivos import (
 from extrator_odontoprev import (
     login_odonto, get_credentials_odonto, abrir_consultar_gtos,
     consultar_periodo, listar_gtos, abrir_gto, _anexos_nomes, _anexos_count,
-    normaliza_nome,
+    normaliza_nome, upload_arquivos,
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
@@ -233,6 +233,14 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None):
             if dec.get("anexar") and isinstance(idx, int) and 0 <= idx < len(cands):
                 out["plano_solicitacao"] = cands[idx][0]
                 out["solic_idx"] = idx
+                # salva a solicitação escolhida na pasta do laudo+imgs (4º estágio anexa tudo dali)
+                if pasta_dl and os.path.isdir(pasta_dl):
+                    sname = "SOLICITACAO_" + (re.sub(r"[^A-Za-z0-9._-]+", "_", cands[idx][0]) or "solic")
+                    try:
+                        with open(os.path.join(pasta_dl, sname), "wb") as f:
+                            f.write(cands[idx][2])
+                    except Exception:
+                        pass
             break
         except Exception as e:
             out["erro"] = f"gemini: {str(e)[:80]}"
@@ -241,9 +249,11 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None):
 
 
 def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_key=None,
-                  review_dir=None):
-    """Pipeline de 3 estágios. gemini_key liga o estágio de leitura (sem ela, só
-    descoberta+download)."""
+                  review_dir=None, k_attach=0, dry_run=True):
+    """Pipeline de até 4 estágios (descoberta -> download -> decisão -> anexação).
+    gemini_key liga a decisão. k_attach>0 liga a ANEXAÇÃO (estágio 4): auto e
+    justificativa são anexados; sem-solicitação e revisão NÃO (ficam avisados).
+    dry_run=True só simula a anexação (loga o plano, não sobe nada)."""
     if log is None:
         log = lambda m: print(m, flush=True)
     t_glob = time.monotonic()
@@ -260,15 +270,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         except Exception as e:
             _t(f"Gemini indisponível ({str(e)[:80]}) — roda sem leitura")
 
+    anexar_on = bool(gem) and k_attach > 0
     fila_pend = queue.Queue()
     fila_leit = queue.Queue()
+    fila_anexar = queue.Queue()
     stop_desc = threading.Event()
     stop_dl = threading.Event()
+    stop_dec = threading.Event()
     _lock = threading.Lock()
     resultados = []
     n_pend = {"n": 0}
     ativos_dl = {"n": 0, "pico": 0}
     ativos_le = {"n": 0, "pico": 0}
+    ativos_an = {"n": 0, "pico": 0}
 
     # ---- ESTÁGIO 1: descoberta via API DIRETA (sem abrir popup) ----
     def _odonto_setup():
@@ -399,7 +413,13 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 item["dt_decisao"] = time.monotonic() - t0
                 with _lock:
                     ativos_le["n"] -= 1
-                    resultados.append(item)
+                # auto/justificativa -> anexa (4º estágio); resto fica avisado (não fatura)
+                anexa = bool(dec.get("justificativa") or dec.get("plano_solicitacao"))
+                if anexar_on and anexa:
+                    fila_anexar.put(item)
+                else:
+                    with _lock:
+                        resultados.append(item)
                 d = dec.get("decisao") or {}
                 if dec.get("justificativa"):
                     solic = "JUSTIFICATIVA (solic dispensada)"
@@ -410,6 +430,55 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 _t(f"[DEC{wid}] {item['gto']} {item['nome'][:22]} | laudo+img={len(dec.get('plano_laudo_imgs', []))} "
                    f"| {solic} | conf={d.get('confianca')} batem={d.get('exames_batem')} "
                    f"({item['dt_decisao']:.0f}s, mem={em:.0f}MB)")
+            try:
+                br.close()
+            except Exception:
+                pass
+
+    # ---- ESTÁGIO 4: anexação (OdontoPrev) ----
+    def anexador(wid):
+        user, pwd = get_credentials_odonto()
+        with sync_playwright() as pw:
+            br, ctx, pg = login_odonto(pw, user, pwd)
+            ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
+            try:
+                abrir_consultar_gtos(pg); consultar_periodo(pg, data)
+            except Exception as e:
+                _t(f"[ANEX{wid}] consulta inicial falhou: {str(e)[:80]}")
+            while True:
+                try:
+                    item = fila_anexar.get(timeout=2)
+                except queue.Empty:
+                    if stop_dec.is_set() and fila_anexar.empty():
+                        break
+                    continue
+                pasta = item.get("_pasta")
+                arquivos = ([os.path.join(pasta, f) for f in sorted(os.listdir(pasta))]
+                            if pasta and os.path.isdir(pasta) else [])
+                nomes = [os.path.basename(a) for a in arquivos]
+                with _lock:
+                    ativos_an["n"] += 1; ativos_an["pico"] = max(ativos_an["pico"], ativos_an["n"])
+                if dry_run:
+                    item["anexado"] = "DRY"
+                    _t(f"[ANEX{wid}] [DRY] GTO {item['gto']} ANEXARIA {len(arquivos)}: {nomes}")
+                else:
+                    try:
+                        gp = abrir_gto(pg, item["gto"])
+                        res = upload_arquivos(gp, arquivos)
+                        try:
+                            gp.close()
+                        except Exception:
+                            pass
+                        item["anexado"] = "OK" if res.get("ok") else "FALHOU"
+                        item["upload"] = {k: res.get(k) for k in ("anexos_antes", "anexos_depois", "enviados", "ja_anexados")}
+                        _t(f"[ANEX{wid}] GTO {item['gto']} -> {item['anexado']} "
+                           f"({len(res.get('enviados', []))} enviados, {len(res.get('ja_anexados', []))} já tinha)")
+                    except Exception as e:
+                        item["anexado"] = "ERRO"; item["anexar_erro"] = str(e)[:120]
+                        _t(f"[ANEX{wid}] GTO {item['gto']} ERRO {str(e)[:90]}")
+                with _lock:
+                    ativos_an["n"] -= 1
+                    resultados.append(item)
             try:
                 br.close()
             except Exception:
@@ -443,14 +512,18 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
        f"| {len(alvos)} alvo(s)")
     tmp = tempfile.mkdtemp(prefix="_esteira_")
 
-    # ---- 2) lança os pools (descoberta-API + download + decisão) ----
+    # ---- 2) lança os pools (descoberta-API + download + decisão + anexação) ----
     tds = [threading.Thread(target=descobridor_api, args=(token, alvos), daemon=True)]
     tws = [threading.Thread(target=baixador, args=(i, state, by_norm, tmp), daemon=True)
            for i in range(1, m_download + 1)]
     tls = ([threading.Thread(target=leitor, args=(i, state), daemon=True)
             for i in range(1, k_leitura + 1)] if gem else [])
+    tas = ([threading.Thread(target=anexador, args=(i,), daemon=True)
+            for i in range(1, k_attach + 1)] if anexar_on else [])
+    if anexar_on:
+        _t(f"ANEXAÇÃO {'(DRY-RUN)' if dry_run else 'REAL'} ligada | K_attach={k_attach}")
     t_ini = time.monotonic()
-    for t in tds + tws + tls:
+    for t in tds + tws + tls + tas:
         t.start()
     for t in tds:
         t.join()
@@ -461,6 +534,10 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     t_dl = time.monotonic() - t_ini
     stop_dl.set()
     for t in tls:
+        t.join()
+    t_dec = time.monotonic() - t_ini
+    stop_dec.set()
+    for t in tas:
         t.join()
     total = time.monotonic() - t_ini
 
@@ -492,19 +569,24 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             "erro": dec.get("erro"),
         })
     n_rev = len(baixados) - len(com_solic) - len(com_justif)
+    anx = [r.get("anexado") for r in baixados if r.get("anexado")]
     resumo = {
         "data": data, "n_desc": n_desc, "m_download": m_download,
         "k_leitura": k_leitura if gem else 0, "gemini": bool(gem),
         "pendentes": n_pend["n"], "baixados": len(baixados),
         "outros": len(resultados) - len(baixados),
         "solic_auto": len(com_solic), "justificativa": len(com_justif), "revisao": n_rev,
+        "anexar_on": anexar_on, "dry_run": dry_run,
+        "anexado_ok": anx.count("OK"), "anexado_dry": anx.count("DRY"),
+        "anexado_falhou": anx.count("FALHOU") + anx.count("ERRO"),
+        "nao_faturadas": n_rev,
         "pico_download": ativos_dl["pico"], "pico_leitura": ativos_le["pico"],
+        "pico_anexacao": ativos_an["pico"],
         "tempo_descoberta": round(t_desc), "tempo_ate_download": round(t_dl),
         "tempo_total": round(total), "decisoes": decisoes, "resultados": resultados,
     }
     _t(f"RESUMO: {resumo['baixados']}/{resumo['pendentes']} baixados | "
        f"{resumo['solic_auto']} solic-auto / {resumo['justificativa']} c-justificativa / "
-       f"{resumo['revisao']} revisão | pico dl={resumo['pico_download']} leit={resumo['pico_leitura']} | "
-       f"desc={resumo['tempo_descoberta']}s download={resumo['tempo_ate_download']}s "
-       f"TOTAL={resumo['tempo_total']}s")
+       f"{resumo['revisao']} revisão | anexados ok={resumo['anexado_ok']} dry={resumo['anexado_dry']} "
+       f"falhou={resumo['anexado_falhou']} | TOTAL={resumo['tempo_total']}s")
     return resumo

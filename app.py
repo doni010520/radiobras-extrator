@@ -1074,6 +1074,8 @@ def _esteira_run():
     m = int(request.args.get("m", 6))
     n = int(request.args.get("n", 3))
     k = int(request.args.get("k", 5))
+    k2 = int(request.args.get("k2", 0))           # pool de anexação (0 = sem anexar)
+    dry = request.args.get("dry", "1") != "0"     # dry=0 => anexação REAL
     gkey = request.args.get("gkey") or os.environ.get("GEMINI_API_KEY")
     jid = uuid.uuid4().hex[:8]
     review_dir = f"/tmp/esteira_rev/{jid}"
@@ -1084,7 +1086,8 @@ def _esteira_run():
         try:
             from esteira import rodar_esteira
             job["resumo"] = rodar_esteira(data, m, n, k, lambda msg: job["log"].append(msg),
-                                          gemini_key=gkey, review_dir=review_dir)
+                                          gemini_key=gkey, review_dir=review_dir,
+                                          k_attach=k2, dry_run=dry)
         except Exception as e:
             job["error"] = str(e)
             job["log"].append(f"ERRO: {e}")
