@@ -128,23 +128,43 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
 
 
 _DECISAO_PROMPT = """Acima estão VÁRIOS anexos do prontuário, indexados ([anexo 0], [anexo 1], ...).
-CONTEXTO DA GTO -> paciente: {paciente} | exames esperados: {exames}
+CONTEXTO DA GTO -> paciente: {paciente} | exames esperados: {exames} | DATA DO EXAME: {data_exame}
 
 Você é auditor de solicitações odontológicas. Identifique QUAL anexo é a SOLICITAÇÃO/
-REQUISIÇÃO de exames que corresponde a ESTA GTO (mesmo paciente, exames compatíveis) e
-decida se pode ser anexada com segurança. Ignore laudos, raios-x e documentos antigos
-que não batem.
+REQUISIÇÃO de exames que corresponde a ESTA GTO: mesmo paciente, exames compatíveis E
+DATA compatível com o exame. Ignore laudos, raios-x e solicitações ANTIGAS de outros
+atendimentos que ficam guardadas no prontuário.
+
+SOBRE A DATA (importante): leia a data escrita na solicitação. Ela deve ser PRÓXIMA à data
+do exame ({data_exame}) e NÃO posterior a ela. Uma solicitação de meses ou anos antes
+(ex.: ano diferente) é de OUTRO atendimento e NÃO serve para esta GTO -> anexar=false.
 
 Responda APENAS JSON (sem markdown):
 {{"indice_solicitacao": <int do anexo certo, ou null>, "tipo": "digitada"|"manuscrita"|null,
 "legivel": <bool>, "paciente_lido": "<str ou null>", "exames_lidos": [<str>],
-"exames_batem": <bool>, "confianca": "alta"|"media"|"baixa", "anexar": <bool>, "motivo": "<curto>"}}
+"exames_batem": <bool>, "data_solicitacao": "<DD/MM/AAAA lida na solicitação, ou null se ilegível>",
+"data_bate": <bool>, "confianca": "alta"|"media"|"baixa", "anexar": <bool>, "motivo": "<curto>"}}
 
-Regra: anexar=true SÓ se é a solicitação certa desta GTO, legível, exames batem e confiança
-alta. Em qualquer dúvida -> anexar=false (vai pra revisão humana)."""
+Regra: anexar=true SÓ se é a solicitação certa desta GTO, legível, exames batem, DATA
+compatível e confiança alta. Em qualquer dúvida -> anexar=false (vai pra revisão humana)."""
 
 
-def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None):
+def _parse_br_date(s):
+    """'DD/MM/AAAA' (ou DD/MM/AA) -> date; None se não der."""
+    try:
+        import datetime as _dt
+        p = re.findall(r"\d+", str(s))
+        if len(p) < 3:
+            return None
+        d, m, y = int(p[0]), int(p[1]), int(p[2])
+        if y < 100:
+            y += 2000
+        return _dt.date(y, m, d)
+    except Exception:
+        return None
+
+
+def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=None):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
     manda TUDO pro Gemini escolher a solicitação certa + decidir. NÃO anexa.
     Devolve plano (laudo+imgs sempre; solicitação se a IA confiar) + a decisão.
@@ -222,12 +242,25 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None):
         contents.append(f"[anexo {i}] {fn}")
         contents.append(types.Part.from_bytes(data=blob, mime_type=mime))
     contents.append(_DECISAO_PROMPT.format(
-        paciente=pac["nome"], exames=(sorted(gto_ex) or "(GTO ilegível)")))
+        paciente=pac["nome"], exames=(sorted(gto_ex) or "(GTO ilegível)"),
+        data_exame=(data_exame or "(desconhecida)")))
     for tent in range(3):
         try:
             r = gem.models.generate_content(model="gemini-2.5-flash", contents=contents)
             txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
             dec = json.loads(txt)
+            # TRAVA DE DATA: se a solicitação escolhida é >90 dias antes do exame
+            # (ou posterior a ele), não auto-anexa -> revisão humana.
+            if dec.get("anexar"):
+                dsol, dexm = _parse_br_date(dec.get("data_solicitacao")), _parse_br_date(data_exame)
+                if dsol and dexm:
+                    gap = (dexm - dsol).days
+                    if gap > 90 or gap < -1:
+                        quando = "posterior ao exame" if gap < -1 else f"{gap} dias antes do exame"
+                        dec["anexar"] = False
+                        dec["data_flag"] = True
+                        dec["motivo"] = (f"solicitação de {dec.get('data_solicitacao')} "
+                                         f"({quando}) — não bate com o exame {data_exame}, revisar")
             out["decisao"] = dec
             idx = dec.get("indice_solicitacao")
             if dec.get("anexar") and isinstance(idx, int) and 0 <= idx < len(cands):
@@ -411,7 +444,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 t0 = time.monotonic()
                 try:
                     dec = _decidir(gem, pg, ctx, item["_pac"], item.get("_pasta"),
-                                   review_dir=review_dir, gto=item["gto"])
+                                   review_dir=review_dir, gto=item["gto"], data_exame=data)
                 except Exception as e:
                     dec = {"erro": str(e)[:100], "decisao": None, "anexos": 0,
                            "gto_exames": [], "plano_laudo_imgs": [], "plano_solicitacao": None}
