@@ -13,7 +13,7 @@
   .lead{color:var(--sub);margin-bottom:16px}
   .card{background:var(--card);border:1px solid var(--linha);border-radius:12px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
   .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-  input[type=date]{padding:9px 12px;border:1px solid var(--linha);border-radius:8px;font-size:15px}
+  input[type=date],select{padding:9px 12px;border:1px solid var(--linha);border-radius:8px;font-size:15px;background:#fff}
   .btn{border:0;border-radius:8px;padding:11px 18px;font-size:15px;font-weight:600;cursor:pointer}
   .prim{background:var(--verde);color:#fff}
   .sec{background:#eef3f0;color:var(--verde)}
@@ -32,9 +32,15 @@
   <div class="lead">Roda o pipeline completo (descoberta → download → decisão com IA → anexação) e fatura as GTOs do dia no OdontoPrev.</div>
   <div class="card">
     <div class="row">
+      <label>Plano:
+        <select id="plano">
+          <option value="" disabled selected>Selecione o plano…</option>
+          {% for p in planos %}<option value="{{ p.codigo }}">{{ p.label }} ({{ p.codigo }})</option>{% endfor %}
+          {% for nome in planos_inativos %}<option value="" disabled>{{ nome }}</option>{% endfor %}
+        </select>
+      </label>
       <label>Dia: <input type="date" id="dia"></label>
-      <button class="btn prim" id="bReal" onclick="run(false)">▶ Faturar (real)</button>
-      <button class="btn sec" id="bDry" onclick="run(true)">👁 Simular primeiro (revisar)</button>
+      <button class="btn prim" id="bReal" onclick="run()">▶ Faturar dia</button>
     </div>
     <div id="prog">
       <div id="status">Iniciando…</div>
@@ -46,24 +52,26 @@
 <script>
 function fmtData(v){ if(!v) return ''; const p=v.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
 let timer=null;
-function setBusy(b){ document.getElementById('bReal').disabled=b; document.getElementById('bDry').disabled=b; }
-async function run(dry){
+function setBusy(b){ document.getElementById('bReal').disabled=b; }
+async function run(){
+  const plano=document.getElementById('plano').value;
+  if(!plano){ alert('Selecione o plano.'); return; }
   const dia=fmtData(document.getElementById('dia').value);
   if(!dia){ alert('Escolha o dia.'); return; }
-  if(!dry && !confirm('Faturar o dia '+dia+' DE VERDADE? (anexa no OdontoPrev — não tem desfazer)')) return;
+  if(!confirm('Faturar o dia '+dia+' DE VERDADE? (anexa no OdontoPrev — não tem desfazer)')) return;
   setBusy(true);
   document.getElementById('prog').style.display='block';
   document.getElementById('done').innerHTML='';
   document.getElementById('log').textContent='';
-  document.getElementById('status').textContent='Rodando '+dia+(dry?' (simulação)':' (REAL)')+'…';
+  document.getElementById('status').textContent='Rodando '+dia+'…';
   try{
-    const r=await fetch('/faturar/run?data='+encodeURIComponent(dia)+'&dry='+(dry?1:0));
+    const r=await fetch('/faturar/run?data='+encodeURIComponent(dia)+'&plano='+encodeURIComponent(plano));
     const j=await r.json();
     if(j.error){ document.getElementById('status').textContent='Erro: '+j.error; setBusy(false); return; }
-    poll(j.job, dry);
+    poll(j.job);
   }catch(e){ document.getElementById('status').textContent='Erro de rede.'; setBusy(false); }
 }
-function poll(jid, dry){
+function poll(jid){
   if(timer) clearInterval(timer);
   timer=setInterval(async()=>{
     try{
@@ -76,7 +84,6 @@ function poll(jid, dry){
         document.getElementById('status').textContent='Concluído.';
         let html='';
         if(j.error){ html='<b style="color:#b3261e">Erro:</b> '+j.error; }
-        else if(dry){ html='<b>Simulação:</b> '+(s.solic_auto||0)+' faturaria / '+(s.justificativa||0)+' c/ justificativa / '+(s.revisao||0)+' revisão &nbsp;·&nbsp; <a href="/admin/esteira/revisao/'+jid+'?key=rb-esteira-2026" target="_blank">ver decisões 👁</a>'; }
         else{ html='<b style="color:#0f7a4f">✓ Faturado:</b> '+(s.anexado_ok||0)+' GTOs em '+(s.tempo_total||0)+'s &nbsp;·&nbsp; <a href="/relatorios/execucao/'+(j.execucao_id||'')+'">ver relatório →</a>'; }
         document.getElementById('done').innerHTML=html;
       }

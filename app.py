@@ -40,7 +40,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # Escopo REDE UNNA — definido em config.py (evita import circular).
-from config import CONVENIOS, SEGMENTOS
+from config import CONVENIOS, SEGMENTOS, PLANOS, PLANOS_INATIVOS
 
 # Inicializa o banco (cria tabelas se não existirem). Falha não derruba o app.
 try:
@@ -517,7 +517,8 @@ def relatorios_execucao_pdf(eid: int):
 # ── Faturar dia (UI do pipeline novo) ─────────────────────────────────────────
 @app.route("/faturar")
 def faturar_page():
-    return render_template("faturar.html")
+    planos = [{"codigo": c, "label": p["label"]} for c, p in PLANOS.items()]
+    return render_template("faturar.html", planos=planos, planos_inativos=PLANOS_INATIVOS)
 
 
 @app.route("/faturar/run")
@@ -525,6 +526,9 @@ def faturar_run():
     data = request.args.get("data")
     if not data:
         return jsonify({"error": "informe a data"}), 400
+    plano = request.args.get("plano") or ""
+    if plano and plano not in PLANOS:
+        return jsonify({"error": "plano inválido"}), 400
     dry = request.args.get("dry", "0") != "0"
     jid = uuid.uuid4().hex[:8]
     review_dir = f"/tmp/esteira_rev/{jid}"
@@ -538,7 +542,7 @@ def faturar_run():
             from esteira import rodar_esteira
             job["resumo"] = rodar_esteira(data, 6, 3, 5, lambda m: job["log"].append(m),
                                           gemini_key=gkey, review_dir=review_dir,
-                                          k_attach=3, dry_run=dry)
+                                          k_attach=3, dry_run=dry, conta=(plano or None))
             if not dry and job["resumo"]:
                 try:
                     job["execucao_id"] = db.salvar_execucao(job["resumo"])

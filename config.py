@@ -17,3 +17,31 @@ CONVENIOS = [
 ]
 
 SEGMENTOS = ["CENTRO", "ITAIGARA", "LAURO", "PERIPERI"]
+
+# Planos = cada conta RedeUna no OdontoPrev (login = código da conta; mesma senha
+# pras 3). Cada conta tem seus convênios/segmentos no PRORADIS. A ordem aqui é a
+# da lista do seletor.
+PLANOS = {
+    "388336": {
+        "label": "RedeUna — Centro, Lauro, Periperi e Itaigara",
+        "convenios": ["REDE UNNA - CENTRO", "REDE UNNA - ITAIGARA",
+                      "REDE UNNA - PERIPERI", "REDE UNNA - LAURO DE FREITAS"],
+        "segmentos": ["CENTRO", "ITAIGARA", "LAURO", "PERIPERI"],
+    },
+    "397950": {
+        "label": "RedeUna — Tancredo",
+        "convenios": ["REDE UNNA CAMINHO DAS ÁRVORES - TANCREDO"],
+        "segmentos": ["TANCREDO"],
+    },
+    "410923": {
+        "label": "RedeUna — Camaçari",
+        "convenios": ["REDE UNNA - CAMAÇARI", "REDE UNNA DESCONTO CAMAÇARI"],
+        "segmentos": ["CAMAÇARI"],
+    },
+}
+
+# Outros planos/operadoras ainda não automatizados — aparecem no seletor mas
+# DESABILITADOS (não selecionáveis). Edite a lista conforme forem integrados.
+PLANOS_INATIVOS = [
+    "Outros planos — em breve",
+]

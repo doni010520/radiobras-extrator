@@ -23,7 +23,7 @@ import time
 import requests
 from playwright.sync_api import sync_playwright
 
-from config import CONVENIOS, SEGMENTOS
+from config import CONVENIOS, SEGMENTOS, PLANOS
 from extrator_pacientes_analitico import BASE_URL as BASE, get_credentials
 from extrator_arquivos import (
     _login_playwright, _get_relatorio_analitico,
@@ -249,13 +249,18 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None):
 
 
 def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_key=None,
-                  review_dir=None, k_attach=0, dry_run=True):
+                  review_dir=None, k_attach=0, dry_run=True, conta=None):
     """Pipeline de até 4 estágios (descoberta -> download -> decisão -> anexação).
+    conta = código da conta RedeUna (plano); usa o login + convênios/segmentos dela.
     gemini_key liga a decisão. k_attach>0 liga a ANEXAÇÃO (estágio 4): auto e
     justificativa são anexados; sem-solicitação e revisão NÃO (ficam avisados).
     dry_run=True só simula a anexação (loga o plano, não sobe nada)."""
     if log is None:
         log = lambda m: print(m, flush=True)
+    plano = PLANOS.get(conta or "")
+    _convenios = plano["convenios"] if plano else CONVENIOS
+    _segmentos = plano["segmentos"] if plano else SEGMENTOS
+    _odo_user = conta if (conta and plano) else None   # None -> usa ODONTOPREV_USER padrão
     t_glob = time.monotonic()
 
     def _t(m):
@@ -288,7 +293,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     def _odonto_setup():
         """Login OdontoPrev (1 navegador): captura o Bearer token da sessão + lista
         os alvos. Depois disso a descoberta é HTTP puro (sem render de popup)."""
-        user, pwd = get_credentials_odonto()
+        _du, pwd = get_credentials_odonto()
+        user = _odo_user or _du   # plano selecionado -> login = código da conta
         tok = {"v": None}
         alvos = []
         with sync_playwright() as pw:
@@ -437,7 +443,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
 
     # ---- ESTÁGIO 4: anexação (OdontoPrev) ----
     def anexador(wid):
-        user, pwd = get_credentials_odonto()
+        _du, pwd = get_credentials_odonto()
+        user = _odo_user or _du   # plano selecionado -> login = código da conta
         with sync_playwright() as pw:
             br, ctx, pg = login_odonto(pw, user, pwd)
             ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
@@ -493,7 +500,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         with sync_playwright() as pw0:
             br0, ctx0, pg0 = _login_playwright(pw0, email, password)
             ctx0.set_default_timeout(45000); ctx0.set_default_navigation_timeout(60000)
-            df = _get_relatorio_analitico(pg0, CONVENIOS, SEGMENTOS, data)
+            df = _get_relatorio_analitico(pg0, _convenios, _segmentos, data)
             setup["by_norm"] = _build_by_norm(df)
             setup["state"] = ctx0.storage_state()
             br0.close()
