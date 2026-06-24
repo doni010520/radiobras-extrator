@@ -237,44 +237,69 @@ def rodar_esteira(data, m_download=3, n_desc=3, k_leitura=4, log=None, gemini_ke
     ativos_dl = {"n": 0, "pico": 0}
     ativos_le = {"n": 0, "pico": 0}
 
-    # ---- ESTÁGIO 1: descoberta (OdontoPrev) ----
-    def descobridor(wid):
+    # ---- ESTÁGIO 1: descoberta via API DIRETA (sem abrir popup) ----
+    def _odonto_setup():
+        """Login OdontoPrev (1 navegador): captura o Bearer token da sessão + lista
+        os alvos. Depois disso a descoberta é HTTP puro (sem render de popup)."""
         user, pwd = get_credentials_odonto()
+        tok = {"v": None}
+        alvos = []
         with sync_playwright() as pw:
             br, ctx, pg = login_odonto(pw, user, pwd)
             ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
+
+            def _grab(req):
+                try:
+                    if not tok["v"] and "credenciado.odontoprev.com.br" in req.url:
+                        a = req.headers.get("authorization")
+                        if a and a.lower().startswith("bearer"):
+                            tok["v"] = a
+                except Exception:
+                    pass
+            ctx.on("request", _grab)
             try:
                 abrir_consultar_gtos(pg); consultar_periodo(pg, data)
                 gtos = listar_gtos(pg)
                 do_dia = [g for g in gtos if g.get("liberacao") == data] or gtos
                 alvos = [g for g in do_dia if "REPASSE" in g["status"].upper()]
-                meus = [g for g in alvos if g["gto"].isdigit() and int(g["gto"]) % n_desc == wid]
-                _t(f"[DESC{wid}] {len(alvos)} alvo(s) | eu cuido de {len(meus)}")
-                for g in meus:
+                if not tok["v"] and alvos:   # fallback: abre 1 GTO p/ disparar a API
                     try:
-                        gp = abrir_gto(pg, g["gto"], _refrescar=None)
-                        gp.wait_for_timeout(800)
-                        nomes = _anexos_nomes(gp); cnt = _anexos_count(gp)
-                        try:
-                            gp.close()
-                        except Exception:
-                            pass
+                        gp = abrir_gto(pg, alvos[0]["gto"], _refrescar=None)
+                        gp.wait_for_timeout(1500)
                     except Exception:
-                        g["nome_norm"] = normaliza_nome(g["nome"])
-                        with _lock:
-                            n_pend["n"] += 1
-                        fila_pend.put(g)
-                        continue
-                    if _ja_anexado_por_nos(nomes) or cnt >= 2:
-                        _t(f"[DESC{wid}] GTO {g['gto']}: já completa -> pula")
-                        continue
-                    g["nome_norm"] = normaliza_nome(g["nome"])
-                    with _lock:
-                        n_pend["n"] += 1
-                    _t(f"[DESC{wid}] >>> PENDENTE {g['gto']} {g['nome']} -> fila_pend")
-                    fila_pend.put(g)
+                        pass
             finally:
                 br.close()
+        return tok["v"], alvos
+
+    def descobridor_api(token, alvos):
+        """Pra cada alvo, chama /v1/gto/imagens (nomes + contagem) e decide pendente.
+        HTTP puro em paralelo (ThreadPool) -> sem popup, sem render, ~zero CPU."""
+        from concurrent.futures import ThreadPoolExecutor
+        sess = requests.Session()
+        sess.headers.update({"Authorization": token or "", "User-Agent": "Mozilla/5.0",
+                             "Origin": "https://credenciado.odontoprev.com.br",
+                             "Referer": "https://credenciado.odontoprev.com.br/"})
+
+        def _um(g):
+            try:
+                r = sess.get("https://gto-credenciado.odontoprev.com.br/v1/gto/imagens"
+                             f"?numeroFicha={g['gto']}", timeout=20)
+                imgs = r.json() if r.status_code == 200 else []
+                nomes = {str(i.get("nomeArquivo", "")) for i in imgs}
+                cnt = len(imgs)
+            except Exception:
+                nomes, cnt = set(), -1
+            if cnt >= 2 or (cnt >= 0 and _ja_anexado_por_nos(nomes)):
+                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos -> completa, pula")
+                return
+            g["nome_norm"] = normaliza_nome(g["nome"])
+            with _lock:
+                n_pend["n"] += 1
+            _t(f"[DESC] >>> PENDENTE {g['gto']} {g['nome']} ({cnt} anexos) -> fila")
+            fila_pend.put(g)
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(_um, alvos))
 
     # ---- ESTÁGIO 2: download (PRORADIS) ----
     def baixador(wid, state, by_norm, tmp):
@@ -352,21 +377,36 @@ def rodar_esteira(data, m_download=3, n_desc=3, k_leitura=4, log=None, gemini_ke
             except Exception:
                 pass
 
-    # ---- 1) PRORADIS: relatório analítico (by_norm) + storage_state ----
-    _t(f"=== PIPELINE {data} | desc={n_desc} dl={m_download} leit={k_leitura if gem else 0} ===")
-    email, password = get_credentials()
-    with sync_playwright() as pw0:
-        br0, ctx0, pg0 = _login_playwright(pw0, email, password)
-        ctx0.set_default_timeout(45000); ctx0.set_default_navigation_timeout(60000)
-        df = _get_relatorio_analitico(pg0, CONVENIOS, SEGMENTOS, data)
-        by_norm = _build_by_norm(df)
-        state = ctx0.storage_state()
-        br0.close()
-    _t(f"PRORADIS ok | by_norm={len(by_norm)} | cookies={len(state.get('cookies', []))}")
+    # ---- 1) SETUP: PRORADIS (by_norm) e OdontoPrev (token+alvos) em paralelo ----
+    _t(f"=== PIPELINE {data} | dl={m_download} leit={k_leitura if gem else 0} (descoberta via API) ===")
+    setup = {}
+
+    def _prorad_setup():
+        email, password = get_credentials()
+        with sync_playwright() as pw0:
+            br0, ctx0, pg0 = _login_playwright(pw0, email, password)
+            ctx0.set_default_timeout(45000); ctx0.set_default_navigation_timeout(60000)
+            df = _get_relatorio_analitico(pg0, CONVENIOS, SEGMENTOS, data)
+            setup["by_norm"] = _build_by_norm(df)
+            setup["state"] = ctx0.storage_state()
+            br0.close()
+
+    def _odo_setup():
+        setup["token"], setup["alvos"] = _odonto_setup()
+
+    _ts = [threading.Thread(target=_prorad_setup), threading.Thread(target=_odo_setup)]
+    for t in _ts:
+        t.start()
+    for t in _ts:
+        t.join()
+    by_norm, state = setup["by_norm"], setup["state"]
+    token, alvos = setup.get("token"), setup.get("alvos", [])
+    _t(f"PRORADIS by_norm={len(by_norm)} | OdontoPrev token={'ok' if token else 'FALHOU'} "
+       f"| {len(alvos)} alvo(s)")
     tmp = tempfile.mkdtemp(prefix="_esteira_")
 
-    # ---- 2) lança os 3 pools ----
-    tds = [threading.Thread(target=descobridor, args=(i,), daemon=True) for i in range(n_desc)]
+    # ---- 2) lança os pools (descoberta-API + download + decisão) ----
+    tds = [threading.Thread(target=descobridor_api, args=(token, alvos), daemon=True)]
     tws = [threading.Thread(target=baixador, args=(i, state, by_norm, tmp), daemon=True)
            for i in range(1, m_download + 1)]
     tls = ([threading.Thread(target=leitor, args=(i, state), daemon=True)
