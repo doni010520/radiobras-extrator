@@ -144,13 +144,15 @@ Regra: anexar=true SÓ se é a solicitação certa desta GTO, legível, exames b
 alta. Em qualquer dúvida -> anexar=false (vai pra revisão humana)."""
 
 
-def _decidir(gem, pg, ctx, pac, pasta_dl):
+def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
     manda TUDO pro Gemini escolher a solicitação certa + decidir. NÃO anexa.
-    Devolve plano (laudo+imgs sempre; solicitação se a IA confiar) + a decisão."""
+    Devolve plano (laudo+imgs sempre; solicitação se a IA confiar) + a decisão.
+    Se review_dir/gto, salva os candidatos p/ a página de revisão."""
     from google.genai import types
     out = {"anexos": 0, "gto_exames": [], "decisao": None, "erro": None,
-           "plano_laudo_imgs": [], "plano_solicitacao": None}
+           "plano_laudo_imgs": [], "plano_solicitacao": None,
+           "candidatos": [], "solic_idx": None}
     if pasta_dl and os.path.isdir(pasta_dl):
         out["plano_laudo_imgs"] = sorted(os.listdir(pasta_dl))
     try:
@@ -181,13 +183,24 @@ def _decidir(gem, pg, ctx, pac, pasta_dl):
         mime = {"pdf": "application/pdf", "png": "image/png",
                 "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
         if mime:
-            cands.append((it["filename"], mime, blob))
+            saved = None
+            if review_dir and gto is not None:
+                gdir = os.path.join(review_dir, str(gto))
+                os.makedirs(gdir, exist_ok=True)
+                saved = f"{len(cands)}__{re.sub(r'[^A-Za-z0-9._-]+', '_', it['filename']) or 'anexo'}"
+                try:
+                    with open(os.path.join(gdir, saved), "wb") as f:
+                        f.write(blob)
+                except Exception:
+                    saved = None
+            cands.append((it["filename"], mime, blob, saved))
     out["gto_exames"] = sorted(gto_ex)
+    out["candidatos"] = [{"idx": i, "nome": c[0], "arquivo": c[3]} for i, c in enumerate(cands)]
     if not cands:
         out["decisao"] = {"anexar": False, "motivo": "sem anexo candidato a solicitação"}
         return out
     contents = []
-    for i, (fn, mime, blob) in enumerate(cands):
+    for i, (fn, mime, blob, saved) in enumerate(cands):
         contents.append(f"[anexo {i}] {fn}")
         contents.append(types.Part.from_bytes(data=blob, mime_type=mime))
     contents.append(_DECISAO_PROMPT.format(
@@ -201,6 +214,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl):
             idx = dec.get("indice_solicitacao")
             if dec.get("anexar") and isinstance(idx, int) and 0 <= idx < len(cands):
                 out["plano_solicitacao"] = cands[idx][0]
+                out["solic_idx"] = idx
             break
         except Exception as e:
             out["erro"] = f"gemini: {str(e)[:80]}"
@@ -208,7 +222,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl):
     return out
 
 
-def rodar_esteira(data, m_download=3, n_desc=3, k_leitura=4, log=None, gemini_key=None):
+def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_key=None,
+                  review_dir=None):
     """Pipeline de 3 estágios. gemini_key liga o estágio de leitura (sem ela, só
     descoberta+download)."""
     if log is None:
@@ -357,7 +372,8 @@ def rodar_esteira(data, m_download=3, n_desc=3, k_leitura=4, log=None, gemini_ke
                     em = _mem_mb()
                 t0 = time.monotonic()
                 try:
-                    dec = _decidir(gem, pg, ctx, item["_pac"], item.get("_pasta"))
+                    dec = _decidir(gem, pg, ctx, item["_pac"], item.get("_pasta"),
+                                   review_dir=review_dir, gto=item["gto"])
                 except Exception as e:
                     dec = {"erro": str(e)[:100], "decisao": None, "anexos": 0,
                            "gto_exames": [], "plano_laudo_imgs": [], "plano_solicitacao": None}
@@ -439,6 +455,8 @@ def rodar_esteira(data, m_download=3, n_desc=3, k_leitura=4, log=None, gemini_ke
             "solicitacao": dec.get("plano_solicitacao"),
             "anexar_solic": bool(dec.get("plano_solicitacao")),
             "gto_exames": dec.get("gto_exames", []),
+            "candidatos": dec.get("candidatos", []),
+            "solic_idx": dec.get("solic_idx"),
             "gemini": {k: d.get(k) for k in ("tipo", "legivel", "paciente_lido",
                        "exames_lidos", "exames_batem", "confianca", "anexar", "motivo")},
             "erro": dec.get("erro"),

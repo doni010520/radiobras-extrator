@@ -1071,19 +1071,20 @@ def _esteira_run():
     data = request.args.get("data")
     if not data:
         return jsonify({"error": "faltou ?data=DD/MM/AAAA"}), 400
-    m = int(request.args.get("m", 3))
+    m = int(request.args.get("m", 6))
     n = int(request.args.get("n", 3))
-    k = int(request.args.get("k", 4))
+    k = int(request.args.get("k", 5))
     gkey = request.args.get("gkey") or os.environ.get("GEMINI_API_KEY")
     jid = uuid.uuid4().hex[:8]
-    job = {"log": [], "done": False, "resumo": None, "error": None}
+    review_dir = f"/tmp/esteira_rev/{jid}"
+    job = {"log": [], "done": False, "resumo": None, "error": None, "review_dir": review_dir}
     _esteira_jobs[jid] = job
 
     def _go():
         try:
             from esteira import rodar_esteira
             job["resumo"] = rodar_esteira(data, m, n, k, lambda msg: job["log"].append(msg),
-                                          gemini_key=gkey)
+                                          gemini_key=gkey, review_dir=review_dir)
         except Exception as e:
             job["error"] = str(e)
             job["log"].append(f"ERRO: {e}")
@@ -1103,6 +1104,59 @@ def _esteira_log(jid: str):
         return jsonify({"error": "job não encontrado"}), 404
     return jsonify({"done": job["done"], "error": job["error"],
                     "resumo": job["resumo"], "log": job["log"][-300:]})
+
+
+@app.route("/admin/esteira/revisao/<jid>")
+def _esteira_revisao(jid: str):
+    if request.args.get("key") != _ESTEIRA_KEY:
+        return "forbidden", 403
+    job = _esteira_jobs.get(jid)
+    if not job or not job.get("resumo"):
+        return "job não encontrado ou ainda rodando", 404
+    r = job["resumo"]
+    decs = sorted(r.get("decisoes", []), key=lambda x: (not x.get("anexar_solic"), x.get("gto")))
+    h = ["<html><head><meta charset=utf-8><title>Revisão</title><style>",
+         "body{font-family:sans-serif;background:#111;color:#eee;margin:18px}",
+         ".card{border:1px solid #333;border-radius:8px;padding:12px;margin:12px 0;background:#1a1a1a}",
+         ".auto{border-left:6px solid #2ecc71}.rev{border-left:6px solid #e67e22}",
+         "img,embed{max-height:360px;max-width:47%;border:2px solid #333;margin:4px;background:#fff;vertical-align:top}",
+         ".chosen{border:4px solid #2ecc71}.h{color:#999;font-size:13px;margin:4px 0}b{color:#fff}</style></head><body>",
+         f"<h2>Revisão — {r.get('data')} | {r.get('solic_auto')} AUTO / {r.get('solic_revisao')} revisão</h2>"]
+    for x in decs:
+        g = x.get("gemini") or {}
+        cls = "auto" if x.get("anexar_solic") else "rev"
+        tag_dec = (f"→ <span style='color:#2ecc71'>ANEXA: {x.get('solicitacao')}</span>"
+                   if x.get("anexar_solic") else "→ <span style='color:#e67e22'>REVISÃO</span>")
+        h.append(f"<div class='card {cls}'><b>GTO {x['gto']} — {x['paciente']}</b> {tag_dec}")
+        h.append(f"<div class='h'>exames GTO: {x.get('gto_exames')} &nbsp;|&nbsp; Gemini: "
+                 f"tipo={g.get('tipo')} legível={g.get('legivel')} batem={g.get('exames_batem')} "
+                 f"conf={g.get('confianca')}<br>lidos: {g.get('exames_lidos')}<br>"
+                 f"motivo: {g.get('motivo') or x.get('erro') or ''}</div>")
+        for c in x.get("candidatos", []):
+            if not c.get("arquivo"):
+                continue
+            chosen = "chosen" if c.get("idx") == x.get("solic_idx") else ""
+            src = f"/admin/esteira/arquivo/{jid}/{x['gto']}/{c['arquivo']}?key={_ESTEIRA_KEY}"
+            tg = "embed" if str(c["arquivo"]).lower().endswith(".pdf") else "img"
+            h.append(f"<span style='display:inline-block;width:47%;text-align:center'>"
+                     f"<{tg} class='{chosen}' src='{src}'><div class='h'>[{c['idx']}] {c['nome']}</div></span>")
+        h.append("</div>")
+    h.append("</body></html>")
+    return "".join(h)
+
+
+@app.route("/admin/esteira/arquivo/<jid>/<gto>/<path:fname>")
+def _esteira_arquivo(jid: str, gto: str, fname: str):
+    if request.args.get("key") != _ESTEIRA_KEY:
+        return "forbidden", 403
+    job = _esteira_jobs.get(jid)
+    if not job:
+        return "404", 404
+    base = job.get("review_dir") or f"/tmp/esteira_rev/{jid}"
+    path = os.path.realpath(os.path.join(base, str(gto), fname))
+    if not path.startswith(os.path.realpath(base)) or not os.path.exists(path):
+        return "404", 404
+    return send_file(path)
 
 
 if __name__ == "__main__":
