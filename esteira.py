@@ -139,6 +139,14 @@ SOBRE A DATA (importante): leia a data escrita na solicitação. Ela deve ser PR
 do exame ({data_exame}) e NÃO posterior a ela. Uma solicitação de meses ou anos antes
 (ex.: ano diferente) é de OUTRO atendimento e NÃO serve para esta GTO -> anexar=false.
 
+SOBRE OS EXAMES (importante): leia a solicitação INTEIRA, inclusive listas numeradas/itens,
+e coloque em exames_lidos TODOS os exames pedidos (não pare no primeiro). Trate sinônimos:
+"interproximal" = "bite-wing"; "periapical"; "panorâmica" = "radiografia panorâmica" =
+"topo"; "telerradiografia" = "teleradiografia de perfil" = "cefalométrica". A solicitação
+SERVE se CONTÉM os exames da GTO ({exames}) — pode ter exames A MAIS, sem problema.
+Só marque exames_batem=false se algum exame da GTO realmente NÃO aparecer na solicitação,
+e diga no motivo QUAL exame faltou (confira item por item antes de afirmar que faltou).
+
 Responda APENAS JSON (sem markdown):
 {{"indice_solicitacao": <int do anexo certo, ou null>, "tipo": "digitada"|"manuscrita"|null,
 "legivel": <bool>, "paciente_lido": "<str ou null>", "exames_lidos": [<str>],
