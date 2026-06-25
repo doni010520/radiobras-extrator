@@ -1260,7 +1260,23 @@ def _esteira_revisao(jid: str):
          "<div class='aviso'>⚠️ O que é anexado no RedeUna: <b>laudo + imagens</b> (sempre) e, "
          "<b>só quando a GTO não tem justificativa</b>, a <b>solicitação destacada em verde</b>. "
          "Os outros anexos abaixo são apenas o que o Gemini analisou pra escolher — <b>NENHUM deles é "
-         "anexado</b>. (Clique numa imagem pra ampliar.)</div>"]
+         "anexado</b>. (Clique numa imagem pra ampliar; PDF use o '🔍 abrir'.)</div>"]
+    import re as _re
+    from datetime import date as _date
+
+    def _fdate(s):
+        m = _re.search(r"(20\d{2})[-_]?(\d{2})[-_]?(\d{2})", str(s))
+        try:
+            return _date(int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+        except Exception:
+            return None
+    _dm = _re.findall(r"\d+", r.get("data") or "")
+    dexm = None
+    if len(_dm) >= 3:
+        try:
+            dexm = _date(int(_dm[2]), int(_dm[1]), int(_dm[0]))
+        except Exception:
+            dexm = None
     for x in decs:
         g = x.get("gemini") or {}
         cat = x.get("categoria", "revisao")
@@ -1275,14 +1291,27 @@ def _esteira_revisao(jid: str):
                  f"tipo={g.get('tipo')} legível={g.get('legivel')} batem={g.get('exames_batem')} "
                  f"conf={g.get('confianca')}<br>lidos: {g.get('exames_lidos')}<br>"
                  f"motivo: {g.get('motivo') or x.get('erro') or ''}</div>")
+        ocultos = 0
         for c in x.get("candidatos", []):
             if not c.get("arquivo"):
                 continue
-            chosen = "chosen" if c.get("idx") == x.get("solic_idx") else ""
+            is_chosen = c.get("idx") == x.get("solic_idx")
+            cdate = _fdate(c["nome"])
+            # esconde candidatos antigos (>90 dias da data do exame), exceto o escolhido
+            if (not is_chosen) and dexm and cdate and abs((dexm - cdate).days) > 90:
+                ocultos += 1
+                continue
+            chosen = "chosen" if is_chosen else ""
             src = f"/admin/esteira/arquivo/{jid}/{x['gto']}/{c['arquivo']}?key={_ESTEIRA_KEY}"
             tg = "embed" if str(c["arquivo"]).lower().endswith(".pdf") else "img"
+            dtxt = f" · {cdate.strftime('%d/%m/%Y')}" if cdate else ""
             h.append(f"<span style='display:inline-block;width:47%;text-align:center'>"
-                     f"<{tg} class='{chosen}' src='{src}'><div class='h'>[{c['idx']}] {c['nome']}</div></span>")
+                     f"<{tg} class='{chosen}' src='{src}'>"
+                     f"<div class='h'>[{c['idx']}] {c['nome']}{dtxt} · "
+                     f"<a href='{src}' target='_blank' style='color:#3498db'>🔍 abrir</a></div></span>")
+        if ocultos:
+            h.append(f"<div class='h'>🕓 {ocultos} solicitação(ões) antiga(s) ocultada(s) "
+                     f"(fora da data do exame — quero só as atuais)</div>")
         h.append("</div>")
     h.append("<div id=lb onclick=\"this.style.display='none'\"><img id=lbi></div>")
     h.append("<script>document.addEventListener('click',function(e){"

@@ -164,6 +164,18 @@ def _parse_br_date(s):
         return None
 
 
+def _date_from_name(s):
+    """Extrai data de nome de arquivo: '...20260618_...' ou '2026-06-18'. None se não tiver."""
+    try:
+        import datetime as _dt
+        m = re.search(r"(20\d{2})[-_]?(\d{2})[-_]?(\d{2})", str(s))
+        if not m:
+            return None
+        return _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        return None
+
+
 def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=None):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
     manda TUDO pro Gemini escolher a solicitação certa + decidir. NÃO anexa.
@@ -258,18 +270,24 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
             r = gem.models.generate_content(model="gemini-2.5-flash", contents=contents)
             txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
             dec = json.loads(txt)
-            # TRAVA DE DATA: se a solicitação escolhida é >90 dias antes do exame
-            # (ou posterior a ele), não auto-anexa -> revisão humana.
+            # TRAVA DE DATA: confere a data lida pelo Gemini E a data no nome do
+            # arquivo da solicitação escolhida. Se QUALQUER uma indicar documento
+            # antigo (>90 dias antes) ou posterior ao exame -> não auto-anexa, revisão.
             if dec.get("anexar"):
-                dsol, dexm = _parse_br_date(dec.get("data_solicitacao")), _parse_br_date(data_exame)
-                if dsol and dexm:
-                    gap = (dexm - dsol).days
-                    if gap > 90 or gap < -1:
-                        quando = "posterior ao exame" if gap < -1 else f"{gap} dias antes do exame"
+                dexm = _parse_br_date(data_exame)
+                _i = dec.get("indice_solicitacao")
+                _fn = cands[_i][0] if isinstance(_i, int) and 0 <= _i < len(cands) else ""
+                datas = [d for d in (_parse_br_date(dec.get("data_solicitacao")),
+                                     _date_from_name(_fn)) if d]
+                if dexm and datas:
+                    gaps = [(dexm - d).days for d in datas]
+                    if max(gaps) > 90 or min(gaps) < -1:
+                        ref = max(gaps)
+                        quando = "posterior ao exame" if min(gaps) < -1 else f"~{ref} dias antes do exame"
                         dec["anexar"] = False
                         dec["data_flag"] = True
-                        dec["motivo"] = (f"solicitação de {dec.get('data_solicitacao')} "
-                                         f"({quando}) — não bate com o exame {data_exame}, revisar")
+                        dec["motivo"] = (f"solicitação com data incompatível ({quando}) — "
+                                         f"não bate com o exame {data_exame}, revisar")
             out["decisao"] = dec
             idx = dec.get("indice_solicitacao")
             if dec.get("anexar") and isinstance(idx, int) and 0 <= idx < len(cands):
