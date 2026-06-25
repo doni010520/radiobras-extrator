@@ -5,24 +5,42 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Faturar dia</title>
 <style>
-  :root{--verde:#0f7a4f;--bg:#f4f6f5;--card:#fff;--linha:#e6ebe8;--txt:#1f2a26;--sub:#6b7a73}
+  :root{--verde:#0f7a4f;--verde2:#16a163;--bg:#f4f6f5;--card:#fff;--linha:#e6ebe8;--txt:#1f2a26;--sub:#6b7a73}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,sans-serif}
   .wrap{max-width:900px;margin:0 auto;padding:20px}
   h1{margin:6px 0 4px}
   .lead{color:var(--sub);margin-bottom:16px}
-  .card{background:var(--card);border:1px solid var(--linha);border-radius:12px;padding:18px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  .card{background:var(--card);border:1px solid var(--linha);border-radius:14px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
   .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
-  input[type=date],select{padding:9px 12px;border:1px solid var(--linha);border-radius:8px;font-size:15px;background:#fff}
-  .btn{border:0;border-radius:8px;padding:11px 18px;font-size:15px;font-weight:600;cursor:pointer}
+  input[type=date],select{padding:10px 12px;border:1px solid var(--linha);border-radius:9px;font-size:15px;background:#fff}
+  .btn{border:0;border-radius:9px;padding:11px 20px;font-size:15px;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
   .prim{background:var(--verde);color:#fff}
-  .sec{background:#eef3f0;color:var(--verde)}
+  .ghost{background:#eef3f0;color:var(--verde)}
   .btn:disabled{opacity:.5;cursor:default}
-  #prog{display:none;margin-top:18px}
-  #status{font-weight:600;margin-bottom:8px}
-  .logbox{background:#0f1411;color:#7CFC9E;font-family:ui-monospace,Menlo,monospace;font-size:12px;height:260px;overflow:auto;padding:12px;border-radius:8px;white-space:pre-wrap;line-height:1.5}
-  #done{margin-top:12px;font-size:16px}
-  #done a{color:var(--verde);font-weight:600}
+
+  /* progresso */
+  #prog{display:none;margin-top:18px;text-align:center}
+  .spin{width:46px;height:46px;border:5px solid #e3ece7;border-top-color:var(--verde);border-radius:50%;margin:6px auto 14px;animation:sp 1s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  #msg{font-size:18px;font-weight:600;min-height:24px}
+  #eta{color:var(--sub);font-size:14px;margin-top:6px}
+  .bar{height:16px;background:#e9efeb;border-radius:20px;overflow:hidden;margin:16px 0 6px;position:relative}
+  #barfill{height:100%;width:0;background:linear-gradient(90deg,var(--verde),var(--verde2));border-radius:20px;transition:width .6s ease}
+  #barpct{font-weight:700;color:var(--verde);font-size:14px}
+  .loglink{display:inline-block;margin-top:12px;color:var(--sub);font-size:13px;text-decoration:underline}
+
+  /* sucesso */
+  #ok{display:none;margin-top:18px;text-align:center}
+  .check{width:64px;height:64px;border-radius:50%;background:#e6f6ee;color:var(--verde);font-size:36px;line-height:64px;margin:0 auto 10px;animation:pop .4s ease}
+  @keyframes pop{0%{transform:scale(.6);opacity:0}100%{transform:scale(1);opacity:1}}
+  #ok h2{margin:4px 0}
+  .cards{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:16px 0}
+  .mini{background:#f7faf8;border:1px solid var(--linha);border-radius:10px;padding:12px 20px;min-width:120px}
+  .mini .n{font-size:28px;font-weight:700}
+  .mini .l{color:var(--sub);font-size:13px}
+  .acts{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px}
+  .err{color:#b3261e;font-weight:600}
 </style>
 </head>
 <body>
@@ -30,7 +48,8 @@
 <div class="wrap">
   <h1>Faturar dia</h1>
   <div class="lead">Roda o pipeline completo (descoberta → download → decisão com IA → anexação) e fatura as GTOs do dia no OdontoPrev.</div>
-  <div class="card">
+
+  <div class="card" id="form">
     <div class="row">
       <label>Plano:
         <select id="plano">
@@ -42,53 +61,106 @@
       <label>Dia: <input type="date" id="dia"></label>
       <button class="btn prim" id="bReal" onclick="run()">▶ Faturar dia</button>
     </div>
+
     <div id="prog">
-      <div id="status">Iniciando…</div>
-      <div class="logbox" id="log"></div>
-      <div id="done"></div>
+      <div class="spin"></div>
+      <div id="msg">Iniciando…</div>
+      <div class="bar"><div id="barfill"></div></div>
+      <div id="barpct">0%</div>
+      <div id="eta">estimando tempo…</div>
+      <a id="loglink" class="loglink" href="#" target="_blank">ver log técnico</a>
+    </div>
+
+    <div id="ok">
+      <div class="check">✓</div>
+      <h2>Faturamento concluído!</h2>
+      <div id="okerr" class="err"></div>
+      <div class="cards">
+        <div class="mini"><div class="n" id="okFat" style="color:var(--verde)">0</div><div class="l">faturadas</div></div>
+        <div class="mini"><div class="n" id="okNao" style="color:#a86a00">0</div><div class="l">não faturadas</div></div>
+        <div class="mini"><div class="n" id="okTempo">0s</div><div class="l">tempo</div></div>
+      </div>
+      <div class="acts">
+        <a class="btn prim" id="okRel" href="#">📊 Ver relatório</a>
+        <a class="btn ghost" id="okPdf" href="#" target="_blank">📄 Exportar PDF</a>
+        <a class="btn ghost" id="okXls" href="#" target="_blank">📗 Exportar Excel</a>
+      </div>
+      <a id="loglink2" class="loglink" href="#" target="_blank">ver log técnico</a>
     </div>
   </div>
 </div>
 <script>
 function fmtData(v){ if(!v) return ''; const p=v.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
-let timer=null;
-function setBusy(b){ document.getElementById('bReal').disabled=b; }
+function $(id){ return document.getElementById(id); }
+let jid=null, pollT=null, etaT=null, etaLeft=null, lastPct=0;
+
+function setBusy(b){ $('bReal').disabled=b; $('plano').disabled=b; $('dia').disabled=b; }
+function setBar(p){ $('barfill').style.width=p+'%'; $('barpct').textContent=p+'%'; }
+function renderEta(){
+  if(etaLeft==null){ $('eta').textContent='estimando tempo…'; return; }
+  const m=Math.floor(etaLeft/60), s=etaLeft%60;
+  $('eta').textContent='⏱ ≈ '+(m>0?(m+'min '):'')+s+'s restante';
+}
+function tickEta(){ if(etaLeft!=null && etaLeft>0){ etaLeft--; renderEta(); } }
+
 async function run(){
-  const plano=document.getElementById('plano').value;
+  const plano=$('plano').value;
   if(!plano){ alert('Selecione o plano.'); return; }
-  const dia=fmtData(document.getElementById('dia').value);
+  const dia=fmtData($('dia').value);
   if(!dia){ alert('Escolha o dia.'); return; }
   if(!confirm('Faturar o dia '+dia+' DE VERDADE? (anexa no OdontoPrev — não tem desfazer)')) return;
   setBusy(true);
-  document.getElementById('prog').style.display='block';
-  document.getElementById('done').innerHTML='';
-  document.getElementById('log').textContent='';
-  document.getElementById('status').textContent='Rodando '+dia+'…';
+  $('ok').style.display='none';
+  $('prog').style.display='block';
+  $('msg').textContent='Iniciando…'; setBar(0); lastPct=0; etaLeft=null; renderEta();
   try{
     const r=await fetch('/faturar/run?data='+encodeURIComponent(dia)+'&plano='+encodeURIComponent(plano));
     const j=await r.json();
-    if(j.error){ document.getElementById('status').textContent='Erro: '+j.error; setBusy(false); return; }
-    poll(j.job);
-  }catch(e){ document.getElementById('status').textContent='Erro de rede.'; setBusy(false); }
+    if(j.error){ $('msg').innerHTML='<span class="err">Erro: '+j.error+'</span>'; setBusy(false); return; }
+    jid=j.job;
+    $('loglink').href='/faturar/log/'+jid; $('loglink2').href='/faturar/log/'+jid;
+    pollT=setInterval(poll, 2500);
+    etaT=setInterval(tickEta, 1000);
+    poll();
+  }catch(e){ $('msg').innerHTML='<span class="err">Erro de rede.</span>'; setBusy(false); }
 }
-function poll(jid){
-  if(timer) clearInterval(timer);
-  timer=setInterval(async()=>{
-    try{
-      const r=await fetch('/faturar/status/'+jid); const j=await r.json();
-      document.getElementById('log').textContent=(j.log||[]).join('\n');
-      const lb=document.getElementById('log'); lb.scrollTop=lb.scrollHeight;
-      if(j.done){
-        clearInterval(timer); setBusy(false);
-        const s=j.resumo||{};
-        document.getElementById('status').textContent='Concluído.';
-        let html='';
-        if(j.error){ html='<b style="color:#b3261e">Erro:</b> '+j.error; }
-        else{ html='<b style="color:#0f7a4f">✓ Faturado:</b> '+(s.anexado_ok||0)+' GTOs em '+(s.tempo_total||0)+'s &nbsp;·&nbsp; <a href="/relatorios/execucao/'+(j.execucao_id||'')+'">ver relatório →</a>'; }
-        document.getElementById('done').innerHTML=html;
-      }
-    }catch(e){}
-  },3000);
+
+async function poll(){
+  try{
+    const r=await fetch('/faturar/status/'+jid); const j=await r.json();
+    if(j.error){ return; }
+    const p=j.prog||{};
+    lastPct=Math.max(lastPct, p.pct||0); setBar(lastPct);
+    $('msg').textContent=p.msg||'';
+    if(p.eta!=null){ etaLeft=p.eta; renderEta(); }
+    if(j.done){
+      clearInterval(pollT); clearInterval(etaT);
+      setBar(100);
+      onDone(j);
+    }
+  }catch(e){}
+}
+
+function onDone(j){
+  setBusy(false);
+  $('prog').style.display='none';
+  $('ok').style.display='block';
+  if(j.error){ $('okerr').textContent='Concluído com erro: '+j.error; }
+  const s=j.resumo||{};
+  const fat=s.anexado_ok||0, pend=s.pendentes||0, tt=s.tempo_total||0;
+  $('okFat').textContent=fat;
+  $('okNao').textContent=Math.max(0, pend-fat);
+  const m=Math.floor(tt/60), sec=tt%60;
+  $('okTempo').textContent=(m>0?(m+'m'+(sec<10?'0':'')):'')+sec+'s';
+  const eid=j.execucao_id;
+  if(eid){
+    $('okRel').href='/relatorios/execucao/'+eid;
+    $('okPdf').href='/relatorios/execucao/'+eid+'.pdf';
+    $('okXls').href='/relatorios/execucao/'+eid+'.xlsx';
+    $('okRel').style.display=$('okPdf').style.display=$('okXls').style.display='inline-block';
+  }else{
+    $('okRel').style.display=$('okPdf').style.display=$('okXls').style.display='none';
+  }
 }
 </script>
 </body>

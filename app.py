@@ -514,6 +514,36 @@ def relatorios_execucao_pdf(eid: int):
                      as_attachment=True, download_name=nome)
 
 
+@app.route("/relatorios/execucao/<int:eid>.xlsx")
+def relatorios_execucao_xlsx(eid: int):
+    ex = db.get_execucao(eid)
+    if not ex:
+        return ("Execução não encontrada.", 404)
+    import pandas as pd
+
+    def _anexado(it):
+        base = "laudo + imagens"
+        return base + (f" + solicitação ({it['solicitacao']})" if it.get("solicitacao") else "")
+    df_f = pd.DataFrame([{"GTO": i["gto"], "Paciente": i["paciente"],
+                          "Exames (GTO)": i.get("exames_gto") or "",
+                          "O que foi anexado": _anexado(i)}
+                         for i in ex["faturadas_itens"]])
+    df_n = pd.DataFrame([{"GTO": i["gto"], "Paciente": i["paciente"],
+                          "Exames (GTO)": i.get("exames_gto") or "",
+                          "Motivo (não faturada)": i.get("motivo") or ""}
+                         for i in ex["nao_faturadas_itens"]])
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        (df_f if not df_f.empty else pd.DataFrame([{"(sem faturadas)": "—"}])
+         ).to_excel(w, sheet_name="Faturadas", index=False)
+        (df_n if not df_n.empty else pd.DataFrame([{"(sem não faturadas)": "—"}])
+         ).to_excel(w, sheet_name="Não faturadas", index=False)
+    buf.seek(0)
+    nome = f"execucao_{(ex.get('dia') or '').replace('/', '-')}_{eid}.xlsx"
+    return send_file(buf, as_attachment=True, download_name=nome,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 # ── Faturar dia (UI do pipeline novo) ─────────────────────────────────────────
 @app.route("/faturar")
 def faturar_page():
@@ -523,6 +553,7 @@ def faturar_page():
 
 @app.route("/faturar/run")
 def faturar_run():
+    import time as _time
     data = request.args.get("data")
     if not data:
         return jsonify({"error": "informe a data"}), 400
@@ -533,7 +564,8 @@ def faturar_run():
     jid = uuid.uuid4().hex[:8]
     review_dir = f"/tmp/esteira_rev/{jid}"
     job = {"log": [], "done": False, "resumo": None, "error": None,
-           "review_dir": review_dir, "execucao_id": None}
+           "review_dir": review_dir, "execucao_id": None, "t0": _time.monotonic(),
+           "dia": data}
     _esteira_jobs[jid] = job
     gkey = os.environ.get("GEMINI_API_KEY")
 
@@ -558,6 +590,44 @@ def faturar_run():
     return jsonify({"job": jid})
 
 
+def _esteira_progress(job: dict) -> dict:
+    """Deriva progresso amigável (%, mensagem, ETA em seg) a partir do log do job."""
+    import time as _time
+    log = job.get("log", [])
+    pend = sum(1 for l in log if ">>> PENDENTE" in l)
+    baix = sum(1 for l in log if "-> BAIXADO" in l)
+    dec = sum(1 for l in log if "[DEC" in l and "mem=" in l)
+    anex = sum(1 for l in log if "[ANEX" in l)
+    done = bool(job.get("done"))
+    t0 = job.get("t0")
+    elapsed = (_time.monotonic() - t0) if t0 else 0
+    total = pend
+    if done:
+        pct = 100
+    elif total > 0:
+        pct = min(97, int((baix + dec) / (2 * total) * 100))
+    else:
+        pct = 3
+    units = baix + dec
+    eta = None
+    if not done and total > 0 and units > 0:
+        eta = max(1, int((2 * total - units) * (elapsed / units)))
+    if done:
+        msg = "Concluído!"
+    elif total == 0:
+        msg = "Procurando GTOs pendentes do dia…"
+    elif anex > 0:
+        msg = f"Anexando no RedeUna… ({anex} enviado{'s' if anex != 1 else ''})"
+    elif dec > 0:
+        msg = f"Analisando solicitações com IA… ({dec} de {total})"
+    elif baix > 0:
+        msg = f"Baixando exames e laudos… ({baix} de {total})"
+    else:
+        msg = f"{total} pendentes encontrados — preparando…"
+    return {"pct": pct, "msg": msg, "eta": eta, "total": total,
+            "baixados": baix, "decididos": dec, "anexados": anex, "elapsed": int(elapsed)}
+
+
 @app.route("/faturar/status/<jid>")
 def faturar_status(jid: str):
     job = _esteira_jobs.get(jid)
@@ -566,10 +636,22 @@ def faturar_status(jid: str):
     r = job.get("resumo") or {}
     return jsonify({
         "done": job["done"], "error": job["error"],
-        "log": job["log"][-80:], "execucao_id": job.get("execucao_id"),
+        "execucao_id": job.get("execucao_id"),
+        "prog": _esteira_progress(job),
         "resumo": {k: r.get(k) for k in ("solic_auto", "justificativa", "revisao",
                    "anexado_ok", "tempo_total", "pendentes")} if r else None,
     })
+
+
+@app.route("/faturar/log/<jid>")
+def faturar_log(jid: str):
+    from flask import Response
+    job = _esteira_jobs.get(jid)
+    if not job:
+        return "job não encontrado", 404
+    head = f"# Log técnico — execução {jid} (dia {job.get('dia')})\n\n"
+    return Response(head + "\n".join(job.get("log", [])),
+                    mimetype="text/plain; charset=utf-8")
 
 
 # ── APIs do Dashboard ─────────────────────────────────────────────────────────

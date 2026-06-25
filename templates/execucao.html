@@ -37,6 +37,7 @@
     · download M={{ ex.m_download }} / leitura K={{ ex.k_leitura }}
   </div>
   {% if not pdf %}<p><a href="/relatorios/execucao/{{ ex.id }}.pdf">📄 Exportar PDF</a> &nbsp;·&nbsp;
+    <a href="/relatorios/execucao/{{ ex.id }}.xlsx">📗 Exportar Excel</a> &nbsp;·&nbsp;
     <a href="/relatorios/execucoes">← todas as execuções</a></p>{% endif %}
 
   <div class="cards">
