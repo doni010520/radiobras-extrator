@@ -525,9 +525,32 @@ def _melhores_runs_periodo(s, de_iso: str, ate_iso: str, plano: str = None):
     return list(best.values())
 
 
+def _melhores_execucoes_periodo(s, de_iso: str, ate_iso: str):
+    """Melhor execução (pipeline novo) por dia no período: prefere real (não-dry)
+    e, em empate, a de maior id (mais recente). Evita contar re-runs/simulações."""
+    try:
+        de = datetime.fromisoformat(de_iso).date()
+        ate = datetime.fromisoformat(ate_iso).date()
+    except Exception:
+        return []
+    por_dia = {}
+    for e in s.query(Execucao).all():
+        d = _dia_to_date(e.dia)
+        if not d or d < de or d > ate:
+            continue
+        cur = por_dia.get(e.dia)
+        melhor = (cur is None
+                  or (cur.dry_run and not e.dry_run)
+                  or (bool(cur.dry_run) == bool(e.dry_run) and (e.id or 0) > (cur.id or 0)))
+        if melhor:
+            por_dia[e.dia] = e
+    return list(por_dia.values())
+
+
 def gtos_por_plano_periodo(de_iso: str, ate_iso: str) -> dict:
     """Para cada plano, contagem empilhada por desfecho no período.
-    Retorna {slug: {anexadas, sem_laudo, erros, simulacao, revisao, total, dias}}."""
+    Retorna {slug: {anexadas, sem_laudo, erros, simulacao, revisao, total, dias}}.
+    Soma o pipeline antigo (runs) e o novo (execucoes -> slug 'odontoprev')."""
     with SessionLocal() as s:
         out = {}
         for r in _melhores_runs_periodo(s, de_iso, ate_iso):
@@ -540,6 +563,22 @@ def gtos_por_plano_periodo(de_iso: str, ate_iso: str) -> dict:
                 a[_bucket(it.status)] = a.get(_bucket(it.status), 0) + 1
                 if (it.revisao_humana or "").strip():
                     a["revisao"] += 1
+        # pipeline novo (Faturar dia) -> tudo no plano 'odontoprev' (RedeUna)
+        for e in _melhores_execucoes_periodo(s, de_iso, ate_iso):
+            a = out.setdefault("odontoprev", {"anexadas": 0, "sem_laudo": 0, "erros": 0,
+                                              "simulacao": 0, "revisao": 0, "total": 0,
+                                              "dias": 0})
+            a["dias"] += 1
+            for it in e.itens:
+                a["total"] += 1
+                if e.dry_run:
+                    a["simulacao"] += 1
+                elif it.faturado:
+                    a["anexadas"] += 1
+                elif it.categoria == "revisao":
+                    a["revisao"] += 1
+                else:  # sem_solicitacao / sem justificativa
+                    a["erros"] += 1
         return out
 
 

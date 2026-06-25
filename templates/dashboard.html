@@ -202,6 +202,18 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 [data-theme="dark"] .theme-toggle:hover{background:rgba(52,200,142,.12);}
 [data-theme="dark"] ::selection{background:rgba(52,200,142,.25);}
 [data-theme="dark"] ::-webkit-scrollbar{width:10px;height:10px;}[data-theme="dark"] ::-webkit-scrollbar-thumb{background:rgba(52,200,142,.2);border-radius:6px;}
+/* responsividade */
+html,body{overflow-x:hidden;}
+@media(max-width:1024px){
+  .main{padding:24px 18px;}
+  .content-grid{grid-template-columns:1fr;}
+  .stats-row{grid-template-columns:repeat(2,1fr);gap:14px;}
+}
+@media(max-width:560px){
+  .stats-row{grid-template-columns:1fr;}
+  .pbar-row{grid-template-columns:1fr;gap:8px;}
+  .pbar-row .pbar-val{text-align:left;}
+}
 </style>
 <script>(function(){try{var t=localStorage.getItem('rb-theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
 </head>
@@ -252,8 +264,6 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
     <div id="planobars"><div class="empty">Carregando…</div></div>
   </div>
 </main>
-
-<button class="fab" onclick="abrirRun()"><svg class="icon"><use href="#i-play"/></svg> Executar Agora</button>
 
 <div class="overlay" id="overlay">
   <div class="modal">

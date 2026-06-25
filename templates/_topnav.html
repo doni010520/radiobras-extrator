@@ -19,8 +19,10 @@
   .rbnav-date{color:rgba(255,255,255,.7);font-size:13px;text-transform:capitalize;white-space:nowrap;}
   .rbnav-toggle{background:none;border:none;cursor:pointer;font-size:17px;line-height:1;padding:6px;border-radius:8px;color:#fff;}
   .rbnav-toggle:hover{background:rgba(255,255,255,.12);}
-  @media(max-width:920px){.rbnav{padding:0 14px;}.rbnav-title{display:none;}.rbnav-date{display:none;}
+  @media(max-width:1080px){.rbnav-date{display:none;}}
+  @media(max-width:920px){.rbnav{padding:0 14px;}.rbnav-title{display:none;}
     .rbnav-menu{gap:2px;}.rbnav-link{padding:8px 10px;font-size:13px;}}
+  @media(max-width:640px){.rbnav-logo img{height:34px;}.rbnav-link{padding:7px 7px;font-size:12px;}}
 </style>
 <nav class="rbnav">
   <a class="rbnav-brand" href="/"><span class="rbnav-logo"><img src="/static/mascote.png" alt="RadioBras"></span>
