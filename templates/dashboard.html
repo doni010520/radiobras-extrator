@@ -142,8 +142,8 @@ body{font-family:'Source Sans Pro',-apple-system,BlinkMacSystemFont,sans-serif;b
 .pbar-name .mt{font-size:12px;color:var(--gray-400);}
 .pbar{display:flex;height:24px;border-radius:6px;overflow:hidden;background:var(--gray-100);box-shadow:0 1px 4px rgba(20,30,45,.14);}
 [data-theme="dark"] .pbar{box-shadow:0 2px 8px rgba(0,0,0,.4);}
-.pseg{height:100%;min-width:0;transition:width .5s;}
-.pseg.anex{background:var(--green-500);}.pseg.sim{background:var(--blue-500);}.pseg.lau{background:var(--yellow-500);}.pseg.err{background:var(--red-500);}
+.pseg{height:100%;min-width:0;transition:width .5s;display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;line-height:1;overflow:hidden;}
+.pseg.anex{background:var(--green-500);}.pseg.sim{background:var(--blue-500);}.pseg.lau{background:var(--yellow-500);color:#6b4e00;}.pseg.err{background:var(--red-500);}
 .pbar-total{text-align:right;font-size:18px;font-weight:700;}
 .pbar-total .lbl{display:block;font-size:10px;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:.4px;}
 .pbar-total .rev{display:block;font-size:11px;font-weight:600;color:var(--gray-400);}
@@ -372,7 +372,12 @@ function renderBars(lista){
   $('planobars').innerHTML=ord.map(p=>{
     const segs=[['anex',p.anexadas],['sim',p.simulacao],['lau',p.sem_laudo],['err',p.erros]];
     const bar=p.total>0
-      ?`<div class="pbar">`+segs.map(([c,v])=>v>0?`<div class="pseg ${c}" style="width:${(v/p.total*100).toFixed(1)}%" title="${v}"></div>`:'').join('')+`</div>`
+      ?`<div class="pbar">`+segs.map(([c,v])=>{
+          if(v<=0) return '';
+          const w=v/p.total*100;
+          const lbl=w>=6?v:'';   // só escreve o número se a faixa for larga o bastante
+          return `<div class="pseg ${c}" style="width:${w.toFixed(1)}%" title="${v}">${lbl}</div>`;
+        }).join('')+`</div>`
       :`<div class="pbar"></div>`;
     const mt=p.rodando?'Executando agora…'
       :(p.total>0?`${p.dias} dia(s)${p.revisao?` · ${p.revisao} em revisão`:''}`
