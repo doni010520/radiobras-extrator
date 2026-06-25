@@ -190,7 +190,15 @@ async function carregarListas(eid){
     const r=await fetch('/relatorios/execucao/'+eid+'.json');
     const d=await r.json();
     const fat=d.faturadas_itens||[], nao=d.nao_faturadas_itens||[];
+    // contagens reais (fonte de verdade = relatório), reconciliando com pendentes
+    $('okFat').textContent=fat.length;
+    $('okNao').textContent=nao.length;
     let html='';
+    const naoProc=(d.pendentes||0)-fat.length-nao.length;
+    if(naoProc>0){
+      html+='<p class="mut">⚠️ '+naoProc+' pendente(s) não processada(s) nesta execução '+
+            '(erro de download ou já estava completa). Rode o dia de novo pra recuperá-la(s) — é idempotente.</p>';
+    }
     if(fat.length){
       html+='<h3>✅ Faturadas ('+fat.length+')</h3><table class="lt">'+
             '<tr><th>GTO</th><th>Paciente</th><th>Exames</th><th>Anexado</th><th>Conferir</th></tr>';
