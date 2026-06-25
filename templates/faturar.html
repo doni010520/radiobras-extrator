@@ -52,6 +52,15 @@
   .lt .nao{border-left:4px solid #a86a00}
   .lt a{color:var(--verde);font-weight:600;white-space:nowrap}
   .mut{color:var(--sub)}
+  /* modal de confirmação */
+  .modalbg{display:none;position:fixed;inset:0;background:rgba(18,28,23,.55);z-index:100;align-items:center;justify-content:center;padding:16px}
+  .modalbg.show{display:flex}
+  .modalcard{background:#fff;border-radius:18px;padding:28px 30px;max-width:430px;width:100%;text-align:center;box-shadow:0 24px 70px rgba(0,0,0,.28);animation:pop .22s ease}
+  .modalcard .ic{font-size:42px;margin-bottom:4px}
+  .modalcard h2{margin:6px 0 10px;font-size:21px}
+  .modalcard p{color:var(--sub);font-size:15px;margin:0}
+  .modalcard p b{color:var(--txt)}
+  .macts{display:flex;gap:10px;justify-content:center;margin-top:22px}
 </style>
 </head>
 <body>
@@ -101,6 +110,19 @@
     </div>
   </div>
 </div>
+
+<div class="modalbg" id="modal">
+  <div class="modalcard">
+    <div class="ic">📅</div>
+    <h2 id="mTitle">Confirmar o dia</h2>
+    <p id="mMsg"></p>
+    <div class="macts">
+      <button class="btn ghost" onclick="fecharModal()">Cancelar</button>
+      <button class="btn prim" onclick="confirmarRun()">✓ Confirmar e faturar</button>
+    </div>
+  </div>
+</div>
+
 <script>
 function fmtData(v){ if(!v) return ''; const p=v.split('-'); return p[2]+'/'+p[1]+'/'+p[0]; }
 function $(id){ return document.getElementById(id); }
@@ -116,12 +138,23 @@ function renderEta(){
 }
 function tickEta(){ if(etaLeft!=null && etaLeft>0){ etaLeft--; renderEta(); } }
 
-async function run(){
+let pendente=null;
+function run(){
   const plano=$('plano').value;
   if(!plano){ alert('Selecione o plano.'); return; }
   const dia=fmtData($('dia').value);
   if(!dia){ alert('Escolha o dia.'); return; }
-  if(!confirm('Faturar o dia '+dia+' DE VERDADE? (anexa no OdontoPrev — não tem desfazer)')) return;
+  const label=$('plano').selectedOptions[0].textContent;
+  pendente={plano, dia};
+  $('mMsg').innerHTML='Vamos faturar o dia <b>'+dia+'</b><br>no plano <b>'+label+'</b>.';
+  $('modal').classList.add('show');
+}
+function fecharModal(){ $('modal').classList.remove('show'); pendente=null; }
+function confirmarRun(){
+  $('modal').classList.remove('show');
+  if(pendente){ doRun(pendente.plano, pendente.dia); pendente=null; }
+}
+async function doRun(plano, dia){
   setBusy(true);
   $('ok').style.display='none';
   $('prog').style.display='block';
