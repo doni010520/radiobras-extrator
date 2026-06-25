@@ -544,6 +544,15 @@ def relatorios_execucao_xlsx(eid: int):
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+@app.route("/relatorios/execucao/<int:eid>.json")
+def relatorios_execucao_json(eid: int):
+    ex = db.get_execucao(eid)
+    if not ex:
+        return jsonify({"error": "não encontrada"}), 404
+    ex.pop("criado_em", None)  # datetime não serializa
+    return jsonify(ex)
+
+
 # ── Faturar dia (UI do pipeline novo) ─────────────────────────────────────────
 @app.route("/faturar")
 def faturar_page():
@@ -593,11 +602,19 @@ def faturar_run():
 def _esteira_progress(job: dict) -> dict:
     """Deriva progresso amigável (%, mensagem, ETA em seg) a partir do log do job."""
     import time as _time
+    import re as _re
     log = job.get("log", [])
     pend = sum(1 for l in log if ">>> PENDENTE" in l)
     baix = sum(1 for l in log if "-> BAIXADO" in l)
-    dec = sum(1 for l in log if "[DEC" in l and "mem=" in l)
     anex = sum(1 for l in log if "[ANEX" in l)
+    # tempos (s desde o início) das DECISÕES concluídas — base estável p/ ETA
+    dec_t = []
+    for l in log:
+        if "[DEC" in l and "mem=" in l:
+            m = _re.match(r"\[\s*(\d+)s\]", l.strip())
+            if m:
+                dec_t.append(int(m.group(1)))
+    dec = len(dec_t)
     done = bool(job.get("done"))
     t0 = job.get("t0")
     elapsed = (_time.monotonic() - t0) if t0 else 0
@@ -608,10 +625,16 @@ def _esteira_progress(job: dict) -> dict:
         pct = min(97, int((baix + dec) / (2 * total) * 100))
     else:
         pct = 3
-    units = baix + dec
+    # ETA pela TAXA DE DECISÕES (exclui o setup; é a etapa lenta). Só estima com
+    # >=2 decisões pra a taxa ser confiável -> evita o número pulando.
     eta = None
-    if not done and total > 0 and units > 0:
-        eta = max(1, int((2 * total - units) * (elapsed / units)))
+    if not done and total > 0:
+        if dec >= total:
+            eta = 4  # tudo decidido, anexando/finalizando
+        elif dec >= 2:
+            rate = (dec_t[-1] - dec_t[0]) / (dec - 1)        # seg por decisão
+            desde = max(0, elapsed - dec_t[-1])               # já passou desde a última
+            eta = max(3, int((total - dec) * rate - desde))
     if done:
         msg = "Concluído!"
     elif total == 0:

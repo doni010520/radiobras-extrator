@@ -41,6 +41,17 @@
   .mini .l{color:var(--sub);font-size:13px}
   .acts{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:8px}
   .err{color:#b3261e;font-weight:600}
+  /* listas de resultado */
+  #listas{text-align:left;margin-top:22px}
+  #listas h3{margin:18px 0 8px;font-size:16px}
+  .lt{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--linha);border-radius:10px;overflow:hidden}
+  .lt th,.lt td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--linha);font-size:13.5px;vertical-align:top}
+  .lt th{background:#eef3f0;color:var(--sub);font-weight:600}
+  .lt tr:last-child td{border-bottom:0}
+  .lt .fat{border-left:4px solid var(--verde)}
+  .lt .nao{border-left:4px solid #a86a00}
+  .lt a{color:var(--verde);font-weight:600;white-space:nowrap}
+  .mut{color:var(--sub)}
 </style>
 </head>
 <body>
@@ -85,6 +96,7 @@
         <a class="btn ghost" id="okPdf" href="#" target="_blank">📄 Exportar PDF</a>
         <a class="btn ghost" id="okXls" href="#" target="_blank">📗 Exportar Excel</a>
       </div>
+      <div id="listas"></div>
       <a id="loglink2" class="loglink" href="#" target="_blank">ver log técnico</a>
     </div>
   </div>
@@ -98,6 +110,7 @@ function setBusy(b){ $('bReal').disabled=b; $('plano').disabled=b; $('dia').disa
 function setBar(p){ $('barfill').style.width=p+'%'; $('barpct').textContent=p+'%'; }
 function renderEta(){
   if(etaLeft==null){ $('eta').textContent='estimando tempo…'; return; }
+  if(etaLeft<=2){ $('eta').textContent='⏱ finalizando…'; return; }
   const m=Math.floor(etaLeft/60), s=etaLeft%60;
   $('eta').textContent='⏱ ≈ '+(m>0?(m+'min '):'')+s+'s restante';
 }
@@ -132,7 +145,11 @@ async function poll(){
     const p=j.prog||{};
     lastPct=Math.max(lastPct, p.pct||0); setBar(lastPct);
     $('msg').textContent=p.msg||'';
-    if(p.eta!=null){ etaLeft=p.eta; renderEta(); }
+    if(p.eta!=null){
+      // suaviza: ao invés de saltar pro valor do servidor, faz média (evita vai-e-volta)
+      etaLeft = (etaLeft==null) ? p.eta : Math.round(etaLeft*0.5 + p.eta*0.5);
+      renderEta();
+    }
     if(j.done){
       clearInterval(pollT); clearInterval(etaT);
       setBar(100);
@@ -158,9 +175,45 @@ function onDone(j){
     $('okPdf').href='/relatorios/execucao/'+eid+'.pdf';
     $('okXls').href='/relatorios/execucao/'+eid+'.xlsx';
     $('okRel').style.display=$('okPdf').style.display=$('okXls').style.display='inline-block';
+    carregarListas(eid);
   }else{
     $('okRel').style.display=$('okPdf').style.display=$('okXls').style.display='none';
   }
+}
+
+const PRORADIS="https://radiobras.smartris.com.br/ris/patients";
+const ODONTO="https://credenciado.odontoprev.com.br";
+function esc(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+async function carregarListas(eid){
+  $('listas').innerHTML='<p class="mut">Carregando listas…</p>';
+  try{
+    const r=await fetch('/relatorios/execucao/'+eid+'.json');
+    const d=await r.json();
+    const fat=d.faturadas_itens||[], nao=d.nao_faturadas_itens||[];
+    let html='';
+    if(fat.length){
+      html+='<h3>✅ Faturadas ('+fat.length+')</h3><table class="lt">'+
+            '<tr><th>GTO</th><th>Paciente</th><th>Exames</th><th>Anexado</th><th>Conferir</th></tr>';
+      fat.forEach(i=>{
+        html+='<tr class="fat"><td>'+i.gto+'</td><td>'+esc(i.paciente)+'</td>'+
+              '<td class="mut">'+esc(i.exames_gto||'')+'</td>'+
+              '<td class="mut">laudo + imagens'+(i.solicitacao?' + solicitação':'')+'</td>'+
+              '<td><a href="'+ODONTO+'" target="_blank" title="Abrir OdontoPrev e conferir a GTO '+i.gto+'">🔗 OdontoPrev</a></td></tr>';
+      });
+      html+='</table>';
+    }
+    if(nao.length){
+      html+='<h3>🚫 Não faturadas ('+nao.length+') — conferir solicitação no PRORADIS</h3><table class="lt">'+
+            '<tr><th>GTO</th><th>Paciente</th><th>Por que não faturou</th><th>PRORADIS</th></tr>';
+      nao.forEach(i=>{
+        html+='<tr class="nao"><td>'+i.gto+'</td><td>'+esc(i.paciente)+'</td>'+
+              '<td class="mut">'+esc(i.motivo||'')+'</td>'+
+              '<td><a href="'+PRORADIS+'" target="_blank" title="Abrir PRORADIS e buscar '+esc(i.paciente)+'">🔗 PRORADIS</a></td></tr>';
+      });
+      html+='</table>';
+    }
+    $('listas').innerHTML=html || '<p class="mut">Sem itens.</p>';
+  }catch(e){ $('listas').innerHTML='<p class="mut">Não consegui carregar as listas — veja o relatório.</p>'; }
 }
 </script>
 </body>
