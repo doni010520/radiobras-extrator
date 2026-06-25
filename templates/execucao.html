@@ -49,26 +49,28 @@
   <div class="sec">
     <h2>✅ Faturadas ({{ ex.faturadas_itens|length }})</h2>
     <table>
-      <tr><th>GTO</th><th>Paciente</th><th>Exames</th><th>O que foi anexado</th></tr>
+      <tr><th>GTO</th><th>Paciente</th><th>Exames</th><th>O que foi anexado</th>{% if not pdf %}<th>Conferir</th>{% endif %}</tr>
       {% for i in ex.faturadas_itens %}
       <tr class="fatrow">
         <td>{{ i.gto }}</td><td>{{ i.paciente }}</td><td>{{ i.exames_gto }}</td>
         <td>{% if i.categoria == 'justificativa' %}laudo + imagens <span style="color:var(--sub)">(GTO com justificativa — solicitação dispensada)</span>
             {% else %}laudo + imagens + solicitação{% if i.solicitacao %} <span style="color:var(--sub)">({{ i.solicitacao }})</span>{% endif %}{% endif %}</td>
+        {% if not pdf %}<td><a href="https://credenciado.odontoprev.com.br" target="_blank" title="Abrir OdontoPrev e conferir a GTO {{ i.gto }}">🔗 OdontoPrev</a></td>{% endif %}
       </tr>
       {% endfor %}
-      {% if not ex.faturadas_itens %}<tr><td colspan="4" style="color:var(--sub)">—</td></tr>{% endif %}
+      {% if not ex.faturadas_itens %}<tr><td colspan="{{ 5 if not pdf else 4 }}" style="color:var(--sub)">—</td></tr>{% endif %}
     </table>
   </div>
 
   <div class="sec">
     <h2>🚫 Não faturadas ({{ ex.nao_faturadas_itens|length }})</h2>
     <table>
-      <tr><th>GTO</th><th>Paciente</th><th>Motivo</th></tr>
+      <tr><th>GTO</th><th>Paciente</th><th>Motivo</th>{% if not pdf %}<th>PRORADIS</th>{% endif %}</tr>
       {% for i in ex.nao_faturadas_itens %}
-      <tr class="nfatrow"><td>{{ i.gto }}</td><td>{{ i.paciente }}</td><td>{{ i.motivo }}</td></tr>
+      <tr class="nfatrow"><td>{{ i.gto }}</td><td>{{ i.paciente }}</td><td>{{ i.motivo }}</td>
+        {% if not pdf %}<td><a href="https://radiobras.smartris.com.br/ris/patients" target="_blank" title="Abrir PRORADIS e buscar {{ i.paciente }}">🔗 PRORADIS</a></td>{% endif %}</tr>
       {% endfor %}
-      {% if not ex.nao_faturadas_itens %}<tr><td colspan="3" style="color:var(--sub)">—</td></tr>{% endif %}
+      {% if not ex.nao_faturadas_itens %}<tr><td colspan="{{ 4 if not pdf else 3 }}" style="color:var(--sub)">—</td></tr>{% endif %}
     </table>
   </div>
 </div>
