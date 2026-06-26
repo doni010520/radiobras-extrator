@@ -11,11 +11,10 @@
   --rb-on-primary:#ffffff;
   /* superfícies / texto (light) */
   --rb-bg:
-    radial-gradient(1150px 680px at 92% -12%, rgba(22,161,99,.18), transparent 56%),
-    radial-gradient(900px 600px at 2% 0%, rgba(15,122,79,.12), transparent 52%),
-    radial-gradient(900px 900px at 60% 115%, rgba(52,200,142,.10), transparent 60%),
-    linear-gradient(165deg, #e8f4ee 0%, #f3f7f5 46%, #f1f6f3 100%);
-  --rb-bg-solid:#f1f6f3;
+    radial-gradient(880px 520px at 98% -10%, rgba(16,140,88,.22), transparent 48%),
+    radial-gradient(760px 520px at -6% 104%, rgba(52,200,142,.16), transparent 50%),
+    linear-gradient(180deg, #fbfdfc 0%, #f4f9f6 45%, #eef6f1 100%);
+  --rb-bg-solid:#f4f9f6;
   --rb-surface:#ffffff; --rb-surface-2:#eef3f0;
   --rb-fg:#16201b; --rb-fg-muted:#5d6b63; --rb-fg-subtle:#8a978f;
   --rb-border:#e4eae6; --rb-border-strong:#d3ddd7;
