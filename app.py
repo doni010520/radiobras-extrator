@@ -619,18 +619,21 @@ def _esteira_progress(job: dict) -> dict:
     t0 = job.get("t0")
     elapsed = (_time.monotonic() - t0) if t0 else 0
     total = pend
+    # Médias medidas em runs reais: setup/descoberta ~55s, ~9s por GTO.
+    SETUP_S, POR_GTO_S, BASELINE_GENERICO = 55, 9, 190
+    est_total = (SETUP_S + POR_GTO_S * total) if total > 0 else BASELINE_GENERICO
+    # Barra: acompanha o TEMPO (piso que sobe sempre) e pula à frente quando o
+    # conteúdo real (downloads/decisões) avança mais rápido — nunca fica travada.
     if done:
         pct = 100
-    elif total > 0:
-        pct = min(97, int((baix + dec) / (2 * total) * 100))
     else:
-        pct = 3
+        time_pct = min(95, int(elapsed / max(est_total, 30) * 100))
+        content_pct = int((baix + dec) / (2 * total) * 100) if total > 0 else 0
+        pct = min(97, max(time_pct, content_pct))
     # ETA — sempre dá um número (sem "estimando"); fica mais preciso ao longo:
     #  1) com >=2 decisões: taxa REAL de decisões (a etapa lenta);
     #  2) descoberta feita (sabe o nº): baseline SETUP + nº*POR_GTO;
     #  3) setup/descoberta ainda rolando: baseline fixo genérico.
-    # Médias medidas em runs reais: setup/descoberta ~55s, ~9s por GTO.
-    SETUP_S, POR_GTO_S, BASELINE_GENERICO = 55, 9, 190
     eta = None
     if not done:
         if total > 0 and dec >= total:
