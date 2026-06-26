@@ -532,12 +532,43 @@ def relatorios_execucao_xlsx(eid: int):
                           "Exames (GTO)": i.get("exames_gto") or "",
                           "Motivo (não faturada)": i.get("motivo") or ""}
                          for i in ex["nao_faturadas_itens"]])
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    # colunas largas (com quebra de texto) — pra não ficar "embolado"
+    LARGAS = {"O que foi anexado", "Motivo (não faturada)"}
+
+    def _estilizar(ws, df):
+        head_fill = PatternFill("solid", fgColor="0F7A4F")
+        head_font = Font(bold=True, color="FFFFFF", size=11)
+        borda = Border(bottom=Side(style="thin", color="DDE5E0"))
+        ws.row_dimensions[1].height = 26
+        for ci, col in enumerate(df.columns, start=1):
+            cell = ws.cell(row=1, column=ci)
+            cell.fill = head_fill
+            cell.font = head_font
+            cell.alignment = Alignment(vertical="center",
+                                       horizontal="left", wrap_text=False)
+            # largura: maior conteúdo da coluna, com tetos por tipo
+            larga = col in LARGAS
+            vals = [str(col)] + [str(v) for v in df[col].tolist() if v is not None]
+            maxlen = max((len(v) for v in vals), default=10)
+            ws.column_dimensions[cell.column_letter].width = min(maxlen + 3, 70 if larga else 32)
+        # corpo: quebra de texto nas colunas largas + borda leve + alinhamento topo
+        for ri in range(2, ws.max_row + 1):
+            for ci, col in enumerate(df.columns, start=1):
+                c = ws.cell(row=ri, column=ci)
+                c.alignment = Alignment(vertical="top", wrap_text=(col in LARGAS))
+                c.border = borda
+                c.font = Font(size=10)
+        ws.freeze_panes = "A2"          # cabeçalho fixo ao rolar
+
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        (df_f if not df_f.empty else pd.DataFrame([{"(sem faturadas)": "—"}])
-         ).to_excel(w, sheet_name="Faturadas", index=False)
-        (df_n if not df_n.empty else pd.DataFrame([{"(sem não faturadas)": "—"}])
-         ).to_excel(w, sheet_name="Não faturadas", index=False)
+        fat = df_f if not df_f.empty else pd.DataFrame([{"(sem faturadas)": "—"}])
+        nao = df_n if not df_n.empty else pd.DataFrame([{"(sem não faturadas)": "—"}])
+        fat.to_excel(w, sheet_name="Faturadas", index=False)
+        nao.to_excel(w, sheet_name="Não faturadas", index=False)
+        _estilizar(w.sheets["Faturadas"], fat)
+        _estilizar(w.sheets["Não faturadas"], nao)
     buf.seek(0)
     nome = f"execucao_{(ex.get('dia') or '').replace('/', '-')}_{eid}.xlsx"
     return send_file(buf, as_attachment=True, download_name=nome,
