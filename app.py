@@ -625,16 +625,24 @@ def _esteira_progress(job: dict) -> dict:
         pct = min(97, int((baix + dec) / (2 * total) * 100))
     else:
         pct = 3
-    # ETA pela TAXA DE DECISÕES (exclui o setup; é a etapa lenta). Só estima com
-    # >=2 decisões pra a taxa ser confiável -> evita o número pulando.
+    # ETA — sempre dá um número (sem "estimando"); fica mais preciso ao longo:
+    #  1) com >=2 decisões: taxa REAL de decisões (a etapa lenta);
+    #  2) descoberta feita (sabe o nº): baseline SETUP + nº*POR_GTO;
+    #  3) setup/descoberta ainda rolando: baseline fixo genérico.
+    # Médias medidas em runs reais: setup/descoberta ~55s, ~9s por GTO.
+    SETUP_S, POR_GTO_S, BASELINE_GENERICO = 55, 9, 190
     eta = None
-    if not done and total > 0:
-        if dec >= total:
+    if not done:
+        if total > 0 and dec >= total:
             eta = 4  # tudo decidido, anexando/finalizando
         elif dec >= 2:
             rate = (dec_t[-1] - dec_t[0]) / (dec - 1)        # seg por decisão
             desde = max(0, elapsed - dec_t[-1])               # já passou desde a última
             eta = max(3, int((total - dec) * rate - desde))
+        elif total > 0:                                       # baixando, sem decisão ainda
+            eta = max(5, int(SETUP_S + POR_GTO_S * total - elapsed))
+        else:                                                 # setup/descoberta
+            eta = max(8, int(BASELINE_GENERICO - elapsed))
     if done:
         msg = "Concluído!"
     elif total == 0:
