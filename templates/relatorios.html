@@ -24,8 +24,9 @@
   .btn.primary{background:var(--rb-primary);border-color:var(--rb-primary);color:var(--rb-on-primary);font-weight:600;box-shadow:var(--rb-shadow-1)}
   .btn.primary:hover{background:var(--rb-primary-600);border-color:var(--rb-primary-600)}
   .nav{display:flex;gap:14px;font-size:13.5px;margin-bottom:20px;flex-wrap:wrap}
-  .nav a{color:var(--green-d);font-weight:600}
+  .nav a{display:inline-flex;align-items:center;gap:6px;color:var(--green-d);font-weight:600}
   .nav a:hover{text-decoration:underline}
+  .sec > h2:first-of-type{display:flex;align-items:center;gap:8px}
   .sec{background:var(--card);border:1px solid var(--line);border-radius:var(--rb-r-lg);box-shadow:var(--shadow);padding:20px 22px;margin-bottom:18px}
   .sec h2{font-size:16px;margin:0 0 4px}
   .sec .sh{color:var(--muted);font-size:12.5px;margin:0 0 16px}
@@ -41,7 +42,8 @@
   td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
   tbody tr{transition:background .12s}
   tr:hover td{background:var(--rb-surface-2)}
-  .gtolink{color:var(--green-d);font-weight:600}
+  .gtolink{display:inline-flex;align-items:center;gap:4px;color:var(--green-d);font-weight:600}
+  .gtolink .rb-ico{width:13px;height:13px}
   .bars .row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:13px}
   .bars .nm{width:230px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}
   .bars .bar{flex:1;height:9px;border-radius:5px;background:var(--line);overflow:hidden}
@@ -58,19 +60,24 @@
 <body>
 {% include '_topnav.html' %}
 <div class="wrap">
-  <div class="top">
-    <div><h1>📊 Relatórios</h1></div>
-    <div style="display:flex;gap:8px"><a class="btn primary" href="/relatorios.pdf">⬇ Exportar PDF</a></div>
+  <div class="rb-page-head">
+    <div class="ttl">
+      <span class="badge"><svg class="rb-ico rb-ico--lg"><use href="#i-bar-chart"/></svg></span>
+      <div>
+        <h1>Relatórios</h1>
+        <div class="sub" id="sub">Carregando…</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px"><a class="btn primary" href="/relatorios.pdf"><svg class="rb-ico"><use href="#i-download"/></svg> Exportar PDF</a></div>
   </div>
-  <div class="sub" id="sub">Carregando…</div>
   <div class="nav">
-    <a href="/relatorios/execucoes">🤖 Execuções (faturamento)</a>
+    <a href="/relatorios/execucoes"><svg class="rb-ico"><use href="#i-receipt"/></svg> Execuções (faturamento)</a>
     <a href="#resumo">Resumo executivo</a><a href="#pend">Pendências</a>
     <a href="#prod">Produção</a><a href="#perdas">Glosas / perdas</a>
   </div>
 
   <div class="sec" id="resumo">
-    <h2>💰 Resumo executivo</h2>
+    <h2><svg class="rb-ico" style="color:var(--rb-primary)"><use href="#i-receipt"/></svg> Resumo executivo</h2>
     <p class="sh" id="resumoSub"></p>
     <div class="kpis" id="kpis"></div>
     <h2 style="font-size:14px;margin:22px 0 10px">Por unidade</h2>
@@ -78,7 +85,7 @@
   </div>
 
   <div class="sec" id="pend">
-    <h2>✅ Pendências — o que vira dinheiro</h2>
+    <h2><svg class="rb-ico" style="color:var(--rb-success)"><use href="#i-check-circle"/></svg> Pendências — o que vira dinheiro</h2>
     <p class="sh">Itens que precisam de ação. Clique na GTO para abrir no portal RedeUna.</p>
     <div class="grid2">
       <div>
@@ -93,13 +100,13 @@
   </div>
 
   <div class="sec" id="prod">
-    <h2>📈 Produção</h2>
+    <h2><svg class="rb-ico" style="color:var(--rb-info)"><use href="#i-bar-chart"/></svg> Produção</h2>
     <p class="sh">Volume de GTOs por unidade e distribuição do faturamento.</p>
     <div class="bars" id="prodUnidade"></div>
   </div>
 
   <div class="sec" id="perdas">
-    <h2>🩹 Glosas / perdas — por motivo (causa-raiz)</h2>
+    <h2><svg class="rb-ico" style="color:var(--rb-danger)"><use href="#i-alert"/></svg> Glosas / perdas — por motivo (causa-raiz)</h2>
     <p class="sh">Onde o dinheiro está sendo glosado — atacar o topo reduz perda. <a href="/glosas">Ver painel completo →</a></p>
     <div class="bars" id="motivos"></div>
   </div>
@@ -109,7 +116,7 @@
 const $=id=>document.getElementById(id);
 const fmtBRL=v=>(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const PORTAL='https://credenciado.odontoprev.com.br/portal/guia/';
-function gtoLink(n){return `<a class="gtolink" href="${PORTAL}${n}" target="_blank" rel="noopener">${n} ↗</a>`;}
+function gtoLink(n){return `<a class="gtolink" href="${PORTAL}${n}" target="_blank" rel="noopener">${n} <svg class="rb-ico"><use href="#i-external"/></svg></a>`;}
 
 async function carregar(){
   let j;try{j=await (await fetch('/api/relatorios')).json();}catch(e){$('sub').textContent='Falha ao carregar.';return;}
@@ -141,7 +148,7 @@ async function carregar(){
   $('nFat').textContent=af.length; $('nRec').textContent=ar.length;
   $('listaFaturar').innerHTML=af.length?`<table><thead><tr><th>Unidade</th><th>GTO</th><th>Paciente</th></tr></thead><tbody>${
     af.slice(0,40).map(g=>`<tr><td>${g.unidade}</td><td>${gtoLink(g.gto)}</td><td>${g.paciente||'—'}</td></tr>`).join('')
-    }</tbody></table>${af.length>40?`<div class="more">+ ${af.length-40} outras…</div>`:''}`:'<div class="empty">Nada a faturar 🎉</div>';
+    }</tbody></table>${af.length>40?`<div class="more">+ ${af.length-40} outras…</div>`:''}`:'<div class="empty"><svg class="rb-ico" style="color:var(--rb-success)"><use href="#i-check-circle"/></svg> Nada a faturar</div>';
   $('listaRecorrer').innerHTML=ar.length?`<table><thead><tr><th>Unidade</th><th>Guia</th><th>Paciente</th><th>Motivo</th></tr></thead><tbody>${
     ar.slice(0,40).map(e=>`<tr><td>${e.unidade}</td><td>${gtoLink(e.ficha)}</td><td>${e.paciente||'—'}</td><td title="${e.glosa_cod}">${e.glosa_motivo||'—'}</td></tr>`).join('')
     }</tbody></table>${ar.length>40?`<div class="more">+ ${ar.length-40} outras…</div>`:''}`:'<div class="empty">Nada a recorrer</div>';

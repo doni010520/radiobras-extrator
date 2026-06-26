@@ -46,16 +46,28 @@
 <body>
 {% if not pdf %}{% include '_topnav.html' %}{% endif %}
 <div class="wrap">
+  {% if not pdf %}
+  <div class="rb-page-head">
+    <div class="ttl">
+      <span class="badge"><svg class="rb-ico rb-ico--lg"><use href="#i-receipt"/></svg></span>
+      <div>
+        <h1>Execução — {{ ex.dia }}</h1>
+        <div class="sub">Detalhe da rodada de faturamento — GTOs faturadas, não faturadas e o que foi anexado.</div>
+      </div>
+    </div>
+  </div>
+  {% else %}
   <h1>Execução — {{ ex.dia }}</h1>
+  {% endif %}
   <div class="meta">
     {{ ex.quando }}{% if ex.dry_run %} · <b>SIMULAÇÃO (não anexou)</b>{% endif %}
     · tempo total <b>{{ (ex.tempo_total//60) }}m{{ '%02d'|format(ex.tempo_total%60) }}</b>
     (descoberta {{ ex.tempo_descoberta }}s · download {{ ex.tempo_download }}s)
     · download M={{ ex.m_download }} / leitura K={{ ex.k_leitura }}
   </div>
-  {% if not pdf %}<p class="links"><a href="/relatorios/execucao/{{ ex.id }}.pdf">📄 Exportar PDF</a> &nbsp;·&nbsp;
-    <a href="/relatorios/execucao/{{ ex.id }}.xlsx">📗 Exportar Excel</a> &nbsp;·&nbsp;
-    <a href="/relatorios/execucoes">← todas as execuções</a></p>{% endif %}
+  {% if not pdf %}<p class="links"><a href="/relatorios/execucao/{{ ex.id }}.pdf"><svg class="rb-ico"><use href="#i-file-text"/></svg> Exportar PDF</a> &nbsp;·&nbsp;
+    <a href="/relatorios/execucao/{{ ex.id }}.xlsx"><svg class="rb-ico"><use href="#i-sheet"/></svg> Exportar Excel</a> &nbsp;·&nbsp;
+    <a href="/relatorios/execucoes"><svg class="rb-ico"><use href="#i-bar-chart"/></svg> todas as execuções</a></p>{% endif %}
 
   <div class="cards">
     <div class="card"><div class="n">{{ ex.pendentes }}</div><div class="l">pendentes</div></div>
@@ -64,7 +76,7 @@
   </div>
 
   <div class="sec">
-    <h2>✅ Faturadas ({{ ex.faturadas_itens|length }})</h2>
+    <h2>{% if not pdf %}<svg class="rb-ico" style="color:var(--rb-success)"><use href="#i-check-circle"/></svg> {% endif %}Faturadas ({{ ex.faturadas_itens|length }})</h2>
     <table>
       <tr><th>GTO</th><th>Paciente</th><th>Exames</th><th>O que foi anexado</th>{% if not pdf %}<th>Conferir</th>{% endif %}</tr>
       {% for i in ex.faturadas_itens %}
@@ -72,7 +84,7 @@
         <td>{{ i.gto }}</td><td>{{ i.paciente }}</td><td>{{ i.exames_gto }}</td>
         <td>{% if i.categoria == 'justificativa' %}laudo + imagens <span style="color:var(--sub)">(GTO com justificativa — solicitação dispensada)</span>
             {% else %}laudo + imagens + solicitação{% if i.solicitacao %} <span style="color:var(--sub)">({{ i.solicitacao }})</span>{% endif %}{% endif %}</td>
-        {% if not pdf %}<td><a href="https://credenciado.odontoprev.com.br" target="_blank" title="Abrir OdontoPrev e conferir a GTO {{ i.gto }}">🔗 OdontoPrev</a></td>{% endif %}
+        {% if not pdf %}<td><a href="https://credenciado.odontoprev.com.br" target="_blank" title="Abrir OdontoPrev e conferir a GTO {{ i.gto }}"><svg class="rb-ico"><use href="#i-external"/></svg> OdontoPrev</a></td>{% endif %}
       </tr>
       {% endfor %}
       {% if not ex.faturadas_itens %}<tr><td colspan="{{ 5 if not pdf else 4 }}" style="color:var(--sub)">—</td></tr>{% endif %}
@@ -80,12 +92,12 @@
   </div>
 
   <div class="sec">
-    <h2>🚫 Não faturadas ({{ ex.nao_faturadas_itens|length }})</h2>
+    <h2>{% if not pdf %}<svg class="rb-ico" style="color:var(--rb-warning)"><use href="#i-ban"/></svg> {% endif %}Não faturadas ({{ ex.nao_faturadas_itens|length }})</h2>
     <table>
       <tr><th>GTO</th><th>Paciente</th><th>Motivo</th>{% if not pdf %}<th>PRORADIS</th>{% endif %}</tr>
       {% for i in ex.nao_faturadas_itens %}
       <tr class="nfatrow"><td>{{ i.gto }}</td><td>{{ i.paciente }}</td><td>{{ i.motivo }}</td>
-        {% if not pdf %}<td><a href="https://radiobras.smartris.com.br/ris/patients" target="_blank" title="Abrir PRORADIS e buscar {{ i.paciente }}">🔗 PRORADIS</a></td>{% endif %}</tr>
+        {% if not pdf %}<td><a href="https://radiobras.smartris.com.br/ris/patients" target="_blank" title="Abrir PRORADIS e buscar {{ i.paciente }}"><svg class="rb-ico"><use href="#i-external"/></svg> PRORADIS</a></td>{% endif %}</tr>
       {% endfor %}
       {% if not ex.nao_faturadas_itens %}<tr><td colspan="{{ 4 if not pdf else 3 }}" style="color:var(--sub)">—</td></tr>{% endif %}
     </table>

@@ -60,19 +60,19 @@
     {% if usuario_atual and usuario_atual.role == 'admin' %}<a class="rbnav-link" href="/usuarios" data-path="/usuarios">Usuários</a>{% endif %}
   </div>
   <div class="rbnav-right">
-    <button class="rbnav-toggle" id="rbThemeBtn" onclick="rbTheme()" title="Alternar tema claro/escuro">🌙</button>
+    <button class="rbnav-toggle" id="rbThemeBtn" onclick="rbTheme()" title="Alternar tema claro/escuro"><svg class="rb-ico"><use href="#i-moon"/></svg></button>
     <span class="rbnav-date" id="rbNavDate"></span>
-    {% if usuario_atual %}<span class="rbnav-user" title="{{ usuario_atual.username }}">👤 {{ usuario_atual.nome or usuario_atual.username }}</span>
-    <a class="rbnav-logout" href="/logout" title="Sair">Sair</a>{% endif %}
+    {% if usuario_atual %}<span class="rbnav-user" title="{{ usuario_atual.username }}"><svg class="rb-ico"><use href="#i-user"/></svg> {{ usuario_atual.nome or usuario_atual.username }}</span>
+    <a class="rbnav-logout" href="/logout" title="Sair"><svg class="rb-ico"><use href="#i-log-out"/></svg> Sair</a>{% endif %}
   </div>
 </nav>
 <script>
   function rbTheme(){var el=document.documentElement;var t=(el.getAttribute('data-theme')==='dark')?'light':'dark';
     el.setAttribute('data-theme',t);try{localStorage.setItem('rb-theme',t);}catch(e){}
-    var b=document.getElementById('rbThemeBtn');if(b)b.textContent=(t==='dark'?'☀️':'🌙');}
+    var b=document.getElementById('rbThemeBtn');var bu=b&&b.querySelector('use');if(bu)bu.setAttribute('href',t==='dark'?'#i-sun':'#i-moon');}
   (function(){
     var cur=document.documentElement.getAttribute('data-theme')||'light';
-    var tb=document.getElementById('rbThemeBtn');if(tb)tb.textContent=(cur==='dark'?'☀️':'🌙');
+    var tb=document.getElementById('rbThemeBtn');var tu=tb&&tb.querySelector('use');if(tu)tu.setAttribute('href',cur==='dark'?'#i-sun':'#i-moon');
     var p=location.pathname;
     document.querySelectorAll('.rbnav-link').forEach(function(a){
       var dp=a.getAttribute('data-path');

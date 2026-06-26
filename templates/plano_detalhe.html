@@ -30,7 +30,7 @@ body{background:var(--rb-bg);color:var(--rb-fg);line-height:1.5;}
 .seclabel .sn{font-size:12px;color:var(--gray-400);text-transform:none;letter-spacing:0;font-weight:400;}
 .sectitle{font-size:23px;font-weight:700;margin:0 0 18px;color:var(--gray-900);display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
 .sectitle .acts{margin-left:auto;display:flex;gap:16px;}
-.sectitle .acts a{color:var(--green-700);text-decoration:none;font-size:13px;font-weight:600;}
+.sectitle .acts a{color:var(--green-700);text-decoration:none;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:5px;}
 .sectitle .acts a:hover{text-decoration:underline;}
 .seclabel .acts{margin-left:auto;display:flex;gap:16px;text-transform:none;letter-spacing:0;}
 .seclabel .acts a{color:var(--green-700);text-decoration:none;font-size:13px;font-weight:600;}
@@ -94,7 +94,7 @@ body{background:var(--rb-bg);color:var(--rb-fg);line-height:1.5;}
 .anxbar input[type=date],.anxbar select{background:var(--rb-surface);border:1px solid var(--rb-border-strong);border-radius:var(--rb-r-sm);padding:6px 9px;font-size:13px;color:var(--rb-fg);outline:none;transition:border-color .16s,box-shadow .16s;}
 .anxbar input[type=date]:focus,.anxbar select:focus{border-color:var(--rb-primary);box-shadow:0 0 0 3px var(--rb-ring);}
 [data-theme="dark"] .anxbar input[type=date],[data-theme="dark"] .anxbar select{background:var(--rb-surface);border-color:var(--rb-border-strong);color:var(--rb-fg);}
-.anxbar .abtn2{background:var(--green-700);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:.15s;box-shadow:0 2px 9px rgba(6,78,59,.22);}
+.anxbar .abtn2{display:inline-flex;align-items:center;gap:6px;background:var(--green-700);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:.15s;box-shadow:0 2px 9px rgba(6,78,59,.22);}
 .anxbar .abtn2:hover{background:var(--green-600);box-shadow:0 2px 8px rgba(6,78,59,.2);}
 .anxbar .sep{color:var(--gray-400);}
 .topbtn{display:inline-flex;align-items:center;gap:9px;background:var(--green-700);color:#fff;text-decoration:none;padding:11px 20px;border-radius:10px;font-size:14px;font-weight:700;margin:2px 0 4px;transition:.2s;box-shadow:0 4px 13px rgba(6,78,59,.24);}
@@ -185,9 +185,16 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
 {% include '_topnav.html' %}
 
 <main class="main">
-  <h1 class="page-title" id="title">{{ nome or slug }}</h1>
-  <p class="page-sub" id="sub">Carregando…</p>
-  <a class="topbtn" href="/?run={{ slug }}"><svg viewBox="0 0 24 24"><path d="M5 3l14 9-14 9V3z"/></svg> Faturar dia</a>
+  <div class="rb-page-head">
+    <div class="ttl">
+      <span class="badge"><svg class="rb-ico rb-ico--lg"><use href="#i-bar-chart"/></svg></span>
+      <div>
+        <h1 id="title">{{ nome or slug }}</h1>
+        <div class="sub" id="sub">Carregando…</div>
+      </div>
+    </div>
+    <a class="topbtn" href="/?run={{ slug }}"><svg class="rb-ico" style="fill:currentColor;stroke:none"><use href="#i-play"/></svg> Faturar dia</a>
+  </div>
   <h2 class="sectitle" style="margin-top:24px">FATURAMENTO</h2>
   <div class="anxbar">
     <span id="anxLoteWrap" style="display:none"><span class="sep">varredura:</span>
@@ -195,7 +202,7 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
       <span class="sep">|</span></span>
     <span class="sep">período:</span>
     <input type="date" id="anxDe"><span class="sep">até</span><input type="date" id="anxAte">
-    <button class="abtn2" onclick="atualizarAnexacao()">🔍 Consultar período</button>
+    <button class="abtn2" onclick="atualizarAnexacao()"><svg class="rb-ico"><use href="#i-search"/></svg> Consultar período</button>
   </div>
   <div class="donutrow" id="anxDonutRow" style="display:none"><svg class="donut" id="anxDonut" viewBox="0 0 42 42"></svg><div class="dleg" id="anxDleg"></div></div>
   <div class="chips" id="anxChips"><div class="empty">Carregando…</div></div>
@@ -203,9 +210,9 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   <div id="glosaTop" style="display:none">
     <h2 class="sectitle" style="margin-top:26px">GLOSAS &amp; RECURSO
       <span class="acts">
-        <a id="glosaXlsx" href="/glosas.xlsx">⬇ Excel</a>
-        <a id="glosaPdf" href="/glosas.pdf">⬇ PDF</a>
-        <a href="/glosas">Ver panorama →</a>
+        <a id="glosaXlsx" href="/glosas.xlsx"><svg class="rb-ico rb-ico--sm"><use href="#i-sheet"/></svg> Excel</a>
+        <a id="glosaPdf" href="/glosas.pdf"><svg class="rb-ico rb-ico--sm"><use href="#i-file-text"/></svg> PDF</a>
+        <a href="/glosas"><svg class="rb-ico rb-ico--sm"><use href="#i-external"/></svg> Ver panorama</a>
       </span>
     </h2>
     <div class="donutrow" id="glosaDonutRow" style="display:none"><svg class="donut" id="glosaDonut" viewBox="0 0 42 42"></svg><div class="dleg" id="glosaDleg"></div></div>
@@ -213,13 +220,13 @@ td.gto{color:var(--gray-500);font-variant-numeric:tabular-nums;white-space:nowra
   </div>
 
   <div class="secdiv"></div>
-  <h2 class="seclabel">📋 GTOs <span class="sn" id="anxTabLbl"></span></h2>
+  <h2 class="seclabel"><svg class="rb-ico"><use href="#i-grid"/></svg> GTOs <span class="sn" id="anxTabLbl"></span></h2>
   <div class="gtofiltros" id="gtoFiltros"></div>
   <div id="anxTabela"><div class="empty">Carregando…</div></div>
 
   <div id="glosaSec" style="display:none">
     <div class="secdiv"></div>
-    <h2 class="seclabel">🩹 Glosas — por unidade e por motivo</h2>
+    <h2 class="seclabel"><svg class="rb-ico"><use href="#i-receipt"/></svg> Glosas — por unidade e por motivo</h2>
     <div class="gcols">
       <div class="daycard" style="padding:16px 20px"><div class="th-ish">Por unidade</div><div id="glosaUnid"></div></div>
       <div class="daycard" style="padding:16px 20px"><div class="th-ish">Por motivo de glosa</div><div id="glosaMot"></div></div>
@@ -360,7 +367,7 @@ function renderAnxTab(){
     <th>Unidade</th><th>GTO</th><th>Liberação</th><th>Paciente</th><th>Status</th><th>Anexos</th><th>Situação</th></tr></thead><tbody>${
     rows.map(g=>{const m=meta[g.categoria]||{};
       return `<tr><td>${g.unidade}</td>
-        <td><a class="gtolink" href="${PORTAL_GTO}${g.gto}" target="_blank" rel="noopener" title="Abrir no portal RedeUna (precisa estar logado na unidade)">${g.gto} ↗</a></td>
+        <td><a class="gtolink" href="${PORTAL_GTO}${g.gto}" target="_blank" rel="noopener" title="Abrir no portal RedeUna (precisa estar logado na unidade)">${g.gto} <svg class="rb-ico rb-ico--sm"><use href="#i-external"/></svg></a></td>
         <td class="gto">${g.liberacao||'—'}</td>
         <td>${g.paciente||'—'}</td><td>${g.status||'—'}</td><td>${g.qtd_anexos}</td>
         <td><span class="badge ${ANXCL[g.categoria]||'outros'}">${m.label||g.categoria}</span></td></tr>`;}).join('')
@@ -387,7 +394,7 @@ async function anxPoll(id){
   $('anxMLog').scrollTop=$('anxMLog').scrollHeight;
   if(j.status==='done'||j.status==='error'){
     clearInterval(anxPollT);
-    $('anxMTitle').innerHTML=(j.status==='done')?'✓ Varredura concluída':'✕ Falhou';
+    $('anxMTitle').innerHTML=(j.status==='done')?'<svg class="rb-ico" style="color:var(--green-600)"><use href="#i-check-circle"/></svg> Varredura concluída':'<svg class="rb-ico" style="color:var(--red-500)"><use href="#i-x"/></svg> Falhou';
     $('anxMClose').style.display='';
     if(j.status==='done'){$('anxLote').dataset.filled='';$('anxLote').value='';carregarAnexacao();}
   }
@@ -406,13 +413,13 @@ async function carregarGlosas(){
   const s=j.por_situacao||{}, g=j.glosado_situacao||{};
   $('glosaChips').innerHTML=`<a class="chip" href="/glosas" style="cursor:pointer;text-decoration:none;color:inherit" title="Ver todas as glosas no painel">
       <div class="n">${j.total}</div><div class="l">Total de glosas</div>
-      <div class="kv">💰 ${fmtBRL(j.total_glosado)}</div>
+      <div class="kv"><svg class="rb-ico rb-ico--sm" style="color:var(--green-600)"><use href="#i-receipt"/></svg> ${fmtBRL(j.total_glosado)}</div>
       <div class="cd">GTOs que glosaram no período</div></a>`+
     GSIT.map(k=>{const c=GCL[k];const cls=['anex','lau','err','sim'].includes(c)?(' '+c):'';
       return `<a class="chip${cls}" href="/glosas?sit=${k}" style="cursor:pointer;text-decoration:none;color:inherit"
         title="Ver as GTOs: ${(meta[k]||{}).label||k}">
         <div class="n">${s[k]||0}</div><div class="l">${(meta[k]||{}).label||k}</div>
-        <div class="kv">💰 ${fmtBRL(g[k])}</div>
+        <div class="kv"><svg class="rb-ico rb-ico--sm" style="color:var(--green-600)"><use href="#i-receipt"/></svg> ${fmtBRL(g[k])}</div>
         <div class="cd">${GDESC[k]||(meta[k]||{}).desc||''}</div></a>`;}).join('');
   $('glosaDonutRow').style.display='';
   donutSvg('glosaDonut',j.total,'glosadas',GSIT,s,SIT_DCOLORS,k=>{location.href='/glosas?sit='+k;});

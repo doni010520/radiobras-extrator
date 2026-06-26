@@ -26,7 +26,6 @@ body{background:var(--rb-bg);color:var(--rb-fg);line-height:1.5;}
 .topnav-right{display:flex;align-items:center;gap:16px;}
 .topnav-avatar{width:36px;height:36px;background:var(--green-600);border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:14px;}
 .main{padding:32px;max-width:1400px;margin-left:auto;margin-right:auto;}
-.page-title{font-size:28px;font-weight:700;margin-bottom:4px;}
 .page-subtitle{font-size:15px;color:var(--gray-500);margin-bottom:28px;}
 .stats-row{display:grid;grid-template-columns:repeat(6,1fr);gap:16px;margin-bottom:28px;}
 .stat-card{background:var(--rb-surface);border-radius:var(--rb-r-lg);padding:18px;border:1px solid var(--rb-border);box-shadow:var(--rb-shadow-1);}
@@ -72,8 +71,15 @@ body{background:var(--rb-bg);color:var(--rb-fg);line-height:1.5;}
 {% include '_topnav.html' %}
 
 <main class="main">
-  <h1 class="page-title">REDE UNNA / OdontoPrev</h1>
-  <p class="page-subtitle" id="subtitle">Carregando…</p>
+  <div class="rb-page-head">
+    <div class="ttl">
+      <span class="badge"><svg class="rb-ico rb-ico--lg"><use href="#i-grid"/></svg></span>
+      <div>
+        <h1>REDE UNNA / OdontoPrev</h1>
+        <div class="sub" id="subtitle">Carregando…</div>
+      </div>
+    </div>
+  </div>
 
   <div class="stats-row" id="stats"></div>
 

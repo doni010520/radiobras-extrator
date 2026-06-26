@@ -125,19 +125,24 @@
 <body>
 {% include '_topnav.html' %}
 <div class="wrap">
-  <div class="top">
-    <div class="brand"><h1>Panorama de Glosas</h1></div>
+  <div class="rb-page-head">
+    <div class="ttl">
+      <span class="badge"><svg class="rb-ico rb-ico--lg"><use href="#i-receipt"/></svg></span>
+      <div>
+        <h1>Panorama de Glosas</h1>
+        <div class="sub" id="sub">Carregando…</div>
+      </div>
+    </div>
   </div>
-  <div class="sub" id="sub">Carregando…</div>
 
   <div class="toolbar">
     <select id="lote" onchange="carregar()"></select>
     <span style="color:var(--muted);font-size:12.5px">período: 1º do mês até</span>
     <input type="date" id="glAte">
-    <button class="btn" onclick="atualizar()">🔍 Consultar período</button>
+    <button class="btn" onclick="atualizar()"><svg class="rb-ico"><use href="#i-search"/></svg> Consultar período</button>
     <span class="spacer"></span>
-    <a class="btn" id="btnXlsx" href="/glosas.xlsx">⬇ Excel</a>
-    <a class="btn primary" id="btnPdf" href="/glosas.pdf">⬇ PDF</a>
+    <a class="btn" id="btnXlsx" href="/glosas.xlsx"><svg class="rb-ico"><use href="#i-sheet"/></svg> Excel</a>
+    <a class="btn primary" id="btnPdf" href="/glosas.pdf"><svg class="rb-ico"><use href="#i-file-text"/></svg> PDF</a>
   </div>
 
   <div class="panel" id="statusPanel" style="margin-bottom:18px">
@@ -222,7 +227,7 @@ async function carregar(){
     $('tabela').innerHTML='<div class="empty">Nenhuma glosa carregada.</div>';return;}
   const capTxt=cap?(' · atualizado '+new Date(cap).toLocaleString('pt-BR')):'';
   const fim=DATA.dia||'', ini=fim?('01/'+fim.slice(3)):'';
-  $('sub').textContent=`Período: de ${ini} até ${fim} · 3 unidades · 💰 ${fmtBRL(DATA.total_glosado)} glosado${capTxt}`;
+  $('sub').innerHTML=`Período: de ${ini} até ${fim} · 3 unidades · <svg class="rb-ico" style="color:var(--accent)"><use href="#i-receipt"/></svg> ${fmtBRL(DATA.total_glosado)} glosado${capTxt}`;
   if(!$('glAte').dataset.set){$('glAte').dataset.set='1';
     const f=DATA.dia; if(f){const[d,m,y]=f.split('/');$('glAte').value=`${y}-${m}-${d}`;}}
   renderDonut(); renderKpis(); renderUnidades(); renderMotivos(); fillFiltros(); renderTabela();
@@ -322,7 +327,7 @@ function renderTabela(){
       const m=META[e.situacao]||{};
       return `<tr><td>${e.unidade}</td>
         <td><a class="gtolink" href="${PORTAL_GTO}${e.ficha}" target="_blank" rel="noopener"
-           title="Abrir esta GTO no portal RedeUna (precisa estar logado na unidade)">${e.ficha} ↗</a></td>
+           title="Abrir esta GTO no portal RedeUna (precisa estar logado na unidade)">${e.ficha} <svg class="rb-ico rb-ico--sm"><use href="#i-external"/></svg></a></td>
         <td>${e.paciente||'—'}</td>
         <td>${e.evento||'—'}</td><td title="${e.glosa_cod}">${e.glosa_motivo||'—'}</td>
         <td><span class="pill ${m.cls||'neutral'}">${m.label||e.situacao}</span></td></tr>`;
@@ -349,7 +354,7 @@ async function poll(id){
   $('mLog').scrollTop=$('mLog').scrollHeight;
   if(j.status==='done'||j.status==='error'){
     clearInterval(pollT);
-    $('mTitle').innerHTML=(j.status==='done')?'✓ Atualizado':'✕ Falhou';
+    $('mTitle').innerHTML=(j.status==='done')?'<svg class="rb-ico" style="color:var(--accent)"><use href="#i-check-circle"/></svg> Atualizado':'<svg class="rb-ico" style="color:var(--bad)"><use href="#i-x"/></svg> Falhou';
     $('mClose').style.display='';
     if(j.status==='done'){$('lote').dataset.filled='';carregar();}
   }

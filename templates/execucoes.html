@@ -7,28 +7,36 @@
 {% include '_head.html' %}
 <style>
   :root{--verde:var(--rb-primary);--bg:var(--rb-bg);--card:var(--rb-surface);--surface2:var(--rb-surface-2);--linha:var(--rb-border);--txt:var(--rb-fg);--sub:var(--rb-fg-muted);--warn:var(--rb-warning)}
-  .wrap{max-width:1100px;margin:0 auto;padding:24px 16px}
-  h1{margin:6px 0 16px;letter-spacing:-.01em}
+  .wrap{max-width:1100px;margin:0 auto;padding:var(--rb-s5) var(--rb-s4)}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:18px}
-  .card{background:var(--card);border:1px solid var(--linha);border-radius:16px;padding:16px 24px;box-shadow:var(--rb-shadow-1)}
+  .card{background:var(--card);border:1px solid var(--linha);border-radius:var(--rb-r-lg);padding:16px 24px;box-shadow:var(--rb-shadow-1)}
   .card .n{font-size:28px;font-weight:800;letter-spacing:-.02em;color:var(--verde);font-variant-numeric:tabular-nums}
   .card .l{color:var(--sub);font-size:13px;font-weight:500}
-  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--linha);border-radius:16px;overflow:hidden;box-shadow:var(--rb-shadow-1);font-variant-numeric:tabular-nums}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--linha);border-radius:var(--rb-r-lg);overflow:hidden;box-shadow:var(--rb-shadow-1);font-variant-numeric:tabular-nums}
   th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--linha);font-size:13.5px}
   th{background:var(--surface2);color:var(--sub);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
   tr:last-child td{border-bottom:0}
-  tbody tr{transition:background .12s ease}
+  tbody tr,table tr{transition:background .12s ease}
   table tr:hover td{background:var(--surface2)}
   a{color:var(--verde);text-decoration:none;transition:color .16s ease}
   a:hover{text-decoration:underline}
-  .tag{display:inline-flex;align-items:center;font-size:11.5px;font-weight:700;background:var(--rb-warning-bg);color:var(--warn);padding:3px 9px;border-radius:999px}
+  .verlink{display:inline-flex;align-items:center;gap:6px;font-weight:600;white-space:nowrap}
+  .tag{display:inline-flex;align-items:center;font-size:11.5px;font-weight:700;background:var(--rb-warning-bg);color:var(--warn);padding:3px 9px;border-radius:var(--rb-r-pill)}
   .sub{color:var(--sub);font-size:12px}
 </style>
 </head>
 <body>
 {% include '_topnav.html' %}
 <div class="wrap">
-  <h1>Faturamento — Execuções</h1>
+  <div class="rb-page-head">
+    <div class="ttl">
+      <span class="badge"><svg class="rb-ico rb-ico--lg"><use href="#i-bar-chart"/></svg></span>
+      <div>
+        <h1>Faturamento — Execuções</h1>
+        <div class="sub">Histórico consolidado de execuções do pipeline — GTOs faturadas, não faturadas e tempos por rodada.</div>
+      </div>
+    </div>
+  </div>
   <div class="cards">
     <div class="card"><div class="n">{{ tot.n }}</div><div class="l">execuções</div></div>
     <div class="card"><div class="n">{{ tot.faturadas }}</div><div class="l">GTOs faturadas</div></div>
@@ -45,7 +53,7 @@
       <td style="color:var(--warn);font-weight:600">{{ e.nao_faturadas }}</td>
       <td>{{ (e.tempo_total//60) }}m{{ '%02d'|format(e.tempo_total%60) }}
         <span class="sub">(desc {{ e.tempo_descoberta }}s · dl {{ e.tempo_download }}s)</span></td>
-      <td><a href="/relatorios/execucao/{{ e.id }}">ver →</a></td>
+      <td><a class="verlink" href="/relatorios/execucao/{{ e.id }}"><svg class="rb-ico"><use href="#i-receipt"/></svg> ver</a></td>
     </tr>
     {% endfor %}
     {% if not execs %}<tr><td colspan="6" style="color:var(--sub)">Nenhuma execução registrada ainda.</td></tr>{% endif %}
