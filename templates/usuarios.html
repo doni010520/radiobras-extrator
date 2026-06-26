@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Usuários</title>
+<style>
+  :root{--verde:#0f7a4f;--bg:#f4f6f5;--card:#fff;--linha:#e6ebe8;--txt:#1f2a26;--sub:#6b7a73}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,sans-serif}
+  .wrap{max-width:900px;margin:0 auto;padding:20px}
+  h1{margin:6px 0 4px}
+  .lead{color:var(--sub);margin-bottom:16px}
+  .card{background:var(--card);border:1px solid var(--linha);border-radius:12px;padding:18px;margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+  label{display:block;font-size:12px;color:var(--sub);margin-bottom:4px;font-weight:600}
+  input,select{padding:9px 11px;border:1px solid var(--linha);border-radius:8px;font-size:14px}
+  .btn{border:0;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer;background:var(--verde);color:#fff}
+  .btn.sec{background:#eef3f0;color:var(--verde)}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--linha);border-radius:10px;overflow:hidden}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--linha);font-size:14px}
+  th{background:#eef3f0;color:var(--sub)}
+  .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px}
+  .pill.admin{background:#e6f0ff;color:#1f5fbf}.pill.user{background:#eef3f0;color:var(--verde)}
+  .pill.off{background:#fdeceb;color:#b3261e}
+  .acts a{color:var(--verde);cursor:pointer;font-weight:600;margin-right:10px;font-size:13px}
+  .msg{font-size:13px;margin-top:8px}
+</style>
+</head>
+<body>
+{% include '_topnav.html' %}
+<div class="wrap">
+  <h1>Usuários</h1>
+  <div class="lead">Quem pode acessar o sistema. Só administradores veem esta tela.</div>
+
+  <div class="card">
+    <b>Novo usuário</b>
+    <div class="row" style="margin-top:10px">
+      <div><label>Usuário</label><input id="nu" placeholder="ex.: joao"></div>
+      <div><label>Nome</label><input id="nn" placeholder="Nome completo"></div>
+      <div><label>Senha</label><input id="ns" type="text" placeholder="mín. 4 caracteres"></div>
+      <div><label>Perfil</label><select id="nr"><option value="user">Operador</option><option value="admin">Admin</option></select></div>
+      <button class="btn" onclick="criar()">+ Criar</button>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <table>
+    <tr><th>Usuário</th><th>Nome</th><th>Perfil</th><th>Status</th><th>Último acesso</th><th>Ações</th></tr>
+    {% for u in usuarios %}
+    <tr data-id="{{ u.id }}">
+      <td>{{ u.username }}</td>
+      <td>{{ u.nome }}</td>
+      <td><span class="pill {{ u.role }}">{{ 'Admin' if u.role=='admin' else 'Operador' }}</span></td>
+      <td>{% if u.ativo %}<span class="pill user">Ativo</span>{% else %}<span class="pill off">Inativo</span>{% endif %}</td>
+      <td class="mut">{{ u.ultimo_login.strftime('%d/%m/%Y %H:%M') if u.ultimo_login else '—' }}</td>
+      <td class="acts">
+        <a onclick="senha({{ u.id }})">🔑 senha</a>
+        {% if usuario_atual and u.id != usuario_atual_id %}
+          <a onclick="toggle({{ u.id }}, {{ 'false' if u.ativo else 'true' }})">{{ '🚫 desativar' if u.ativo else '✅ ativar' }}</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+<script>
+async function post(url, data){
+  const fd=new FormData(); for(const k in data) fd.append(k, data[k]);
+  const r=await fetch(url,{method:'POST',body:fd}); return r.json();
+}
+async function criar(){
+  const usuario=document.getElementById('nu').value.trim();
+  const nome=document.getElementById('nn').value.trim();
+  const senha=document.getElementById('ns').value;
+  const role=document.getElementById('nr').value;
+  if(!usuario||!senha){ alert('Usuário e senha são obrigatórios.'); return; }
+  const j=await post('/usuarios/criar',{usuario,nome,senha,role});
+  const m=document.getElementById('msg');
+  if(j.error){ m.style.color='#b3261e'; m.textContent='Erro: '+j.error; }
+  else{ m.style.color='#0f7a4f'; m.textContent='Usuário "'+j.usuario.username+'" criado.'; setTimeout(()=>location.reload(),700); }
+}
+async function senha(id){
+  const s=prompt('Nova senha (mín. 4 caracteres):'); if(!s) return;
+  const j=await post('/usuarios/'+id+'/senha',{senha:s});
+  alert(j.error?('Erro: '+j.error):'Senha atualizada.');
+}
+async function toggle(id, ativar){
+  if(!confirm(ativar?'Ativar este usuário?':'Desativar este usuário? Ele não poderá mais entrar.')) return;
+  const j=await post('/usuarios/'+id+'/ativo',{ativo:ativar?'1':'0'});
+  if(j.error) alert('Erro: '+j.error); else location.reload();
+}
+</script>
+</body>
+</html>

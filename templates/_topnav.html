@@ -17,6 +17,10 @@
   .rbnav-badge{background:#EF4444;color:#fff;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;}
   .rbnav-right{display:flex;align-items:center;gap:14px;}
   .rbnav-date{color:rgba(255,255,255,.7);font-size:13px;text-transform:capitalize;white-space:nowrap;}
+  .rbnav-user{color:#fff;font-size:13px;font-weight:600;white-space:nowrap;background:rgba(255,255,255,.12);padding:5px 10px;border-radius:20px;}
+  .rbnav-logout{color:rgba(255,255,255,.85);font-size:13px;font-weight:600;text-decoration:none;padding:5px 10px;border:1px solid rgba(255,255,255,.25);border-radius:20px;white-space:nowrap;}
+  .rbnav-logout:hover{background:rgba(255,255,255,.12);}
+  @media(max-width:1080px){.rbnav-user{display:none;}}
   .rbnav-toggle{background:none;border:none;cursor:pointer;font-size:17px;line-height:1;padding:6px;border-radius:8px;color:#fff;}
   .rbnav-toggle:hover{background:rgba(255,255,255,.12);}
   @media(max-width:1080px){.rbnav-date{display:none;}}
@@ -34,10 +38,13 @@
     <a class="rbnav-link" href="/gtos" data-path="/revisao">Revisão <span class="rbnav-badge" id="rbNavRev">0</span></a>
     <a class="rbnav-link" href="/glosas" data-path="/glosas">Glosas</a>
     <a class="rbnav-link" href="/relatorios" data-path="/relatorios">Relatórios</a>
+    {% if usuario_atual and usuario_atual.role == 'admin' %}<a class="rbnav-link" href="/usuarios" data-path="/usuarios">Usuários</a>{% endif %}
   </div>
   <div class="rbnav-right">
     <button class="rbnav-toggle" id="rbThemeBtn" onclick="rbTheme()" title="Alternar tema claro/escuro">🌙</button>
     <span class="rbnav-date" id="rbNavDate"></span>
+    {% if usuario_atual %}<span class="rbnav-user" title="{{ usuario_atual.username }}">👤 {{ usuario_atual.nome or usuario_atual.username }}</span>
+    <a class="rbnav-logout" href="/logout" title="Sair">Sair</a>{% endif %}
   </div>
 </nav>
 <script>

@@ -11,7 +11,7 @@ import sys
 import threading
 import traceback
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 try:
     from zoneinfo import ZoneInfo
@@ -19,7 +19,8 @@ try:
 except Exception:
     _TZ = None
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import (Flask, jsonify, render_template, request, send_file,
+                   session, redirect, url_for)
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -37,7 +38,108 @@ import db
 import planos as planos_mod
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY") or "rb-dev-secret-troque-em-producao"
+app.permanent_session_lifetime = timedelta(days=14)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+# ── Autenticação (usuário + senha, sessão) ────────────────────────────────────
+# Rotas liberadas sem login (prefixos). Todo o resto exige sessão.
+_PUBLICO = ("/login", "/logout", "/static", "/healthz", "/favicon")
+
+
+@app.before_request
+def _exigir_login():
+    p = request.path
+    if any(p == x or p.startswith(x + "/") or p.startswith(x) for x in _PUBLICO):
+        return None
+    if session.get("uid"):
+        return None
+    # API/JSON -> 401; navegador -> redireciona pro login
+    if p.startswith("/api/") or request.headers.get("Accept", "").startswith("application/json"):
+        return jsonify({"error": "não autenticado"}), 401
+    return redirect(url_for("login", next=p))
+
+
+@app.context_processor
+def _injeta_usuario():
+    return {"usuario_atual": {"username": session.get("username"),
+                             "nome": session.get("nome"),
+                             "role": session.get("role")} if session.get("uid") else None,
+            "usuario_atual_id": session.get("uid")}
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        u = db.autenticar(request.form.get("usuario", ""), request.form.get("senha", ""))
+        if not u:
+            return render_template("login.html", erro="Usuário ou senha inválidos."), 401
+        session.permanent = True
+        session["uid"] = u["id"]; session["username"] = u["username"]
+        session["nome"] = u["nome"]; session["role"] = u["role"]
+        dest = request.args.get("next") or "/"
+        if not dest.startswith("/"):
+            dest = "/"
+        return redirect(dest)
+    if session.get("uid"):
+        return redirect("/")
+    return render_template("login.html", erro=None)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
+@app.route("/healthz")
+def healthz():
+    return "ok", 200
+
+
+def _admin_ok():
+    return session.get("role") == "admin"
+
+
+@app.route("/usuarios", methods=["GET"])
+def usuarios_page():
+    if not _admin_ok():
+        return ("Acesso restrito a administradores.", 403)
+    return render_template("usuarios.html", usuarios=db.listar_usuarios())
+
+
+@app.route("/usuarios/criar", methods=["POST"])
+def usuarios_criar():
+    if not _admin_ok():
+        return jsonify({"error": "restrito a admin"}), 403
+    try:
+        u = db.criar_usuario(request.form.get("usuario", ""), request.form.get("senha", ""),
+                             nome=request.form.get("nome", ""),
+                             role=request.form.get("role", "user"))
+        return jsonify({"ok": True, "usuario": u})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/usuarios/<int:uid>/senha", methods=["POST"])
+def usuarios_senha(uid: int):
+    if not _admin_ok():
+        return jsonify({"error": "restrito a admin"}), 403
+    try:
+        db.resetar_senha(uid, request.form.get("senha", ""))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route("/usuarios/<int:uid>/ativo", methods=["POST"])
+def usuarios_ativo(uid: int):
+    if not _admin_ok():
+        return jsonify({"error": "restrito a admin"}), 403
+    if uid == session.get("uid"):
+        return jsonify({"error": "não pode desativar a si mesmo"}), 400
+    db.set_usuario_ativo(uid, request.form.get("ativo") == "1")
+    return jsonify({"ok": True})
 
 # Escopo REDE UNNA — definido em config.py (evita import circular).
 from config import CONVENIOS, SEGMENTOS, PLANOS, PLANOS_INATIVOS

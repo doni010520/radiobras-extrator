@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entrar — RadioBras Digital</title>
+<style>
+  :root{--verde:#0f7a4f;--verde2:#16a163;--bg:#0c1c14;--card:#fff;--linha:#e6ebe8;--txt:#1f2a26;--sub:#6b7a73}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+       background:radial-gradient(1200px 600px at 50% -10%, #16432f, #0c1c14);
+       font-family:system-ui,-apple-system,sans-serif;padding:20px}
+  .card{background:var(--card);border-radius:18px;padding:34px 32px;width:100%;max-width:380px;
+        box-shadow:0 24px 70px rgba(0,0,0,.35)}
+  .brand{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:6px}
+  .brand .logo{width:42px;height:42px;border-radius:10px;background:var(--verde);color:#fff;
+       display:flex;align-items:center;justify-content:center;font-size:22px}
+  .brand b{font-size:19px;color:var(--txt)} .brand b span{color:var(--verde)}
+  h1{font-size:16px;text-align:center;color:var(--sub);font-weight:500;margin:2px 0 22px}
+  label{display:block;font-size:13px;color:var(--sub);margin:14px 0 5px;font-weight:600}
+  input{width:100%;padding:12px 13px;border:1px solid var(--linha);border-radius:10px;font-size:15px;outline:none}
+  input:focus{border-color:var(--verde);box-shadow:0 0 0 3px rgba(15,122,79,.12)}
+  button{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;background:var(--verde);
+         color:#fff;font-size:15px;font-weight:700;cursor:pointer}
+  button:hover{background:var(--verde2)}
+  .erro{background:#fdeceb;color:#b3261e;border:1px solid #f5c6c2;border-radius:9px;
+        padding:10px 12px;font-size:13.5px;margin-bottom:6px;text-align:center}
+  .rodape{text-align:center;color:#9fb0a8;font-size:12px;margin-top:18px}
+</style>
+</head>
+<body>
+  <form class="card" method="post" action="/login{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
+    <div class="brand"><div class="logo">🦷</div><b>RadioBras <span>Digital</span></b></div>
+    <h1>Faça login para continuar</h1>
+    {% if erro %}<div class="erro">{{ erro }}</div>{% endif %}
+    <label for="usuario">Usuário</label>
+    <input id="usuario" name="usuario" autocomplete="username" autofocus required>
+    <label for="senha">Senha</label>
+    <input id="senha" name="senha" type="password" autocomplete="current-password" required>
+    <button type="submit">Entrar</button>
+    <div class="rodape">Acesso restrito · RadioBras Digital</div>
+  </form>
+</body>
+</html>

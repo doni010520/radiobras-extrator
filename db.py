@@ -155,6 +155,97 @@ class ExecucaoItem(Base):
     execucao = relationship("Execucao", back_populates="itens")
 
 
+class Usuario(Base):
+    """Usuário do sistema (login por usuário+senha, sem e-mail)."""
+    __tablename__ = "usuarios"
+    id = Column(Integer, primary_key=True)
+    username = Column(String(60), unique=True, index=True, nullable=False)
+    senha_hash = Column(String(255), nullable=False)
+    nome = Column(String(120))
+    role = Column(String(20), default="user")     # admin | user
+    ativo = Column(Boolean, default=True)
+    criado_em = Column(DateTime(timezone=True), default=_now)
+    ultimo_login = Column(DateTime(timezone=True))
+
+
+def criar_usuario(username: str, senha: str, nome: str = "", role: str = "user") -> dict:
+    """Cria um usuário. Levanta ValueError se username já existe ou inválido."""
+    from werkzeug.security import generate_password_hash
+    username = (username or "").strip().lower()
+    if not username or not senha:
+        raise ValueError("Usuário e senha são obrigatórios.")
+    if len(senha) < 4:
+        raise ValueError("A senha precisa ter ao menos 4 caracteres.")
+    with SessionLocal() as s:
+        if s.query(Usuario).filter(Usuario.username == username).first():
+            raise ValueError("Esse usuário já existe.")
+        u = Usuario(username=username, senha_hash=generate_password_hash(senha),
+                    nome=(nome or "").strip() or username, role=role)
+        s.add(u); s.commit()
+        return {"id": u.id, "username": u.username, "nome": u.nome, "role": u.role}
+
+
+def autenticar(username: str, senha: str) -> dict | None:
+    """Valida login. Retorna o usuário (dict) ou None."""
+    from werkzeug.security import check_password_hash
+    username = (username or "").strip().lower()
+    with SessionLocal() as s:
+        u = s.query(Usuario).filter(Usuario.username == username,
+                                    Usuario.ativo == True).first()  # noqa: E712
+        if not u or not check_password_hash(u.senha_hash, senha or ""):
+            return None
+        u.ultimo_login = _now(); s.commit()
+        return {"id": u.id, "username": u.username, "nome": u.nome, "role": u.role}
+
+
+def get_usuario(uid: int) -> dict | None:
+    with SessionLocal() as s:
+        u = s.get(Usuario, uid)
+        if not u or not u.ativo:
+            return None
+        return {"id": u.id, "username": u.username, "nome": u.nome, "role": u.role}
+
+
+def listar_usuarios() -> list:
+    with SessionLocal() as s:
+        return [{"id": u.id, "username": u.username, "nome": u.nome, "role": u.role,
+                 "ativo": u.ativo, "ultimo_login": u.ultimo_login}
+                for u in s.query(Usuario).order_by(Usuario.username).all()]
+
+
+def set_usuario_ativo(uid: int, ativo: bool):
+    with SessionLocal() as s:
+        u = s.get(Usuario, uid)
+        if u:
+            u.ativo = ativo; s.commit()
+
+
+def resetar_senha(uid: int, nova_senha: str):
+    from werkzeug.security import generate_password_hash
+    if len(nova_senha or "") < 4:
+        raise ValueError("A senha precisa ter ao menos 4 caracteres.")
+    with SessionLocal() as s:
+        u = s.get(Usuario, uid)
+        if u:
+            u.senha_hash = generate_password_hash(nova_senha); s.commit()
+
+
+def _seed_admin():
+    """Cria o admin inicial se não houver nenhum usuário (credenciais via ENV
+    ADMIN_USER/ADMIN_PASSWORD, com fallback)."""
+    with SessionLocal() as s:
+        if s.query(Usuario).count() > 0:
+            return
+    import os
+    user = (os.environ.get("ADMIN_USER") or "admin").strip().lower()
+    senha = os.environ.get("ADMIN_PASSWORD") or "radiobras2026"
+    try:
+        criar_usuario(user, senha, nome="Administrador", role="admin")
+        print(f"[db] usuário admin inicial criado: {user}", flush=True)
+    except Exception as e:
+        print(f"[db] seed admin falhou: {e}", flush=True)
+
+
 def salvar_execucao(resumo: dict) -> int:
     """Persiste uma execução (resumo do rodar_esteira) + seus itens."""
     with SessionLocal() as s:
@@ -233,6 +324,10 @@ def get_execucao(eid: int) -> dict | None:
 def init_db():
     Base.metadata.create_all(engine)
     _ensure_columns()
+    try:
+        _seed_admin()
+    except Exception as e:
+        print(f"[db] seed admin: {e}", flush=True)
 
 
 def _ensure_columns():
