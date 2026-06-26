@@ -1,0 +1,144 @@
+/* ──────────────────────────────────────────────────────────────────────────
+   RadioBras Digital — Design System (rb.css)
+   Estilo: Data-Dense Dashboard · Marca: verde #0f7a4f · Light + Dark
+   Fonte única de verdade. Tokens semânticos + componentes base.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* ── Tokens ─────────────────────────────────────────────────────────────── */
+:root{
+  /* marca */
+  --rb-primary:#0f7a4f; --rb-primary-600:#0c6a44; --rb-primary-400:#16a163;
+  --rb-on-primary:#ffffff;
+  /* superfícies / texto (light) */
+  --rb-bg:#f5f7f6; --rb-surface:#ffffff; --rb-surface-2:#eef3f0;
+  --rb-fg:#16201b; --rb-fg-muted:#5d6b63; --rb-fg-subtle:#8a978f;
+  --rb-border:#e4eae6; --rb-border-strong:#d3ddd7;
+  /* semânticos */
+  --rb-success:#0f7a4f; --rb-success-bg:#e6f4ec;
+  --rb-warning:#a86a00; --rb-warning-bg:#fbf0db;
+  --rb-danger:#b3261e;  --rb-danger-bg:#fdeceb;
+  --rb-info:#1f5fbf;    --rb-info-bg:#e8f0fd;
+  /* foco / efeitos */
+  --rb-ring:rgba(15,122,79,.30);
+  --rb-shadow-1:0 1px 2px rgba(20,40,30,.05), 0 1px 3px rgba(20,40,30,.06);
+  --rb-shadow-2:0 4px 16px rgba(20,40,30,.10);
+  /* forma / escala */
+  --rb-r-sm:8px; --rb-r:11px; --rb-r-lg:16px; --rb-r-pill:999px;
+  --rb-s1:4px; --rb-s2:8px; --rb-s3:12px; --rb-s4:16px; --rb-s5:24px; --rb-s6:32px;
+  --rb-font:'Inter',system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+}
+[data-theme="dark"]{
+  --rb-bg:#0c140f; --rb-surface:#121b16; --rb-surface-2:#18241d;
+  --rb-fg:#e7efe9; --rb-fg-muted:#9bb0a3; --rb-fg-subtle:#6f857a;
+  --rb-border:rgba(255,255,255,.10); --rb-border-strong:rgba(255,255,255,.16);
+  --rb-primary:#34c88e; --rb-primary-600:#2bb87f; --rb-primary-400:#5fd6a8;
+  --rb-on-primary:#06140e;
+  --rb-success:#34c88e; --rb-success-bg:rgba(52,200,142,.14);
+  --rb-warning:#e0a64a; --rb-warning-bg:rgba(224,166,74,.14);
+  --rb-danger:#f1746c;  --rb-danger-bg:rgba(241,116,108,.14);
+  --rb-info:#6ea8ff;    --rb-info-bg:rgba(110,168,255,.14);
+  --rb-ring:rgba(52,200,142,.35);
+  --rb-shadow-1:0 1px 2px rgba(0,0,0,.4); --rb-shadow-2:0 8px 28px rgba(0,0,0,.5);
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--rb-bg);color:var(--rb-fg);font-family:var(--rb-font);
+  font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+h1,h2,h3,h4{margin:0 0 .4em;line-height:1.25;font-weight:700;letter-spacing:-.01em}
+h1{font-size:24px} h2{font-size:19px} h3{font-size:16px}
+p{margin:0 0 1em}
+a{color:var(--rb-primary);text-decoration:none}
+a:hover{text-decoration:underline}
+small,.rb-muted{color:var(--rb-fg-muted)}
+.rb-subtle{color:var(--rb-fg-subtle)}
+/* números tabulares (GTO, valores, tempos) — evita "pulo" de layout */
+.rb-num,.rb-tabular,td.num,.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+/* ── Foco acessível + motion ────────────────────────────────────────────── */
+:focus-visible{outline:none;box-shadow:0 0 0 3px var(--rb-ring);border-radius:var(--rb-r-sm)}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}
+}
+
+/* ── Layout ─────────────────────────────────────────────────────────────── */
+.rb-wrap{max-width:1200px;margin:0 auto;padding:var(--rb-s5) var(--rb-s4)}
+.rb-stack>*+*{margin-top:var(--rb-s4)}
+.rb-row{display:flex;gap:var(--rb-s3);align-items:center;flex-wrap:wrap}
+.rb-lead{color:var(--rb-fg-muted);margin-bottom:var(--rb-s4)}
+
+/* ── Card ───────────────────────────────────────────────────────────────── */
+.rb-card{background:var(--rb-surface);border:1px solid var(--rb-border);
+  border-radius:var(--rb-r-lg);box-shadow:var(--rb-shadow-1)}
+.rb-card--pad{padding:var(--rb-s5)}
+.rb-card-head{padding:var(--rb-s4) var(--rb-s5);border-bottom:1px solid var(--rb-border);
+  display:flex;align-items:center;justify-content:space-between;gap:var(--rb-s3)}
+.rb-card-title{font-size:16px;font-weight:700;margin:0}
+
+/* KPI / stat */
+.rb-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:var(--rb-s4)}
+.rb-stat{background:var(--rb-surface);border:1px solid var(--rb-border);border-radius:var(--rb-r-lg);
+  padding:var(--rb-s4) var(--rb-s5);box-shadow:var(--rb-shadow-1)}
+.rb-stat .n{font-size:28px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.rb-stat .l{color:var(--rb-fg-muted);font-size:13px;font-weight:500}
+
+/* ── Botões ─────────────────────────────────────────────────────────────── */
+.rb-btn{--bg:var(--rb-surface-2);--fg:var(--rb-fg);
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  border:1px solid transparent;background:var(--bg);color:var(--fg);
+  font:inherit;font-size:14px;font-weight:600;line-height:1;cursor:pointer;
+  padding:10px 16px;border-radius:var(--rb-r);min-height:40px;
+  transition:background .16s ease,transform .12s ease,box-shadow .16s ease;text-decoration:none}
+.rb-btn:hover{text-decoration:none;transform:translateY(-1px)}
+.rb-btn:active{transform:translateY(0)}
+.rb-btn:disabled,.rb-btn[disabled]{opacity:.5;cursor:default;transform:none}
+.rb-btn--primary{--bg:var(--rb-primary);--fg:var(--rb-on-primary);box-shadow:var(--rb-shadow-1)}
+.rb-btn--primary:hover{--bg:var(--rb-primary-600)}
+.rb-btn--ghost{--bg:var(--rb-surface-2);--fg:var(--rb-primary);border-color:var(--rb-border)}
+.rb-btn--ghost:hover{--bg:var(--rb-border)}
+.rb-btn--danger{--bg:var(--rb-danger);--fg:#fff}
+.rb-btn--sm{padding:7px 12px;min-height:32px;font-size:13px}
+.rb-btn--block{width:100%}
+
+/* ── Inputs ─────────────────────────────────────────────────────────────── */
+.rb-field{display:block}
+.rb-label{display:block;font-size:12.5px;font-weight:600;color:var(--rb-fg-muted);margin-bottom:6px}
+.rb-input,.rb-select,input.rb,select.rb{
+  width:100%;background:var(--rb-surface);color:var(--rb-fg);
+  border:1px solid var(--rb-border-strong);border-radius:var(--rb-r);
+  padding:10px 12px;font:inherit;font-size:14.5px;outline:none;
+  transition:border-color .16s,box-shadow .16s;min-height:40px}
+.rb-input:focus,.rb-select:focus,input.rb:focus,select.rb:focus{
+  border-color:var(--rb-primary);box-shadow:0 0 0 3px var(--rb-ring)}
+
+/* ── Tabelas (data-dense) ───────────────────────────────────────────────── */
+.rb-table{width:100%;border-collapse:collapse;background:var(--rb-surface);
+  border:1px solid var(--rb-border);border-radius:var(--rb-r-lg);overflow:hidden;
+  font-variant-numeric:tabular-nums}
+.rb-table th,.rb-table td{padding:11px 14px;text-align:left;font-size:13.5px;
+  border-bottom:1px solid var(--rb-border);vertical-align:top}
+.rb-table th{background:var(--rb-surface-2);color:var(--rb-fg-muted);
+  font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+.rb-table tbody tr{transition:background .12s}
+.rb-table tbody tr:hover{background:var(--rb-surface-2)}
+.rb-table tr:last-child td{border-bottom:0}
+
+/* ── Badges / pills ─────────────────────────────────────────────────────── */
+.rb-badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;
+  padding:3px 9px;border-radius:var(--rb-r-pill);line-height:1.5;white-space:nowrap}
+.rb-badge--success{background:var(--rb-success-bg);color:var(--rb-success)}
+.rb-badge--warning{background:var(--rb-warning-bg);color:var(--rb-warning)}
+.rb-badge--danger{background:var(--rb-danger-bg);color:var(--rb-danger)}
+.rb-badge--info{background:var(--rb-info-bg);color:var(--rb-info)}
+.rb-badge--neutral{background:var(--rb-surface-2);color:var(--rb-fg-muted)}
+
+/* ── Avisos / mensagens ─────────────────────────────────────────────────── */
+.rb-alert{border-radius:var(--rb-r);padding:11px 14px;font-size:13.5px;border:1px solid transparent}
+.rb-alert--info{background:var(--rb-info-bg);color:var(--rb-info)}
+.rb-alert--warning{background:var(--rb-warning-bg);color:var(--rb-warning)}
+.rb-alert--danger{background:var(--rb-danger-bg);color:var(--rb-danger)}
+
+/* utilidades */
+.rb-divider{height:1px;background:var(--rb-border);border:0;margin:var(--rb-s4) 0}
+.rb-hidden{display:none}

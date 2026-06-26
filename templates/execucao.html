@@ -4,25 +4,42 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Execução {{ ex.dia }}</title>
+{% if not pdf %}{% include '_head.html' %}{% endif %}
 <style>
-  :root{--verde:#0f7a4f;--bg:#f4f6f5;--card:#fff;--linha:#e6ebe8;--txt:#1f2a26;--sub:#6b7a73}
+  /* Vars locais com fallback literal (hex) p/ render PDF; no web puxam tokens rb.css */
+  :root{
+    --verde:var(--rb-primary,#0f7a4f);
+    --bg:var(--rb-bg,#f4f6f5);
+    --card:var(--rb-surface,#fff);
+    --surface2:var(--rb-surface-2,#eef3f0);
+    --linha:var(--rb-border,#e6ebe8);
+    --txt:var(--rb-fg,#1f2a26);
+    --sub:var(--rb-fg-muted,#6b7a73);
+    --warn:var(--rb-warning,#a86a00);
+  }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,sans-serif}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:var(--rb-font,system-ui,-apple-system,sans-serif)}
   .wrap{max-width:1100px;margin:0 auto;padding:20px}
-  h1{margin:6px 0 4px}
-  .meta{color:var(--sub);font-size:13px;margin-bottom:12px}
+  h1{margin:6px 0 4px;letter-spacing:-.01em}
+  .meta{color:var(--sub);font-size:13px;margin-bottom:12px;font-variant-numeric:tabular-nums}
+  .links{margin:0 0 4px}
+  .links a{transition:color .16s ease}
   .cards{display:flex;gap:12px;flex-wrap:wrap;margin:14px 0}
-  .card{background:var(--card);border:1px solid var(--linha);border-radius:10px;padding:14px 18px;box-shadow:0 1px 3px rgba(0,0,0,.05)}
-  .card .n{font-size:26px;font-weight:700}
+  .card{background:var(--card);border:1px solid var(--linha);border-radius:12px;padding:14px 18px;box-shadow:0 1px 3px rgba(20,40,30,.06)}
+  .card .n{font-size:26px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
   .card .l{color:var(--sub);font-size:13px}
   .sec{margin-top:22px}
-  .sec h2{font-size:18px;margin:0 0 8px}
-  table{width:100%;border-collapse:collapse;background:var(--card);border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05)}
-  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--linha);font-size:14px;vertical-align:top}
-  th{background:#eef3f0;color:var(--sub)}
+  .sec h2{font-size:18px;margin:0 0 8px;letter-spacing:-.01em}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--linha);border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(20,40,30,.06);font-variant-numeric:tabular-nums}
+  th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--linha);font-size:13.5px;vertical-align:top}
+  th{background:var(--surface2);color:var(--sub);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+  tr:last-child td{border-bottom:0}
+  tbody tr,table tr{transition:background .12s ease}
+  table tr:hover td{background:var(--surface2)}
   a{color:var(--verde);text-decoration:none}
+  a:hover{text-decoration:underline}
   .fatrow{border-left:4px solid var(--verde)}
-  .nfatrow{border-left:4px solid #a86a00}
+  .nfatrow{border-left:4px solid var(--warn)}
   @media print{a{display:none}}
 </style>
 </head>
@@ -36,14 +53,14 @@
     (descoberta {{ ex.tempo_descoberta }}s · download {{ ex.tempo_download }}s)
     · download M={{ ex.m_download }} / leitura K={{ ex.k_leitura }}
   </div>
-  {% if not pdf %}<p><a href="/relatorios/execucao/{{ ex.id }}.pdf">📄 Exportar PDF</a> &nbsp;·&nbsp;
+  {% if not pdf %}<p class="links"><a href="/relatorios/execucao/{{ ex.id }}.pdf">📄 Exportar PDF</a> &nbsp;·&nbsp;
     <a href="/relatorios/execucao/{{ ex.id }}.xlsx">📗 Exportar Excel</a> &nbsp;·&nbsp;
     <a href="/relatorios/execucoes">← todas as execuções</a></p>{% endif %}
 
   <div class="cards">
     <div class="card"><div class="n">{{ ex.pendentes }}</div><div class="l">pendentes</div></div>
     <div class="card"><div class="n" style="color:var(--verde)">{{ ex.faturadas }}</div><div class="l">faturadas</div></div>
-    <div class="card"><div class="n" style="color:#a86a00">{{ ex.nao_faturadas }}</div><div class="l">não faturadas</div></div>
+    <div class="card"><div class="n" style="color:var(--warn)">{{ ex.nao_faturadas }}</div><div class="l">não faturadas</div></div>
   </div>
 
   <div class="sec">
