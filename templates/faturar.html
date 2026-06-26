@@ -42,7 +42,8 @@
 
   /* sucesso */
   #ok{display:none;margin-top:18px;text-align:center}
-  .check{width:64px;height:64px;border-radius:50%;background:var(--rb-success-bg);color:var(--rb-success);font-size:36px;line-height:64px;margin:0 auto 10px;animation:pop .4s ease}
+  .check{width:64px;height:64px;border-radius:50%;background:var(--rb-success-bg);color:var(--rb-success);display:grid;place-items:center;margin:0 auto 10px;animation:pop .4s ease}
+  .fld{display:flex;flex-direction:column;gap:5px}
   @keyframes pop{0%{transform:scale(.6);opacity:0}100%{transform:scale(1);opacity:1}}
   #ok h2{margin:4px 0}
   .cards{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:16px 0}
@@ -78,20 +79,31 @@
 <body>
 {% include '_topnav.html' %}
 <div class="wrap">
-  <h1>Faturar dia</h1>
-  <div class="lead">Roda o pipeline completo (descoberta → download → decisão com IA → anexação) e fatura as GTOs do dia no OdontoPrev.</div>
+  <div class="rb-page-head">
+    <div class="ttl">
+      <span class="badge"><svg class="rb-ico rb-ico--lg"><use href="#i-receipt"/></svg></span>
+      <div>
+        <h1>Faturar dia</h1>
+        <div class="sub">Pipeline completo — descoberta → download → decisão com IA → anexação — fatura as GTOs do dia no OdontoPrev.</div>
+      </div>
+    </div>
+  </div>
 
   <div class="card" id="form">
     <div class="row">
-      <label>Plano:
+      <div class="fld" style="flex:1;min-width:240px">
+        <span class="rb-label">Plano</span>
         <select id="plano">
           <option value="" disabled selected>Selecione o plano…</option>
           {% for p in planos %}<option value="{{ p.codigo }}">{{ p.label }} ({{ p.codigo }})</option>{% endfor %}
           {% for nome in planos_inativos %}<option value="" disabled>{{ nome }}</option>{% endfor %}
         </select>
-      </label>
-      <label>Dia: <input type="date" id="dia"></label>
-      <button class="btn prim" id="bReal" onclick="run()">▶ Faturar dia</button>
+      </div>
+      <div class="fld" style="width:180px">
+        <span class="rb-label">Dia</span>
+        <input type="date" id="dia">
+      </div>
+      <button class="btn prim" id="bReal" onclick="run()"><svg class="rb-ico rb-play"><use href="#i-play"/></svg> Faturar dia</button>
     </div>
 
     <div id="prog">
@@ -104,18 +116,18 @@
     </div>
 
     <div id="ok">
-      <div class="check">✓</div>
+      <div class="check"><svg class="rb-ico" style="width:32px;height:32px;stroke-width:2.5"><use href="#i-check"/></svg></div>
       <h2>Faturamento concluído!</h2>
       <div id="okerr" class="err"></div>
       <div class="cards">
-        <div class="mini"><div class="n" id="okFat" style="color:var(--verde)">0</div><div class="l">faturadas</div></div>
-        <div class="mini"><div class="n" id="okNao" style="color:#a86a00">0</div><div class="l">não faturadas</div></div>
+        <div class="mini"><div class="n" id="okFat" style="color:var(--rb-success)">0</div><div class="l">faturadas</div></div>
+        <div class="mini"><div class="n" id="okNao" style="color:var(--rb-warning)">0</div><div class="l">não faturadas</div></div>
         <div class="mini"><div class="n" id="okTempo">0s</div><div class="l">tempo</div></div>
       </div>
       <div class="acts">
-        <a class="btn prim" id="okRel" href="#">📊 Ver relatório</a>
-        <a class="btn ghost" id="okPdf" href="#" target="_blank">📄 Exportar PDF</a>
-        <a class="btn ghost" id="okXls" href="#" target="_blank">📗 Exportar Excel</a>
+        <a class="btn prim" id="okRel" href="#"><svg class="rb-ico"><use href="#i-bar-chart"/></svg> Ver relatório</a>
+        <a class="btn ghost" id="okPdf" href="#" target="_blank"><svg class="rb-ico"><use href="#i-file-text"/></svg> Exportar PDF</a>
+        <a class="btn ghost" id="okXls" href="#" target="_blank"><svg class="rb-ico"><use href="#i-sheet"/></svg> Exportar Excel</a>
       </div>
       <div id="listas"></div>
       <a id="loglink2" class="loglink" href="#" target="_blank">ver log técnico</a>
@@ -125,12 +137,12 @@
 
 <div class="modalbg" id="modal">
   <div class="modalcard">
-    <div class="ic">📅</div>
+    <div class="ic"><svg class="rb-ico" style="width:34px;height:34px;color:var(--rb-primary)"><use href="#i-calendar"/></svg></div>
     <h2 id="mTitle">Confirmar o dia</h2>
     <p id="mMsg"></p>
     <div class="macts">
       <button class="btn ghost" onclick="fecharModal()">Cancelar</button>
-      <button class="btn prim" onclick="confirmarRun()">✓ Confirmar e faturar</button>
+      <button class="btn prim" onclick="confirmarRun()"><svg class="rb-ico"><use href="#i-check"/></svg> Confirmar e faturar</button>
     </div>
   </div>
 </div>
@@ -144,9 +156,9 @@ function setBusy(b){ $('bReal').disabled=b; $('plano').disabled=b; $('dia').disa
 function setBar(p){ $('barfill').style.width=p+'%'; $('barpct').textContent=p+'%'; }
 function renderEta(){
   if(etaLeft==null){ $('eta').textContent='estimando tempo…'; return; }
-  if(etaLeft<=2){ $('eta').textContent='⏱ finalizando…'; return; }
+  if(etaLeft<=2){ $('eta').textContent='finalizando…'; return; }
   const m=Math.floor(etaLeft/60), s=etaLeft%60;
-  $('eta').textContent='⏱ ≈ '+(m>0?(m+'min '):'')+s+'s restante';
+  $('eta').textContent='≈ '+(m>0?(m+'min '):'')+s+'s restante';
 }
 function tickEta(){ if(etaLeft!=null && etaLeft>0){ etaLeft--; renderEta(); } }
 
@@ -219,7 +231,7 @@ function onDone(j){
     $('okRel').href='/relatorios/execucao/'+eid;
     $('okPdf').href='/relatorios/execucao/'+eid+'.pdf';
     $('okXls').href='/relatorios/execucao/'+eid+'.xlsx';
-    $('okRel').style.display=$('okPdf').style.display=$('okXls').style.display='inline-block';
+    $('okRel').style.display=$('okPdf').style.display=$('okXls').style.display='inline-flex';
     carregarListas(eid);
   }else{
     $('okRel').style.display=$('okPdf').style.display=$('okXls').style.display='none';
@@ -241,27 +253,27 @@ async function carregarListas(eid){
     let html='';
     const naoProc=(d.pendentes||0)-fat.length-nao.length;
     if(naoProc>0){
-      html+='<p class="mut">⚠️ '+naoProc+' pendente(s) não processada(s) nesta execução '+
+      html+='<p class="mut"><svg class="rb-ico" style="color:var(--rb-warning)"><use href="#i-alert"/></svg> '+naoProc+' pendente(s) não processada(s) nesta execução '+
             '(erro de download ou já estava completa). Rode o dia de novo pra recuperá-la(s) — é idempotente.</p>';
     }
     if(fat.length){
-      html+='<h3>✅ Faturadas ('+fat.length+')</h3><table class="lt">'+
+      html+='<h3><svg class="rb-ico" style="color:var(--rb-success)"><use href="#i-check-circle"/></svg> Faturadas ('+fat.length+')</h3><table class="lt">'+
             '<tr><th>GTO</th><th>Paciente</th><th>Exames</th><th>Anexado</th><th>Conferir</th></tr>';
       fat.forEach(i=>{
         html+='<tr class="fat"><td>'+i.gto+'</td><td>'+esc(i.paciente)+'</td>'+
               '<td class="mut">'+esc(i.exames_gto||'')+'</td>'+
               '<td class="mut">laudo + imagens'+(i.solicitacao?' + solicitação':'')+'</td>'+
-              '<td><a href="'+ODONTO+'" target="_blank" title="Abrir OdontoPrev e conferir a GTO '+i.gto+'">🔗 OdontoPrev</a></td></tr>';
+              '<td><a href="'+ODONTO+'" target="_blank" title="Abrir OdontoPrev e conferir a GTO '+i.gto+'"><svg class="rb-ico"><use href="#i-external"/></svg> OdontoPrev</a></td></tr>';
       });
       html+='</table>';
     }
     if(nao.length){
-      html+='<h3>🚫 Não faturadas ('+nao.length+') — conferir solicitação no PRORADIS</h3><table class="lt">'+
+      html+='<h3><svg class="rb-ico" style="color:var(--rb-warning)"><use href="#i-ban"/></svg> Não faturadas ('+nao.length+') — conferir solicitação no PRORADIS</h3><table class="lt">'+
             '<tr><th>GTO</th><th>Paciente</th><th>Por que não faturou</th><th>PRORADIS</th></tr>';
       nao.forEach(i=>{
         html+='<tr class="nao"><td>'+i.gto+'</td><td>'+esc(i.paciente)+'</td>'+
               '<td class="mut">'+esc(i.motivo||'')+'</td>'+
-              '<td><a href="'+PRORADIS+'" target="_blank" title="Abrir PRORADIS e buscar '+esc(i.paciente)+'">🔗 PRORADIS</a></td></tr>';
+              '<td><a href="'+PRORADIS+'" target="_blank" title="Abrir PRORADIS e buscar '+esc(i.paciente)+'"><svg class="rb-ico"><use href="#i-external"/></svg> PRORADIS</a></td></tr>';
       });
       html+='</table>';
     }

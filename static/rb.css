@@ -139,6 +139,31 @@ small,.rb-muted{color:var(--rb-fg-muted)}
 .rb-alert--warning{background:var(--rb-warning-bg);color:var(--rb-warning)}
 .rb-alert--danger{background:var(--rb-danger-bg);color:var(--rb-danger)}
 
+/* ── Ícones SVG (Lucide) ────────────────────────────────────────────────── */
+.rb-ico{width:1.05em;height:1.05em;display:inline-block;vertical-align:-.16em;
+  fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.rb-ico--sm{width:.95em;height:.95em} .rb-ico--lg{width:1.4em;height:1.4em}
+.rb-play{fill:currentColor;stroke:none}
+
+/* ── Cabeçalho de página ────────────────────────────────────────────────── */
+.rb-page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--rb-s4);
+  flex-wrap:wrap;margin-bottom:var(--rb-s5)}
+.rb-page-head .ttl{display:flex;align-items:center;gap:12px}
+.rb-page-head .ttl .badge{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;
+  background:var(--rb-success-bg);color:var(--rb-primary);flex-shrink:0}
+.rb-page-head h1{margin:0;font-size:24px}
+.rb-page-head .sub{color:var(--rb-fg-muted);font-size:14px;margin-top:2px;max-width:62ch}
+
+/* elevação no hover de cards clicáveis */
+.rb-card--hover{transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease;cursor:pointer}
+.rb-card--hover:hover{transform:translateY(-2px);box-shadow:var(--rb-shadow-2);border-color:var(--rb-primary)}
+
+/* skeleton de carregamento */
+.rb-skel{background:linear-gradient(90deg,var(--rb-surface-2) 25%,var(--rb-border) 37%,var(--rb-surface-2) 63%);
+  background-size:400% 100%;animation:rb-shimmer 1.3s ease infinite;border-radius:var(--rb-r-sm)}
+@keyframes rb-shimmer{0%{background-position:100% 0}100%{background-position:-100% 0}}
+
 /* utilidades */
 .rb-divider{height:1px;background:var(--rb-border);border:0;margin:var(--rb-s4) 0}
 .rb-hidden{display:none}
+.rb-flex{display:flex;align-items:center;gap:8px}
