@@ -60,7 +60,7 @@
   <h1>Execução — {{ ex.dia }}</h1>
   {% endif %}
   <div class="meta">
-    {{ ex.quando }}{% if ex.dry_run %} · <b>SIMULAÇÃO (não anexou)</b>{% endif %}
+    <b>Plano: {{ ex.plano }}</b> · {{ ex.quando }}{% if ex.dry_run %} · <b>SIMULAÇÃO (não anexou)</b>{% endif %}
     · tempo total <b>{{ (ex.tempo_total//60) }}m{{ '%02d'|format(ex.tempo_total%60) }}</b>
     (descoberta {{ ex.tempo_descoberta }}s · download {{ ex.tempo_download }}s)
     · download M={{ ex.m_download }} / leitura K={{ ex.k_leitura }}

@@ -125,6 +125,7 @@ class Execucao(Base):
     __tablename__ = "execucoes"
     id = Column(Integer, primary_key=True)
     dia = Column(String(10), index=True)             # DD/MM/AAAA processado
+    conta = Column(String(20), index=True)           # código da conta/plano (388336, 397950, 410923)
     criado_em = Column(DateTime(timezone=True), default=_now, index=True)
     dry_run = Column(Boolean, default=False)
     tempo_total = Column(Integer, default=0)          # segundos
@@ -251,7 +252,8 @@ def salvar_execucao(resumo: dict) -> int:
     with SessionLocal() as s:
         baix = resumo.get("baixados", 0)
         ex = Execucao(
-            dia=resumo.get("data"), dry_run=bool(resumo.get("dry_run", True)),
+            dia=resumo.get("data"), conta=resumo.get("conta"),
+            dry_run=bool(resumo.get("dry_run", True)),
             tempo_total=int(resumo.get("tempo_total", 0)),
             tempo_descoberta=int(resumo.get("tempo_descoberta", 0)),
             tempo_download=int(resumo.get("tempo_ate_download", 0)),
@@ -291,7 +293,8 @@ def listar_execucoes(limit: int = 100) -> list:
     with SessionLocal() as s:
         rows = s.query(Execucao).order_by(Execucao.criado_em.desc()).limit(limit).all()
         return [{
-            "id": e.id, "dia": e.dia, "criado_em": e.criado_em, "dry_run": e.dry_run,
+            "id": e.id, "dia": e.dia, "conta": e.conta, "criado_em": e.criado_em,
+            "dry_run": e.dry_run,
             "tempo_total": e.tempo_total, "tempo_descoberta": e.tempo_descoberta,
             "tempo_download": e.tempo_download, "pendentes": e.pendentes,
             "faturadas": e.faturadas, "nao_faturadas": e.nao_faturadas,
@@ -311,7 +314,8 @@ def get_execucao(eid: int) -> dict | None:
             "n_arquivos": it.n_arquivos,
         } for it in e.itens]
         return {
-            "id": e.id, "dia": e.dia, "criado_em": e.criado_em, "dry_run": e.dry_run,
+            "id": e.id, "dia": e.dia, "conta": e.conta, "criado_em": e.criado_em,
+            "dry_run": e.dry_run,
             "tempo_total": e.tempo_total, "tempo_descoberta": e.tempo_descoberta,
             "tempo_download": e.tempo_download, "pendentes": e.pendentes,
             "faturadas": e.faturadas, "nao_faturadas": e.nao_faturadas,
@@ -341,6 +345,7 @@ def _ensure_columns():
         "ALTER TABLE glosa_eventos ADD COLUMN IF NOT EXISTS demo_glosado VARCHAR(20)",
         "ALTER TABLE glosa_eventos ADD COLUMN IF NOT EXISTS demo_pago BOOLEAN DEFAULT FALSE",
         "ALTER TABLE anexacao_gtos ADD COLUMN IF NOT EXISTS liberacao VARCHAR(10)",
+        "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS conta VARCHAR(20)",
     ]
     for a in alters:
         try:

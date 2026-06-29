@@ -569,11 +569,20 @@ def _fmt_quando(dt):
         return str(dt)
 
 
+def _plano_nome(conta):
+    """Nome amigável do plano a partir do código da conta."""
+    if not conta:
+        return "—"
+    p = PLANOS.get(conta)
+    return p["label"] if p else conta
+
+
 @app.route("/relatorios/execucoes")
 def relatorios_execucoes():
     execs = db.listar_execucoes(300)
     for e in execs:
         e["quando"] = _fmt_quando(e.get("criado_em"))
+        e["plano"] = _plano_nome(e.get("conta"))
     tot = {
         "n": len(execs),
         "faturadas": sum(e["faturadas"] for e in execs),
@@ -590,6 +599,7 @@ def relatorios_execucao(eid: int):
     if not ex:
         return ("Execução não encontrada.", 404)
     ex["quando"] = _fmt_quando(ex.get("criado_em"))
+    ex["plano"] = _plano_nome(ex.get("conta"))
     return render_template("execucao.html", ex=ex, pdf=False)
 
 
@@ -599,6 +609,7 @@ def relatorios_execucao_pdf(eid: int):
     if not ex:
         return ("Execução não encontrada.", 404)
     ex["quando"] = _fmt_quando(ex.get("criado_em"))
+    ex["plano"] = _plano_nome(ex.get("conta"))
     html = render_template("execucao.html", ex=ex, pdf=True)
     from playwright.sync_api import sync_playwright
     try:

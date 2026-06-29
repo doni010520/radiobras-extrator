@@ -44,10 +44,11 @@
     <div class="card"><div class="n">{{ (tot.tempo_medio//60) }}m{{ '%02d'|format(tot.tempo_medio%60) }}</div><div class="l">tempo médio / execução</div></div>
   </div>
   <table>
-    <tr><th>Quando</th><th>Dia</th><th>Faturadas</th><th>Não faturadas</th><th>Tempo</th><th></th></tr>
+    <tr><th>Quando</th><th>Plano</th><th>Dia</th><th>Faturadas</th><th>Não faturadas</th><th>Tempo</th><th></th></tr>
     {% for e in execs %}
     <tr>
       <td>{{ e.quando }}{% if e.dry_run %} <span class="tag">simulação</span>{% endif %}</td>
+      <td style="font-weight:600">{{ e.plano }}</td>
       <td>{{ e.dia }}</td>
       <td style="color:var(--verde);font-weight:600">{{ e.faturadas }}</td>
       <td style="color:var(--warn);font-weight:600">{{ e.nao_faturadas }}</td>
@@ -56,7 +57,7 @@
       <td><a class="verlink" href="/relatorios/execucao/{{ e.id }}"><svg class="rb-ico"><use href="#i-receipt"/></svg> ver</a></td>
     </tr>
     {% endfor %}
-    {% if not execs %}<tr><td colspan="6" style="color:var(--sub)">Nenhuma execução registrada ainda.</td></tr>{% endif %}
+    {% if not execs %}<tr><td colspan="7" style="color:var(--sub)">Nenhuma execução registrada ainda.</td></tr>{% endif %}
   </table>
 </div>
 </body>

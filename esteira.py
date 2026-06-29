@@ -649,7 +649,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     n_rev = len(baixados) - len(com_solic) - len(com_justif)
     anx = [r.get("anexado") for r in baixados if r.get("anexado")]
     resumo = {
-        "data": data, "n_desc": n_desc, "m_download": m_download,
+        "data": data, "conta": conta, "n_desc": n_desc, "m_download": m_download,
         "k_leitura": k_leitura if gem else 0, "gemini": bool(gem),
         "pendentes": n_pend["n"], "baixados": len(baixados),
         "outros": len(resultados) - len(baixados),
