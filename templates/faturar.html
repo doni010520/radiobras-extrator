@@ -120,6 +120,7 @@
     <div id="ok">
       <div class="check"><svg class="rb-ico" style="width:32px;height:32px;stroke-width:2.5"><use href="#i-check"/></svg></div>
       <h2>Faturamento concluído!</h2>
+      <div id="okSub" style="color:var(--sub);font-size:14px;margin:-2px 0 6px;font-weight:600"></div>
       <div id="okerr" class="err"></div>
       <div class="cards">
         <div class="mini"><div class="n" id="okFat" style="color:var(--rb-success)">0</div><div class="l">faturadas</div></div>
@@ -173,16 +174,18 @@ function run(){
   const dia=fmtData($('dia').value);
   if(!dia){ alert('Escolha o dia.'); return; }
   const label=$('plano').selectedOptions[0].textContent;
-  pendente={plano, dia};
+  pendente={plano, dia, label};
   $('mMsg').innerHTML='Vamos faturar o dia <b>'+dia+'</b><br>no plano <b>'+label+'</b>.';
   $('modal').classList.add('show');
 }
 function fecharModal(){ $('modal').classList.remove('show'); pendente=null; }
 function confirmarRun(){
   $('modal').classList.remove('show');
-  if(pendente){ doRun(pendente.plano, pendente.dia); pendente=null; }
+  if(pendente){ doRun(pendente.plano, pendente.dia, pendente.label); pendente=null; }
 }
-async function doRun(plano, dia){
+let runInfo=null;
+async function doRun(plano, dia, label){
+  runInfo={dia, label};
   setBusy(true);
   $('ok').style.display='none';
   $('prog').style.display='block';
@@ -225,6 +228,7 @@ function onDone(j){
   $('ok').style.display='block';
   if(j.error){ $('okerr').textContent='Concluído com erro: '+j.error; }
   else { $('formrow').style.display='none'; }   // some com os seletores no relatório
+  if(runInfo){ $('okSub').textContent=runInfo.dia+' · '+runInfo.label; }
   const s=j.resumo||{};
   const fat=s.anexado_ok||0, pend=s.pendentes||0, tt=s.tempo_total||0;
   $('okFat').textContent=fat;
