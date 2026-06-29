@@ -58,6 +58,15 @@ html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--rb-bg);background-attachment:fixed;background-color:var(--rb-bg-solid);
   color:var(--rb-fg);font-family:var(--rb-font);min-height:100dvh;
   font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+/* grid futurista sutil (HUD) que desvanece — só no LIGHT; dark já está ótimo */
+body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background-image:
+    linear-gradient(rgba(15,122,79,.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15,122,79,.05) 1px, transparent 1px);
+  background-size:40px 40px;background-position:center top;
+  -webkit-mask-image:radial-gradient(135% 95% at 50% -5%, #000 30%, transparent 78%);
+          mask-image:radial-gradient(135% 95% at 50% -5%, #000 30%, transparent 78%)}
+[data-theme="dark"] body::before{display:none}
 h1,h2,h3,h4{margin:0 0 .4em;line-height:1.25;font-weight:700;letter-spacing:-.01em}
 h1{font-size:24px} h2{font-size:19px} h3{font-size:16px}
 p{margin:0 0 1em}
