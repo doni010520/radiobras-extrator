@@ -38,14 +38,14 @@
     white-space:nowrap;transition:background .18s ease,border-color .18s ease;cursor:pointer;}
   .rbnav-logout:hover{background:var(--rbnav-hover);border-color:rgba(255,255,255,.4);text-decoration:none;}
   [data-theme="dark"] .rbnav-logout:hover{border-color:var(--rb-border-strong,rgba(255,255,255,.16));}
-  @media(max-width:1080px){.rbnav-user{display:none;}}
+  @media(max-width:1120px){.rbnav-user{display:none;}}
   .rbnav-toggle{background:none;border:none;cursor:pointer;font-size:17px;line-height:1;padding:6px;
     border-radius:var(--rb-r-sm,8px);color:var(--rbnav-fg);transition:background .18s ease;}
   .rbnav-toggle:hover{background:var(--rbnav-hover);}
-  @media(max-width:1080px){.rbnav-date{display:none;}}
-  @media(max-width:920px){.rbnav{padding:0 14px;}.rbnav-title{display:none;}
+  @media(max-width:1120px){.rbnav-date,.rbnav-title{display:none;}.rbnav{padding:0 16px;}
     .rbnav-menu{gap:2px;}.rbnav-link{padding:8px 10px;font-size:13px;}}
-  @media(max-width:640px){.rbnav-logo img{height:34px;}.rbnav-link{padding:7px 7px;font-size:12px;}}
+  @media(max-width:860px){.rbnav{padding:0 12px;}.rbnav-link{padding:7px 8px;font-size:12.5px;}}
+  @media(max-width:640px){.rbnav-logo img{height:34px;}.rbnav-link{padding:6px 6px;font-size:11.5px;}}
 </style>
 <nav class="rbnav">
   <a class="rbnav-brand" href="/"><span class="rbnav-logo"><img src="/static/mascote.png" alt="RadioBras"></span>
