@@ -197,7 +197,6 @@ async function doRun(plano, dia, label){
     jid=j.job;
     $('loglink').href='/faturar/log/'+jid; $('loglink2').href='/faturar/log/'+jid;
     pollT=setInterval(poll, 2500);
-    etaT=setInterval(tickEta, 1000);
     poll();
   }catch(e){ $('msg').innerHTML='<span class="err">Erro de rede.</span>'; setBusy(false); }
 }
