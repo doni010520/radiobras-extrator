@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revisão</title>
+{% include '_head.html' %}
+<style>
+  :root{--verde:var(--rb-primary);--bg:var(--rb-bg);--card:var(--rb-surface);--linha:var(--rb-border);--txt:var(--rb-fg);--sub:var(--rb-fg-muted)}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt)}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 16px}
+  h1{margin:6px 0 4px}
+  .tabs{display:flex;gap:6px;margin:6px 0 18px;flex-wrap:wrap}
+  .tab{display:inline-flex;align-items:center;gap:7px;text-decoration:none;font-size:13.5px;font-weight:600;
+    padding:8px 14px;border-radius:var(--rb-r-pill);border:1px solid var(--rb-border);color:var(--rb-fg-muted);
+    background:var(--rb-surface);transition:all .16s}
+  .tab:hover{color:var(--rb-fg);border-color:var(--rb-border-strong)}
+  .tab.on{background:var(--rb-primary);color:var(--rb-on-primary);border-color:transparent}
+  .tab .n{font-variant-numeric:tabular-nums;background:rgba(0,0,0,.12);padding:0 7px;border-radius:999px;font-size:11.5px}
+  .tab.on .n{background:rgba(255,255,255,.22)}
+  .grp{margin-bottom:22px}
+  .grp-h{display:flex;align-items:center;gap:9px;margin:0 0 8px;font-size:14px;font-weight:700;color:var(--rb-fg)}
+  .grp-h .u{color:var(--rb-primary)}
+  .grp-h .c{font-weight:600;font-size:12px;color:var(--rb-fg-muted);background:var(--rb-surface-2);
+    padding:2px 9px;border-radius:999px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--linha);
+    border-radius:var(--rb-r-lg);overflow:hidden;font-variant-numeric:tabular-nums}
+  th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--linha);font-size:13.5px;vertical-align:top}
+  th{background:var(--rb-surface-2);color:var(--sub);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+  tr:last-child td{border-bottom:0}
+  tr:hover td{background:var(--rb-surface-2)}
+  td.gto{font-weight:700;white-space:nowrap}
+  td.mut{color:var(--rb-fg-muted)}
+  .chk{width:20px;height:20px;cursor:pointer;accent-color:var(--rb-primary);margin:0}
+  .cat{display:inline-flex;align-items:center;font-size:11px;font-weight:700;padding:2px 8px;border-radius:var(--rb-r-pill);
+    line-height:1.6;white-space:nowrap;text-transform:uppercase;letter-spacing:.03em}
+  .cat.revisao{background:var(--rb-warning-bg,#fff4e0);color:var(--rb-warning,#9a6400)}
+  .cat.sem_solicitacao{background:var(--rb-danger-bg);color:var(--rb-danger)}
+  .cat.justificativa,.cat.outro{background:var(--rb-info-bg);color:var(--rb-info)}
+  tr.done td{opacity:.5}
+  tr.done td.motivo{text-decoration:line-through}
+  .who{font-size:12px;color:var(--rb-fg-muted)}
+  .reab{color:var(--rb-primary);cursor:pointer;font-weight:600;font-size:12.5px}
+  .reab:hover{text-decoration:underline}
+  .empty{background:var(--card);border:1px solid var(--linha);border-radius:var(--rb-r-lg);padding:44px 20px;
+    text-align:center;color:var(--rb-fg-muted)}
+  .empty svg{width:40px;height:40px;color:var(--rb-success);margin-bottom:10px}
+  .empty b{display:block;color:var(--rb-fg);font-size:16px;margin-bottom:4px}
+</style>
+</head>
+<body>
+{% include '_topnav.html' %}
+<div class="wrap">
+  <div class="rb-page-head">
+    <div class="ttl">
+      <span class="badge"><svg class="rb-ico rb-ico--lg"><use href="#i-alert"/></svg></span>
+      <div>
+        <h1>Revisão humana</h1>
+        <div class="sub">Itens que uma execução não conseguiu faturar sozinha. Resolva e marque como concluído.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <a class="tab {{ 'on' if status=='abertas' }}" href="/revisao?status=abertas">
+      <svg class="rb-ico"><use href="#i-alert"/></svg> Abertas <span class="n" id="cAb">{{ n_abertas }}</span></a>
+    <a class="tab {{ 'on' if status=='resolvidas' }}" href="/revisao?status=resolvidas">
+      <svg class="rb-ico"><use href="#i-check-circle"/></svg> Resolvidas</a>
+    <a class="tab {{ 'on' if status=='todas' }}" href="/revisao?status=todas">
+      <svg class="rb-ico"><use href="#i-grid"/></svg> Todas</a>
+  </div>
+
+  {% if not itens %}
+    <div class="empty">
+      <svg><use href="#i-check-circle"/></svg>
+      {% if status=='abertas' %}<b>Nenhuma pendência aberta</b>Tudo em dia — nada aguardando revisão.
+      {% else %}<b>Nada por aqui</b>Nenhum item neste filtro.{% endif %}
+    </div>
+  {% else %}
+    {% for grupo in itens|groupby('grupo') %}
+    <div class="grp">
+      <div class="grp-h">
+        <svg class="rb-ico"><use href="#i-calendar"/></svg>
+        <span class="u">{{ grupo.grouper }}</span>
+        <span class="c">{{ grupo.list|selectattr('resolvido','equalto',false)|list|length }} aberta(s) · {{ grupo.list|length }} no total</span>
+      </div>
+      <table>
+        <tr><th style="width:36px"></th><th>GTO</th><th>Paciente</th><th>Motivo</th><th>Tipo</th><th>Status</th></tr>
+        {% for p in grupo.list %}
+        <tr data-id="{{ p.id }}" class="{{ 'done' if p.resolvido }}">
+          <td>
+            <input type="checkbox" class="chk" {{ 'checked' if p.resolvido }}
+                   onchange="marcar({{ p.id }}, this)" title="Marcar como resolvido">
+          </td>
+          <td class="gto">{{ p.gto }}</td>
+          <td>{{ p.paciente or '—' }}</td>
+          <td class="motivo">{{ p.motivo or '—' }}</td>
+          <td><span class="cat {{ p.categoria or 'outro' }}">{{ (p.categoria or 'revisão')|replace('_',' ') }}</span></td>
+          <td class="stat">
+            {% if p.resolvido %}
+              <span class="who">✓ {{ p.resolvido_por }}{% if p.resolvido_em %} · {{ p.resolvido_em.strftime('%d/%m %H:%M') }}{% endif %}</span>
+            {% else %}
+              <span class="who">aguardando</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endfor %}
+  {% endif %}
+</div>
+<script>
+async function marcar(id, el){
+  const resolver = el.checked;
+  const url = '/revisao/'+id+(resolver?'/resolver':'/reabrir');
+  el.disabled = true;
+  try{
+    const r = await fetch(url, {method:'POST', headers:{'X-Requested-With':'fetch'}});
+    const j = await r.json();
+    const tr = el.closest('tr');
+    tr.classList.toggle('done', resolver);
+    // atualiza contadores
+    var c = document.getElementById('cAb'); if(c && typeof j.abertas!=='undefined') c.textContent = j.abertas;
+    var badge = document.getElementById('rbNavRev'); if(badge && typeof j.abertas!=='undefined') badge.textContent = j.abertas;
+    // atualiza a coluna de status
+    var stat = tr.querySelector('.stat .who');
+    if(stat) stat.textContent = resolver ? '✓ agora' : 'aguardando';
+    // se estamos na aba "Abertas", some com a linha resolvida
+    if(resolver && location.search.indexOf('resolvidas')<0 && location.search.indexOf('todas')<0){
+      tr.style.transition='opacity .4s'; tr.style.opacity='0';
+      setTimeout(()=>{ tr.remove(); }, 420);
+    }
+  }catch(e){
+    el.checked = !resolver; alert('Falha ao atualizar. Tente de novo.');
+  }finally{ el.disabled = false; }
+}
+</script>
+</body>
+</html>

@@ -65,7 +65,8 @@ def _injeta_usuario():
     return {"usuario_atual": {"username": session.get("username"),
                              "nome": session.get("nome"),
                              "role": session.get("role")} if session.get("uid") else None,
-            "usuario_atual_id": session.get("uid")}
+            "usuario_atual_id": session.get("uid"),
+            "pendencias_abertas": db.contar_pendencias_abertas() if session.get("uid") else 0}
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -445,6 +446,38 @@ def fechar_simples():
 def gtos_page():
     """Detalhe de GTOs / funil de um dia (mockup 2)."""
     return render_template("gtos.html")
+
+
+# ── Revisão humana (backlog de pendências) ─────────────────────────────────────
+@app.route("/revisao")
+def revisao_page():
+    """Backlog: itens não faturados que precisam de ação humana."""
+    status = request.args.get("status", "abertas")
+    if status not in ("abertas", "resolvidas", "todas"):
+        status = "abertas"
+    itens = db.listar_pendencias(status=status)
+    for p in itens:
+        p["unidade"] = _plano_nome(p.get("conta")) or (p.get("conta") or "—")
+        p["grupo"] = "%s · dia %s" % (p["unidade"], p.get("dia") or "—")
+    return render_template("revisao.html", itens=itens, status=status,
+                           n_abertas=db.contar_pendencias_abertas())
+
+
+@app.route("/revisao/<int:pid>/resolver", methods=["POST"])
+def revisao_resolver(pid):
+    obs = (request.form.get("obs") or (request.json.get("obs") if request.is_json else None)) if (request.form or request.is_json) else None
+    db.resolver_pendencia(pid, session.get("username") or session.get("nome") or "?", obs=obs)
+    if request.is_json or request.headers.get("X-Requested-With") == "fetch":
+        return jsonify({"ok": True, "abertas": db.contar_pendencias_abertas()})
+    return redirect(url_for("revisao_page", status=request.args.get("status", "abertas")))
+
+
+@app.route("/revisao/<int:pid>/reabrir", methods=["POST"])
+def revisao_reabrir(pid):
+    db.reabrir_pendencia(pid)
+    if request.is_json or request.headers.get("X-Requested-With") == "fetch":
+        return jsonify({"ok": True, "abertas": db.contar_pendencias_abertas()})
+    return redirect(url_for("revisao_page", status=request.args.get("status", "abertas")))
 
 
 @app.route("/relatorio")

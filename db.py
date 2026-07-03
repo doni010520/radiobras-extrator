@@ -247,10 +247,91 @@ def _seed_admin():
         print(f"[db] seed admin falhou: {e}", flush=True)
 
 
+class Pendencia(Base):
+    """Item que precisa de revisão humana (não faturado numa execução).
+    Backlog: dedupe por (conta, dia, gto); fecha sozinho se depois for faturado."""
+    __tablename__ = "pendencias"
+    id = Column(Integer, primary_key=True)
+    execucao_id = Column(Integer, ForeignKey("execucoes.id", ondelete="SET NULL"))
+    conta = Column(String(20), index=True)
+    dia = Column(String(10), index=True)
+    gto = Column(String(30), index=True)
+    paciente = Column(String(200))
+    categoria = Column(String(20))          # sem_solicitacao | revisao | ...
+    motivo = Column(Text)
+    criado_em = Column(DateTime(timezone=True), default=_now, index=True)
+    resolvido = Column(Boolean, default=False, index=True)
+    resolvido_em = Column(DateTime(timezone=True))
+    resolvido_por = Column(String(60))      # username ou 'sistema'
+    obs = Column(Text)
+
+
+def _sync_pendencias(s, conta, dia, exec_id, itens_info):
+    """Cria/atualiza o backlog de revisão a partir dos itens de uma execução real.
+    itens_info: lista de (gto, paciente, categoria, motivo, faturado)."""
+    for gto, paciente, cat, motivo, faturado in itens_info:
+        p = (s.query(Pendencia)
+             .filter(Pendencia.conta == conta, Pendencia.dia == dia, Pendencia.gto == gto)
+             .first())
+        if faturado:
+            if p and not p.resolvido:        # foi anexado depois -> fecha sozinho
+                p.resolvido = True; p.resolvido_em = _now(); p.resolvido_por = "sistema"
+            continue
+        if p:                                 # já existe pendência
+            if not p.resolvido:               # atualiza (não reabre se já resolvida à mão)
+                p.motivo = motivo; p.categoria = cat; p.execucao_id = exec_id
+        else:
+            s.add(Pendencia(execucao_id=exec_id, conta=conta, dia=dia, gto=gto,
+                            paciente=paciente, categoria=cat, motivo=motivo))
+    s.commit()
+
+
+def contar_pendencias_abertas() -> int:
+    try:
+        with SessionLocal() as s:
+            return s.query(Pendencia).filter(Pendencia.resolvido == False).count()  # noqa: E712
+    except Exception:
+        return 0
+
+
+def listar_pendencias(status: str = "abertas", limit: int = 500) -> list:
+    with SessionLocal() as s:
+        q = s.query(Pendencia)
+        if status == "abertas":
+            q = q.filter(Pendencia.resolvido == False)      # noqa: E712
+        elif status == "resolvidas":
+            q = q.filter(Pendencia.resolvido == True)        # noqa: E712
+        rows = q.order_by(Pendencia.resolvido, Pendencia.dia, Pendencia.criado_em.desc()).limit(limit).all()
+        return [{"id": p.id, "conta": p.conta, "dia": p.dia, "gto": p.gto,
+                 "paciente": p.paciente, "categoria": p.categoria, "motivo": p.motivo,
+                 "criado_em": p.criado_em, "resolvido": p.resolvido,
+                 "resolvido_em": p.resolvido_em, "resolvido_por": p.resolvido_por,
+                 "obs": p.obs} for p in rows]
+
+
+def resolver_pendencia(pid: int, username: str, obs: str = None):
+    with SessionLocal() as s:
+        p = s.get(Pendencia, pid)
+        if p:
+            p.resolvido = True; p.resolvido_em = _now(); p.resolvido_por = username or "?"
+            if obs is not None:
+                p.obs = obs
+            s.commit()
+
+
+def reabrir_pendencia(pid: int):
+    with SessionLocal() as s:
+        p = s.get(Pendencia, pid)
+        if p:
+            p.resolvido = False; p.resolvido_em = None; p.resolvido_por = None
+            s.commit()
+
+
 def salvar_execucao(resumo: dict) -> int:
-    """Persiste uma execução (resumo do rodar_esteira) + seus itens."""
+    """Persiste uma execução (resumo do rodar_esteira) + seus itens + backlog."""
     with SessionLocal() as s:
         baix = resumo.get("baixados", 0)
+        itens_info = []
         ex = Execucao(
             dia=resumo.get("data"), conta=resumo.get("conta"),
             dry_run=bool(resumo.get("dry_run", True)),
@@ -283,8 +364,15 @@ def salvar_execucao(resumo: dict) -> int:
                 exames_lidos=", ".join(g.get("exames_lidos") or []),
                 n_arquivos=len(x.get("laudo_imgs") or []) + (1 if x.get("solicitacao") else 0),
             ))
+            itens_info.append((str(x.get("gto")), x.get("paciente"), cat, motivo, faturado))
         s.add(ex)
         s.commit()
+        # backlog de revisão humana — só em execução REAL (dry_run não gera pendência)
+        if not bool(resumo.get("dry_run", True)):
+            try:
+                _sync_pendencias(s, resumo.get("conta"), resumo.get("data"), ex.id, itens_info)
+            except Exception as e:
+                print(f"[db] sync pendencias falhou: {e}", flush=True)
         return ex.id
 
 

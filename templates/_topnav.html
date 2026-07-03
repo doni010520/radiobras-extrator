@@ -54,7 +54,7 @@
     <a class="rbnav-link" href="/" data-path="/">Dashboard</a>
     <a class="rbnav-link" href="/faturar" data-path="/faturar">Faturar dia</a>
     <a class="rbnav-link" href="/gtos" data-path="/gtos">GTOs</a>
-    <a class="rbnav-link" href="/gtos" data-path="/revisao">Revisão <span class="rbnav-badge" id="rbNavRev">0</span></a>
+    <a class="rbnav-link" href="/revisao" data-path="/revisao">Revisão{% if pendencias_abertas and pendencias_abertas > 0 %} <span class="rbnav-badge" id="rbNavRev">{{ pendencias_abertas }}</span>{% else %}<span class="rbnav-badge" id="rbNavRev" style="display:none">0</span>{% endif %}</a>
     <a class="rbnav-link" href="/glosas" data-path="/glosas">Glosas</a>
     <a class="rbnav-link" href="/relatorios" data-path="/relatorios">Relatórios</a>
     {% if usuario_atual and usuario_atual.role == 'admin' %}<a class="rbnav-link" href="/usuarios" data-path="/usuarios">Usuários</a>{% endif %}
