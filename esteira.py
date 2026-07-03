@@ -317,7 +317,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
 
 
 def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_key=None,
-                  review_dir=None, k_attach=0, dry_run=True, conta=None, senha_portal=None):
+                  review_dir=None, k_attach=0, dry_run=True, conta=None, senha_portal=None,
+                  email_proradis=None, senha_proradis=None):
     """Pipeline de até 4 estágios (descoberta -> download -> decisão -> anexação).
     conta = código da conta RedeUna (plano); usa o login + convênios/segmentos dela.
     gemini_key liga a decisão. k_attach>0 liga a ANEXAÇÃO (estágio 4): auto e
@@ -346,6 +347,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             return (_odo_user or du), senha_portal
         _du, pwd = get_credentials_odonto()
         return (_odo_user or _du), pwd
+
+    def _prorad_creds():
+        """Login PRORADIS: email+senha cadastrados na UI (email/senha_proradis) ou,
+        na falta, SMARTRIS_EMAIL/SMARTRIS_PASSWORD do ambiente."""
+        if senha_proradis:
+            em = email_proradis
+            if not em:
+                try:
+                    em, _ = get_credentials()
+                except Exception:
+                    em = None
+            return em, senha_proradis
+        return get_credentials()
 
     gem = None
     if gemini_key:
@@ -576,7 +590,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
 
     def _prorad_setup():
         try:
-            email, password = get_credentials()
+            email, password = _prorad_creds()
             with sync_playwright() as pw0:
                 br0, ctx0, pg0 = _login_playwright(pw0, email, password)
                 ctx0.set_default_timeout(45000); ctx0.set_default_navigation_timeout(60000)

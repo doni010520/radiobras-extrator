@@ -31,6 +31,8 @@
   .msg{font-size:12.5px;margin-top:10px;min-height:16px}
   .meta{font-size:11.5px;color:var(--sub);margin-top:8px}
   .note{background:var(--rb-info-bg);color:var(--rb-info);border-radius:var(--rb-r);padding:11px 14px;font-size:12.5px;line-height:1.5;margin-bottom:18px}
+  .sec{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--sub);margin:22px 2px 10px}
+  .sec span{font-weight:600;text-transform:none;letter-spacing:0;color:var(--rb-fg-muted);opacity:.85}
 </style>
 </head>
 <body>
@@ -46,8 +48,35 @@
     </div>
   </div>
 
-  <div class="note">Cada código (unidade) tem sua própria senha no portal. Cadastre aqui — ela passa a valer nas próximas execuções, sem precisar de deploy. Use <b>Testar</b> pra confirmar o login antes de faturar (leva ~30s).</div>
+  <div class="note">As senhas ficam salvas no banco (não no env) e cada uma passa a valer nas próximas execuções, sem deploy. Use <b>Testar</b> pra confirmar o login antes de faturar (leva ~30s).</div>
 
+  <div class="sec">PRORADIS <span>(SmartRIS — conta única: e-mail + senha)</span></div>
+  <div class="card" data-pr="1">
+    <div class="card-h">
+      <div>
+        <div class="nm">PRORADIS / SmartRIS</div>
+        <div class="cod">de onde baixamos laudos e imagens</div>
+      </div>
+      {% if proradis and proradis.tem %}<span class="st on"><svg class="rb-ico"><use href="#i-check-circle"/></svg> cadastrada</span>
+      {% else %}<span class="st off"><svg class="rb-ico"><use href="#i-alert"/></svg> sem senha</span>{% endif %}
+    </div>
+    <div class="row">
+      <div class="fld">
+        <label>E-mail</label>
+        <input type="text" class="pr-email" autocomplete="off" value="{{ proradis.email or '' }}" placeholder="email do PRORADIS">
+      </div>
+      <div class="fld">
+        <label>Senha</label>
+        <input type="password" class="pr-pw" autocomplete="new-password" placeholder="{{ '••••••••  (cadastrada — digite pra trocar)' if (proradis and proradis.tem) else 'senha do PRORADIS' }}">
+      </div>
+      <button class="btn" onclick="salvarPr(this)"><svg class="rb-ico"><use href="#i-check"/></svg> Salvar</button>
+      <button class="btn sec" onclick="testarPr(this)"><svg class="rb-ico"><use href="#i-refresh"/></svg> Testar</button>
+    </div>
+    <div class="msg"></div>
+    {% if proradis and proradis.atualizado_em %}<div class="meta">Atualizada em {{ proradis.atualizado_em.strftime('%d/%m/%Y %H:%M') }}{% if proradis.por %} por {{ proradis.por }}{% endif %}.</div>{% endif %}
+  </div>
+
+  <div class="sec">OdontoPrev / RedeUna <span>(uma senha por código de unidade)</span></div>
   {% for p in planos %}
   <div class="card" data-conta="{{ p.conta }}">
     <div class="card-h">
@@ -99,6 +128,38 @@ async function testar(conta, btn){
     else if(j.ok){ setMsg(conta,'✓ Login OK — senha válida.',true); }
     else{ setMsg(conta,'✗ Login falhou: '+(j.msg||'senha inválida ou conta bloqueada'),false); }
   }catch(e){ setMsg(conta,'Falha de rede (o teste pode ter estourado o tempo).',false); }
+  finally{ btn.disabled=false; }
+}
+
+// ── PRORADIS (conta única) ──
+function prCard(){ return document.querySelector('.card[data-pr="1"]'); }
+function setPrMsg(txt, ok){ var m=prCard().querySelector('.msg'); m.textContent=txt; m.style.color= ok===true?'var(--rb-success)': ok===false?'var(--rb-danger)':'var(--rb-fg-muted)'; }
+async function prPost(url){
+  const c=prCard(); const fd=new FormData();
+  fd.append('email', c.querySelector('.pr-email').value.trim());
+  fd.append('senha', c.querySelector('.pr-pw').value);
+  const r=await fetch(url,{method:'POST',body:fd}); return r.json();
+}
+async function salvarPr(btn){
+  const c=prCard();
+  if(!c.querySelector('.pr-pw').value && !c.querySelector('.pr-email').value){ setPrMsg('Preencha e-mail e/ou senha.',false); return; }
+  btn.disabled=true; setPrMsg('Salvando…',null);
+  try{
+    const j=await prPost('/portal/proradis');
+    if(j.error){ setPrMsg('Erro: '+j.error,false); }
+    else{ setPrMsg('Credencial salva. Recomendo Testar o login.',true);
+      const st=c.querySelector('.st'); st.className='st on'; st.innerHTML='<svg class="rb-ico"><use href="#i-check-circle"/></svg> cadastrada'; }
+  }catch(e){ setPrMsg('Falha de rede.',false); }
+  finally{ btn.disabled=false; }
+}
+async function testarPr(btn){
+  btn.disabled=true; setPrMsg('Testando login no PRORADIS… (~30s)',null);
+  try{
+    const j=await prPost('/portal/proradis/testar');
+    if(j.error){ setPrMsg('Erro: '+j.error,false); }
+    else if(j.ok){ setPrMsg('✓ Login OK — credencial válida.',true); }
+    else{ setPrMsg('✗ Login falhou: '+(j.msg||'e-mail/senha inválidos'),false); }
+  }catch(e){ setPrMsg('Falha de rede (o teste pode ter estourado o tempo).',false); }
   finally{ btn.disabled=false; }
 }
 </script>
