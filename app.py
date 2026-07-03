@@ -495,33 +495,16 @@ def _testar_login_portal(conta, senha):
         return False, str(e)[:160]
 
 
-def _testar_login_proradis(email, senha):
-    """Teste de login ao vivo no PRORADIS/SmartRIS (email + senha). (ok, msg)."""
-    try:
-        from playwright.sync_api import sync_playwright
-        from extrator_arquivos import _login_playwright
-        with sync_playwright() as pw:
-            br, ctx, pg = _login_playwright(pw, email, senha)
-            url = pg.url
-            br.close()
-        return True, f"Login OK ({url[:50]})"
-    except Exception as e:
-        return False, str(e)[:160]
-
-
 @app.route("/portal")
 def portal_page():
-    """Cadastro das senhas: portal OdontoPrev (por código) + PRORADIS (conta única)."""
+    """Cadastro da senha do portal por código (plano)."""
     status = db.listar_portal_status()
     planos = [{"conta": c, "nome": _plano_nome(c), "label": v.get("label", c),
                "tem": status.get(c, {}).get("tem", False),
                "atualizado_em": status.get(c, {}).get("atualizado_em"),
                "por": status.get(c, {}).get("por")}
               for c, v in PLANOS.items()]
-    pr = db.proradis_status()
-    if not pr.get("email"):
-        pr["email"] = os.environ.get("SMARTRIS_EMAIL")   # prefill do env (não secreto)
-    return render_template("portal.html", planos=planos, proradis=pr)
+    return render_template("portal.html", planos=planos)
 
 
 @app.route("/portal/senha", methods=["POST"])
@@ -548,33 +531,6 @@ def portal_testar():
     if not senha:
         return jsonify({"error": "sem senha para testar"}), 400
     ok, msg = _testar_login_portal(conta, senha)
-    return jsonify({"ok": ok, "msg": msg})
-
-
-@app.route("/portal/proradis", methods=["POST"])
-def proradis_salvar():
-    email = (request.form.get("email") or "").strip()
-    senha = request.form.get("senha") or ""
-    if not senha and not email:
-        return jsonify({"error": "informe email e/ou senha"}), 400
-    try:
-        db.set_proradis_cred(email or None, senha or None, username=session.get("username"))
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"error": str(e)[:120]}), 500
-
-
-@app.route("/portal/proradis/testar", methods=["POST"])
-def proradis_testar():
-    email = (request.form.get("email") or "").strip()
-    senha = request.form.get("senha") or ""
-    if not email or not senha:                       # completa com o que já está salvo
-        se, ss = db.get_proradis_cred()
-        email = email or se or os.environ.get("SMARTRIS_EMAIL")
-        senha = senha or ss
-    if not email or not senha:
-        return jsonify({"error": "sem email/senha para testar"}), 400
-    ok, msg = _testar_login_proradis(email, senha)
     return jsonify({"ok": ok, "msg": msg})
 
 
@@ -854,7 +810,6 @@ def faturar_run():
     gkey = os.environ.get("GEMINI_API_KEY")
 
     senha_portal = db.get_portal_senha(plano or None)
-    pr_email, pr_senha = db.get_proradis_cred()
 
     def _go():
         try:
@@ -862,8 +817,7 @@ def faturar_run():
             job["resumo"] = rodar_esteira(data, 6, 3, 5, lambda m: job["log"].append(m),
                                           gemini_key=gkey, review_dir=review_dir,
                                           k_attach=3, dry_run=dry, conta=(plano or None),
-                                          senha_portal=senha_portal,
-                                          email_proradis=pr_email, senha_proradis=pr_senha)
+                                          senha_portal=senha_portal)
             if not dry and job["resumo"]:
                 try:
                     job["execucao_id"] = db.salvar_execucao(job["resumo"])

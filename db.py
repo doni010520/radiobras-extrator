@@ -372,56 +372,6 @@ def listar_portal_status() -> dict:
         return {}
 
 
-class ProradisCredencial(Base):
-    """Credencial do PRORADIS/SmartRIS (conta única: email + senha).
-    Sobrepõe SMARTRIS_EMAIL/SMARTRIS_PASSWORD do ambiente quando cadastrada."""
-    __tablename__ = "proradis_credencial"
-    id = Column(Integer, primary_key=True)   # sempre 1 (linha única)
-    email = Column(String(200))
-    senha = Column(Text)
-    atualizado_em = Column(DateTime(timezone=True), default=_now, onupdate=_now)
-    atualizado_por = Column(String(60))
-
-
-def set_proradis_cred(email: str, senha: str, username: str = None):
-    with SessionLocal() as s:
-        c = s.get(ProradisCredencial, 1)
-        if c:
-            if email:
-                c.email = email
-            if senha:
-                c.senha = senha
-            c.atualizado_por = username
-        else:
-            s.add(ProradisCredencial(id=1, email=email, senha=senha, atualizado_por=username))
-        s.commit()
-
-
-def get_proradis_cred():
-    """(email, senha) cadastrados na UI ou (None, None) se não houver."""
-    try:
-        with SessionLocal() as s:
-            c = s.get(ProradisCredencial, 1)
-            if c and c.senha:
-                return c.email, c.senha
-    except Exception:
-        pass
-    return None, None
-
-
-def proradis_status() -> dict:
-    """Se há senha cadastrada, o email (não secreto) e quando/quem (nunca a senha)."""
-    try:
-        with SessionLocal() as s:
-            c = s.get(ProradisCredencial, 1)
-            if c:
-                return {"tem": bool(c.senha), "email": c.email,
-                        "atualizado_em": c.atualizado_em, "por": c.atualizado_por}
-    except Exception:
-        pass
-    return {"tem": False, "email": None, "atualizado_em": None, "por": None}
-
-
 def salvar_execucao(resumo: dict) -> int:
     """Persiste uma execução (resumo do rodar_esteira) + seus itens + backlog."""
     with SessionLocal() as s:
