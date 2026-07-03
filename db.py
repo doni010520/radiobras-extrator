@@ -327,6 +327,51 @@ def reabrir_pendencia(pid: int):
             s.commit()
 
 
+class PortalCredencial(Base):
+    """Senha do portal RedeUna/OdontoPrev por código de conta (plano).
+    Sobrepõe a ODONTOPREV_PASSWORD do ambiente quando cadastrada."""
+    __tablename__ = "portal_credenciais"
+    conta = Column(String(20), primary_key=True)
+    senha = Column(Text)
+    atualizado_em = Column(DateTime(timezone=True), default=_now, onupdate=_now)
+    atualizado_por = Column(String(60))
+
+
+def set_portal_senha(conta: str, senha: str, username: str = None):
+    conta = (conta or "").strip()
+    if not conta:
+        raise ValueError("conta obrigatória")
+    with SessionLocal() as s:
+        c = s.get(PortalCredencial, conta)
+        if c:
+            c.senha = senha; c.atualizado_por = username
+        else:
+            s.add(PortalCredencial(conta=conta, senha=senha, atualizado_por=username))
+        s.commit()
+
+
+def get_portal_senha(conta: str):
+    if not conta:
+        return None
+    try:
+        with SessionLocal() as s:
+            c = s.get(PortalCredencial, conta)
+            return c.senha if (c and c.senha) else None
+    except Exception:
+        return None
+
+
+def listar_portal_status() -> dict:
+    """Por conta: se tem senha cadastrada, quando e por quem (nunca devolve a senha)."""
+    try:
+        with SessionLocal() as s:
+            return {c.conta: {"tem": bool(c.senha), "atualizado_em": c.atualizado_em,
+                              "por": c.atualizado_por}
+                    for c in s.query(PortalCredencial).all()}
+    except Exception:
+        return {}
+
+
 def salvar_execucao(resumo: dict) -> int:
     """Persiste uma execução (resumo do rodar_esteira) + seus itens + backlog."""
     with SessionLocal() as s:

@@ -317,7 +317,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
 
 
 def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_key=None,
-                  review_dir=None, k_attach=0, dry_run=True, conta=None):
+                  review_dir=None, k_attach=0, dry_run=True, conta=None, senha_portal=None):
     """Pipeline de até 4 estágios (descoberta -> download -> decisão -> anexação).
     conta = código da conta RedeUna (plano); usa o login + convênios/segmentos dela.
     gemini_key liga a decisão. k_attach>0 liga a ANEXAÇÃO (estágio 4): auto e
@@ -333,6 +333,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
 
     def _t(m):
         log(f"[{time.monotonic() - t_glob:6.0f}s] {m}")
+
+    def _odo_creds():
+        """Login OdontoPrev: user = código da conta (plano); senha = por-código
+        cadastrada na UI (senha_portal) ou, na falta, a ODONTOPREV_PASSWORD do env."""
+        if senha_portal:
+            du = None
+            try:
+                du, _ = get_credentials_odonto()
+            except Exception:
+                du = None
+            return (_odo_user or du), senha_portal
+        _du, pwd = get_credentials_odonto()
+        return (_odo_user or _du), pwd
 
     gem = None
     if gemini_key:
@@ -361,8 +374,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     def _odonto_setup():
         """Login OdontoPrev (1 navegador): captura o Bearer token da sessão + lista
         os alvos. Depois disso a descoberta é HTTP puro (sem render de popup)."""
-        _du, pwd = get_credentials_odonto()
-        user = _odo_user or _du   # plano selecionado -> login = código da conta
+        user, pwd = _odo_creds()   # plano selecionado -> login = código da conta
         tok = {"v": None}
         alvos = []
         with sync_playwright() as pw:
@@ -511,8 +523,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
 
     # ---- ESTÁGIO 4: anexação (OdontoPrev) ----
     def anexador(wid):
-        _du, pwd = get_credentials_odonto()
-        user = _odo_user or _du   # plano selecionado -> login = código da conta
+        user, pwd = _odo_creds()   # plano selecionado -> login = código da conta
         with sync_playwright() as pw:
             br, ctx, pg = login_odonto(pw, user, pwd)
             ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
@@ -564,24 +575,39 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     setup = {}
 
     def _prorad_setup():
-        email, password = get_credentials()
-        with sync_playwright() as pw0:
-            br0, ctx0, pg0 = _login_playwright(pw0, email, password)
-            ctx0.set_default_timeout(45000); ctx0.set_default_navigation_timeout(60000)
-            df = _get_relatorio_analitico(pg0, _convenios, _segmentos, data)
-            setup["by_norm"] = _build_by_norm(df)
-            setup["state"] = ctx0.storage_state()
-            br0.close()
+        try:
+            email, password = get_credentials()
+            with sync_playwright() as pw0:
+                br0, ctx0, pg0 = _login_playwright(pw0, email, password)
+                ctx0.set_default_timeout(45000); ctx0.set_default_navigation_timeout(60000)
+                df = _get_relatorio_analitico(pg0, _convenios, _segmentos, data)
+                setup["by_norm"] = _build_by_norm(df)
+                setup["state"] = ctx0.storage_state()
+                br0.close()
+        except Exception as e:
+            setup["err_prorad"] = e
 
     def _odo_setup():
-        setup["token"], setup["alvos"] = _odonto_setup()
+        try:
+            setup["token"], setup["alvos"] = _odonto_setup()
+        except Exception as e:
+            setup["err_odo"] = e
 
     _ts = [threading.Thread(target=_prorad_setup), threading.Thread(target=_odo_setup)]
     for t in _ts:
         t.start()
     for t in _ts:
         t.join()
-    by_norm, state = setup["by_norm"], setup["state"]
+    # Login/consulta que falha ABORTA a execução (não segue como "0 faturados/sucesso").
+    if setup.get("err_odo") is not None:
+        _cod = _odo_user or "(padrão)"
+        raise RuntimeError(
+            f"Login no RedeUna/OdontoPrev falhou para o código {_cod} — "
+            f"verifique/cadastre a senha do portal. Detalhe: {str(setup['err_odo'])[:140]}")
+    if setup.get("err_prorad") is not None:
+        raise RuntimeError(
+            f"Login/consulta no PRORADIS falhou. Detalhe: {str(setup['err_prorad'])[:140]}")
+    by_norm, state = setup.get("by_norm", {}), setup.get("state")
     token, alvos = setup.get("token"), setup.get("alvos", [])
     _t(f"PRORADIS by_norm={len(by_norm)} | OdontoPrev token={'ok' if token else 'FALHOU'} "
        f"| {len(alvos)} alvo(s)")

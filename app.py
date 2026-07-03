@@ -480,6 +480,60 @@ def revisao_reabrir(pid):
     return redirect(url_for("revisao_page", status=request.args.get("status", "abertas")))
 
 
+# ── Senha do portal RedeUna/OdontoPrev (por código) ────────────────────────────
+def _testar_login_portal(conta, senha):
+    """Teste de login ao vivo no OdontoPrev (user = código da conta). (ok, msg)."""
+    try:
+        from playwright.sync_api import sync_playwright
+        from extrator_odontoprev import login_odonto
+        with sync_playwright() as pw:
+            br, ctx, pg = login_odonto(pw, conta, senha)
+            url = pg.url
+            br.close()
+        return True, f"Login OK ({url[:50]})"
+    except Exception as e:
+        return False, str(e)[:160]
+
+
+@app.route("/portal")
+def portal_page():
+    """Cadastro da senha do portal por código (plano)."""
+    status = db.listar_portal_status()
+    planos = [{"conta": c, "nome": _plano_nome(c), "label": v.get("label", c),
+               "tem": status.get(c, {}).get("tem", False),
+               "atualizado_em": status.get(c, {}).get("atualizado_em"),
+               "por": status.get(c, {}).get("por")}
+              for c, v in PLANOS.items()]
+    return render_template("portal.html", planos=planos)
+
+
+@app.route("/portal/senha", methods=["POST"])
+def portal_salvar():
+    conta = (request.form.get("conta") or "").strip()
+    senha = request.form.get("senha") or ""
+    if conta not in PLANOS:
+        return jsonify({"error": "código inválido"}), 400
+    if not senha:
+        return jsonify({"error": "senha vazia"}), 400
+    try:
+        db.set_portal_senha(conta, senha, username=session.get("username"))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)[:120]}), 500
+
+
+@app.route("/portal/testar", methods=["POST"])
+def portal_testar():
+    conta = (request.form.get("conta") or "").strip()
+    senha = request.form.get("senha") or db.get_portal_senha(conta)
+    if conta not in PLANOS:
+        return jsonify({"error": "código inválido"}), 400
+    if not senha:
+        return jsonify({"error": "sem senha para testar"}), 400
+    ok, msg = _testar_login_portal(conta, senha)
+    return jsonify({"ok": ok, "msg": msg})
+
+
 @app.route("/relatorio")
 def index():
     """Tela antiga (relatório analítico xlsx + download ZIP)."""
@@ -755,12 +809,15 @@ def faturar_run():
     _esteira_jobs[jid] = job
     gkey = os.environ.get("GEMINI_API_KEY")
 
+    senha_portal = db.get_portal_senha(plano or None)
+
     def _go():
         try:
             from esteira import rodar_esteira
             job["resumo"] = rodar_esteira(data, 6, 3, 5, lambda m: job["log"].append(m),
                                           gemini_key=gkey, review_dir=review_dir,
-                                          k_attach=3, dry_run=dry, conta=(plano or None))
+                                          k_attach=3, dry_run=dry, conta=(plano or None),
+                                          senha_portal=senha_portal)
             if not dry and job["resumo"]:
                 try:
                     job["execucao_id"] = db.salvar_execucao(job["resumo"])

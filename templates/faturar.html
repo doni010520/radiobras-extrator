@@ -107,6 +107,7 @@
       </div>
       <button class="btn prim" id="bReal" onclick="run()"><svg class="rb-ico rb-play"><use href="#i-play"/></svg> Faturar dia</button>
     </div>
+    <div style="margin-top:8px"><a href="/portal" class="loglink"><svg class="rb-ico"><use href="#i-key"/></svg> Senha do portal</a></div>
 
     <div id="prog">
       <div class="spin"></div>
@@ -137,6 +138,19 @@
       </div>
       <div id="listas"></div>
       <a id="loglink2" class="loglink" href="#" target="_blank">ver log técnico</a>
+    </div>
+
+    <div id="fail" style="display:none;margin-top:18px;text-align:center">
+      <div class="check" style="background:var(--rb-danger-bg);color:var(--rb-danger)"><svg class="rb-ico" style="width:32px;height:32px;stroke-width:2.5"><use href="#i-alert"/></svg></div>
+      <h2 style="margin:4px 0">A execução não foi concluída</h2>
+      <div style="color:var(--sub);font-size:14px;margin:2px 0 6px">Nada foi faturado. O erro abaixo interrompeu o processo.</div>
+      <div id="failmsg" class="err" style="max-width:560px;margin:8px auto;font-size:14px;line-height:1.5"></div>
+      <div id="failhint" style="max-width:560px;margin:10px auto;display:none;background:var(--rb-info-bg);color:var(--rb-info);border-radius:var(--rb-r);padding:12px 14px;font-size:13px;line-height:1.5"></div>
+      <div class="acts" style="margin-top:14px">
+        <a class="btn prim" id="failPortal" href="/portal" style="display:none"><svg class="rb-ico"><use href="#i-key"/></svg> Cadastrar senha do portal</a>
+        <button class="btn prim" onclick="location.href='/faturar'"><svg class="rb-ico"><use href="#i-refresh"/></svg> Tentar de novo</button>
+        <a class="btn ghost" id="failLog" href="#" target="_blank"><svg class="rb-ico"><use href="#i-file-text"/></svg> Ver log técnico</a>
+      </div>
     </div>
   </div>
 </div>
@@ -204,7 +218,12 @@ async function doRun(plano, dia, label){
 async function poll(){
   try{
     const r=await fetch('/faturar/status/'+jid); const j=await r.json();
-    if(j.error){ return; }
+    if(j.done){                       // terminou (com sucesso OU com erro) -> onDone decide
+      clearInterval(pollT); clearInterval(etaT);
+      onDone(j);
+      return;
+    }
+    if(j.error){ return; }             // erro sem 'done' (transitório) — aguarda próximo poll
     const p=j.prog||{};
     lastPct=Math.max(lastPct, p.pct||0); setBar(lastPct);
     $('msg').textContent=p.msg||'';
@@ -213,20 +232,26 @@ async function poll(){
       etaLeft = (etaLeft==null) ? p.eta : Math.round(etaLeft*0.5 + p.eta*0.5);
       renderEta();
     }
-    if(j.done){
-      clearInterval(pollT); clearInterval(etaT);
-      setBar(100);
-      onDone(j);
-    }
   }catch(e){}
 }
 
 function onDone(j){
   setBusy(false);
   $('prog').style.display='none';
+  if(j.error){                        // execução ABORTOU — tela de falha, não de sucesso
+    $('fail').style.display='block';
+    $('failmsg').textContent=j.error;
+    $('failLog').href='/faturar/log/'+jid;
+    if(/login|senha|portal|odontoprev|redeuna|bloquead/i.test(j.error)){
+      $('failPortal').style.display='inline-flex';
+      var h=$('failhint'); h.style.display='block';
+      h.innerHTML='Parece um problema de <b>acesso ao portal</b>. Cadastre/atualize a senha do código e use <b>Testar</b> antes de faturar de novo.';
+    }
+    return;
+  }
+  setBar(100);
   $('ok').style.display='block';
-  if(j.error){ $('okerr').textContent='Concluído com erro: '+j.error; }
-  else { $('formrow').style.display='none'; }   // some com os seletores no relatório
+  $('formrow').style.display='none';   // some com os seletores no relatório
   if(runInfo){ $('okSub').textContent=runInfo.dia+' · '+runInfo.label; }
   const s=j.resumo||{};
   const fat=s.anexado_ok||0, pend=s.pendentes||0, tt=s.tempo_total||0;
