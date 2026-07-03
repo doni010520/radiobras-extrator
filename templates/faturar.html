@@ -242,10 +242,18 @@ function onDone(j){
     $('fail').style.display='block';
     $('failmsg').textContent=j.error;
     $('failLog').href='/faturar/log/'+jid;
-    if(/login|senha|portal|odontoprev|redeuna|bloquead/i.test(j.error)){
+    var e=j.error||'', h=$('failhint');
+    if(/proradis/i.test(e)){                       // PRORADIS -> NÃO é senha do portal
+      h.style.display='block';
+      if(/não retornou laudos|nada a faturar|sem linhas|laudad/i.test(e)){
+        h.innerHTML='Isso <b>não é senha</b> — o PRORADIS não tem laudos desse dia nesta unidade. Confira se os exames já foram laudados, ou tente outro dia.';
+      }else{
+        h.innerHTML='Problema no <b>PRORADIS</b> (não é a senha do portal). Verifique a credencial do PRORADIS ou tente de novo.';
+      }
+    }else if(/odontoprev|redeuna|portal|c[oó]digo|senha do portal|bloquead/i.test(e)){
       $('failPortal').style.display='inline-flex';
-      var h=$('failhint'); h.style.display='block';
-      h.innerHTML='Parece um problema de <b>acesso ao portal</b>. Cadastre/atualize a senha do código e use <b>Testar</b> antes de faturar de novo.';
+      h.style.display='block';
+      h.innerHTML='Parece um problema de <b>acesso ao portal</b> (OdontoPrev). Cadastre/atualize a senha do código e use <b>Testar</b> antes de faturar de novo.';
     }
     return;
   }

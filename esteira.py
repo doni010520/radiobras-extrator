@@ -605,8 +605,15 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             f"Login no RedeUna/OdontoPrev falhou para o código {_cod} — "
             f"verifique/cadastre a senha do portal. Detalhe: {str(setup['err_odo'])[:140]}")
     if setup.get("err_prorad") is not None:
+        _ep = str(setup["err_prorad"])
+        if "sem linhas" in _ep.lower() or "vazi" in _ep.lower():
+            # login OK, mas o relatório analítico veio sem dados -> laudos não saíram
+            raise RuntimeError(
+                f"O PRORADIS não retornou laudos para {data} nesta unidade — "
+                f"os exames podem não ter sido laudados ainda, ou o dia/unidade está "
+                f"incorreto. Nada a faturar.")
         raise RuntimeError(
-            f"Login/consulta no PRORADIS falhou. Detalhe: {str(setup['err_prorad'])[:140]}")
+            f"Login/consulta no PRORADIS falhou. Detalhe: {_ep[:140]}")
     by_norm, state = setup.get("by_norm", {}), setup.get("state")
     token, alvos = setup.get("token"), setup.get("alvos", [])
     _t(f"PRORADIS by_norm={len(by_norm)} | OdontoPrev token={'ok' if token else 'FALHOU'} "
