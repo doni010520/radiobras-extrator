@@ -635,8 +635,24 @@ def faturar_cron_rodar_now():
 def faturar_cron_status():
     last = db.cron_faturar_last_at()
     return jsonify({"rodando": _faturar_cron_running.is_set(),
-                    "ligado": os.environ.get("FATURAR_CRON", "0") != "0",
+                    "ligado": os.environ.get("FATURAR_CRON", "1") != "0",
                     "ultima": last.isoformat() if last else None})
+
+
+@app.route("/alerta/testar-email", methods=["POST"])
+def alerta_testar_email():
+    """Envia um email de teste (admin) — pra confirmar a configuração SMTP."""
+    if not _admin_ok():
+        return jsonify({"error": "apenas admin"}), 403
+    ok = _send_email(
+        "RadioBras — teste de email (alerta de prazo)",
+        "Este é um email de teste do RadioBras. Se você recebeu, o SMTP está OK "
+        "e os alertas de prazo (1 dia) vão chegar por aqui.",
+        "<p>Este é um <b>email de teste</b> do RadioBras.</p><p>Se você recebeu, "
+        "o SMTP está configurado e os <b>alertas de prazo (1 dia)</b> vão chegar aqui.</p>")
+    return jsonify({"ok": ok,
+                    "msg": "Email enviado — confira a caixa de entrada." if ok
+                    else "Não enviou. Confira SMTP_HOST/PORT/USER/PASSWORD e ALERTA_EMAIL_TO."})
 
 
 # ── Rotas ─────────────────────────────────────────────────────────────────────
