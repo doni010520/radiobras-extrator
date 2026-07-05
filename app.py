@@ -468,9 +468,9 @@ def _faturar_cron_rodar():
 def _faturar_cron_body():
     from datetime import date, timedelta
     try:
-        prazo = int(os.environ.get("FATURAR_PRAZO_DIAS", "30"))
+        prazo = int(os.environ.get("FATURAR_PRAZO_DIAS", "7"))
     except ValueError:
-        prazo = 30
+        prazo = 7
     hoje = datetime.now(_TZ).date() if _TZ else date.today()
     target = (hoje - timedelta(days=3)).strftime("%d/%m/%Y")
     combos = {(c, target) for c in PLANOS}                       # D-3 nas 3 unidades
@@ -514,7 +514,7 @@ def _faturar_scheduler():
         _glosa_stop.wait(1800)  # re-checa a cada 30 min
 
 
-if os.environ.get("FATURAR_CRON", "0") != "0":
+if os.environ.get("FATURAR_CRON", "1") != "0":
     threading.Thread(target=_faturar_scheduler, daemon=True).start()
 
 
