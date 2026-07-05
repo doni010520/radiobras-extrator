@@ -428,6 +428,115 @@ if os.environ.get("ANEXACAO_AUTO_UPDATE", "1") != "0":
     threading.Thread(target=_anexacao_scheduler, daemon=True).start()
 
 
+# ── Faturamento automático diário (cron D-3 + reprocessa pendências) ────────────
+def _faturar_rodou_hoje() -> bool:
+    """Já rodou o faturamento automático hoje? (compara a última marca em Brasília)."""
+    try:
+        d = db.cron_faturar_last_at()
+        if not d:
+            return False
+        if _TZ:
+            if d.tzinfo is None:
+                from datetime import timezone as _tzc
+                d = d.replace(tzinfo=_tzc.utc)
+            d = d.astimezone(_TZ)
+            hoje = datetime.now(_TZ).date()
+        else:
+            hoje = datetime.now().date()
+        return d.date() == hoje
+    except Exception:
+        return False
+
+
+_faturar_cron_running = threading.Event()
+
+
+def _faturar_cron_rodar():
+    """Roda D-3 nas 3 unidades + reprocessa os dias com pendência aberta dentro do
+    prazo. Faturamento REAL (anexa). Idempotente: já faturado é pulado; pendência
+    resolvida no PRORADIS é faturada agora e fecha sozinha."""
+    if _faturar_cron_running.is_set():
+        app.logger.info("Cron faturar já em execução — pulando disparo.")
+        return
+    _faturar_cron_running.set()
+    try:
+        _faturar_cron_body()
+    finally:
+        _faturar_cron_running.clear()
+
+
+def _faturar_cron_body():
+    from datetime import date, timedelta
+    try:
+        prazo = int(os.environ.get("FATURAR_PRAZO_DIAS", "30"))
+    except ValueError:
+        prazo = 30
+    hoje = datetime.now(_TZ).date() if _TZ else date.today()
+    target = (hoje - timedelta(days=3)).strftime("%d/%m/%Y")
+    combos = {(c, target) for c in PLANOS}                       # D-3 nas 3 unidades
+    combos |= set(db.dias_com_pendencia_aberta(prazo))           # + pendências no prazo
+    gkey = os.environ.get("GEMINI_API_KEY")
+    from esteira import rodar_esteira
+    ndias = nfat = 0
+    for conta, dia in sorted(combos):
+        try:
+            resumo = rodar_esteira(dia, 6, 3, 5, log=lambda m: None,
+                                   gemini_key=gkey, k_attach=3, dry_run=False,
+                                   conta=conta, senha_portal=db.get_portal_senha(conta))
+            if resumo and resumo.get("pendentes", 0) > 0:
+                db.salvar_execucao(resumo)
+            nfat += (resumo or {}).get("anexado_ok", 0) or 0
+            ndias += 1
+            app.logger.info("Cron faturar %s %s: fat=%s pend=%s", conta, dia,
+                            (resumo or {}).get("anexado_ok"), (resumo or {}).get("pendentes"))
+        except Exception as e:
+            app.logger.error("Cron faturar %s %s FALHOU: %s", conta, dia, str(e)[:120])
+    db.cron_marcar_faturar(target)
+    app.logger.info("Cron faturar concluído: %s execução(ões), %s faturada(s).", ndias, nfat)
+
+
+def _faturar_scheduler():
+    """Dispara o faturamento automático 1x/dia (após FATURAR_CRON_HOUR, Brasília).
+    Desligado por padrão — ligue com FATURAR_CRON=1. gunicorn 1 worker -> sem
+    concorrência de agendadores."""
+    try:
+        hora = int(os.environ.get("FATURAR_CRON_HOUR", "5"))
+    except ValueError:
+        hora = 5
+    while not _glosa_stop.is_set():
+        try:
+            agora = datetime.now(_TZ) if _TZ else datetime.now()
+            if agora.hour >= hora and not _faturar_rodou_hoje():
+                app.logger.info("Cron faturar iniciando…")
+                _faturar_cron_rodar()
+        except Exception as e:
+            app.logger.error("Faturar scheduler: %s", e)
+        _glosa_stop.wait(1800)  # re-checa a cada 30 min
+
+
+if os.environ.get("FATURAR_CRON", "0") != "0":
+    threading.Thread(target=_faturar_scheduler, daemon=True).start()
+
+
+@app.route("/faturar/cron/rodar", methods=["POST"])
+def faturar_cron_rodar_now():
+    """Dispara o faturamento automático sob demanda (admin) — roda em background."""
+    if not _admin_ok():
+        return jsonify({"error": "apenas admin"}), 403
+    if _faturar_cron_running.is_set():
+        return jsonify({"error": "cron já está rodando"}), 409
+    threading.Thread(target=_faturar_cron_rodar, daemon=True).start()
+    return jsonify({"ok": True, "msg": "faturamento automático disparado"})
+
+
+@app.route("/faturar/cron/status")
+def faturar_cron_status():
+    last = db.cron_faturar_last_at()
+    return jsonify({"rodando": _faturar_cron_running.is_set(),
+                    "ligado": os.environ.get("FATURAR_CRON", "0") != "0",
+                    "ultima": last.isoformat() if last else None})
+
+
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")

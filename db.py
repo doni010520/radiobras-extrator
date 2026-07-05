@@ -327,6 +327,66 @@ def reabrir_pendencia(pid: int):
             s.commit()
 
 
+def _parse_ddmmaaaa(v):
+    try:
+        from datetime import date as _date
+        p = str(v).split("/")
+        return _date(int(p[2]), int(p[1]), int(p[0]))
+    except Exception:
+        return None
+
+
+def dias_com_pendencia_aberta(prazo_dias: int = None) -> list:
+    """(conta, dia) distintos que têm pendência aberta. Se prazo_dias, filtra só os
+    dias dentro da janela (dia do exame >= hoje - prazo_dias) — fora do prazo não
+    adianta reprocessar."""
+    from datetime import date, timedelta
+    try:
+        with SessionLocal() as s:
+            rows = (s.query(Pendencia.conta, Pendencia.dia)
+                    .filter(Pendencia.resolvido == False)      # noqa: E712
+                    .distinct().all())
+    except Exception:
+        return []
+    limite = (date.today() - timedelta(days=prazo_dias)) if prazo_dias else None
+    out = set()
+    for conta, dia in rows:
+        if not conta or not dia:
+            continue
+        if limite:
+            d = _parse_ddmmaaaa(dia)
+            if d and d < limite:
+                continue
+        out.add((conta, dia))
+    return sorted(out)
+
+
+class CronState(Base):
+    """Estado dos jobs automáticos (linha única id=1)."""
+    __tablename__ = "cron_state"
+    id = Column(Integer, primary_key=True)
+    faturar_last_at = Column(DateTime(timezone=True))
+    faturar_last_dia = Column(String(10))
+
+
+def cron_marcar_faturar(dia: str):
+    with SessionLocal() as s:
+        c = s.get(CronState, 1)
+        if not c:
+            c = CronState(id=1); s.add(c)
+        c.faturar_last_at = _now(); c.faturar_last_dia = dia
+        s.commit()
+
+
+def cron_faturar_last_at():
+    try:
+        with SessionLocal() as s:
+            c = s.get(CronState, 1)
+            return c.faturar_last_at if c else None
+    except Exception:
+        return None
+
+
 class PortalCredencial(Base):
     """Senha do portal RedeUna/OdontoPrev por código de conta (plano).
     Sobrepõe a ODONTOPREV_PASSWORD do ambiente quando cadastrada."""
