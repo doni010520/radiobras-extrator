@@ -24,6 +24,18 @@
   .grp-h .u{color:var(--rb-primary)}
   .grp-h .c{font-weight:600;font-size:12px;color:var(--rb-fg-muted);background:var(--rb-surface-2);
     padding:2px 9px;border-radius:999px}
+  .sla{display:inline-flex;align-items:center;font-size:11px;font-weight:800;padding:3px 10px;
+    border-radius:999px;line-height:1.6;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap}
+  .sla.ok{background:var(--rb-success-bg);color:var(--rb-success)}
+  .sla.d3{background:var(--rb-warning-bg,#fff4e0);color:var(--rb-warning,#9a6400)}
+  .sla.d2{background:#ffe3c9;color:#9a4d00}
+  .sla.d1{background:var(--rb-danger-bg);color:var(--rb-danger);animation:slap 1.2s ease-in-out infinite}
+  .sla.venc{background:#7a0d0d;color:#fff}
+  @keyframes slap{0%,100%{opacity:1}50%{opacity:.45}}
+  .slabar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:var(--rb-danger-bg);
+    border:1px solid var(--rb-danger);border-radius:var(--rb-r-lg);padding:12px 16px;margin-bottom:16px}
+  .slabar b{color:var(--rb-danger)}
+  .slabar .chip{font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;background:#fff;color:var(--rb-danger)}
   table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--linha);
     border-radius:var(--rb-r-lg);overflow:hidden;font-variant-numeric:tabular-nums}
   th,td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--linha);font-size:13.5px;vertical-align:top}
@@ -71,6 +83,17 @@
       <svg class="rb-ico"><use href="#i-grid"/></svg> Todas</a>
   </div>
 
+  {% set urg = sla_ct.venc + sla_ct.d1 + sla_ct.d2 + sla_ct.d3 %}
+  {% if urg > 0 and status != 'resolvidas' %}
+  <div class="slabar">
+    <b>⚠ Prazo de faturamento (janela de {{ prazo }} dias):</b>
+    {% if sla_ct.venc %}<span class="chip">{{ sla_ct.venc }} vencida(s)</span>{% endif %}
+    {% if sla_ct.d1 %}<span class="chip">{{ sla_ct.d1 }} vence(m) amanhã</span>{% endif %}
+    {% if sla_ct.d2 %}<span class="chip">{{ sla_ct.d2 }} em 2 dias</span>{% endif %}
+    {% if sla_ct.d3 %}<span class="chip">{{ sla_ct.d3 }} em 3 dias</span>{% endif %}
+  </div>
+  {% endif %}
+
   {% if not itens %}
     <div class="empty">
       <svg><use href="#i-check-circle"/></svg>
@@ -84,6 +107,14 @@
         <svg class="rb-ico"><use href="#i-calendar"/></svg>
         <span class="u">{{ grupo.grouper }}</span>
         <span class="c">{{ grupo.list|selectattr('resolvido','equalto',false)|list|length }} aberta(s) · {{ grupo.list|length }} no total</span>
+        {% set sla = grupo.list[0].sla %}
+        {% if sla is not none %}
+          {% if sla <= 0 %}<span class="sla venc">⚠ prazo vencido</span>
+          {% elif sla == 1 %}<span class="sla d1">⚠ vence amanhã</span>
+          {% elif sla == 2 %}<span class="sla d2">faltam 2 dias</span>
+          {% elif sla == 3 %}<span class="sla d3">faltam 3 dias</span>
+          {% else %}<span class="sla ok">no prazo · {{ sla }}d</span>{% endif %}
+        {% endif %}
       </div>
       <table>
         <tr><th style="width:36px"></th><th>GTO</th><th>Paciente</th><th>Motivo</th><th>Tipo</th><th>Status</th></tr>

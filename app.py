@@ -448,6 +448,104 @@ def _faturar_rodou_hoje() -> bool:
         return False
 
 
+def _prazo_dias():
+    try:
+        return int(os.environ.get("FATURAR_PRAZO_DIAS", "7"))
+    except ValueError:
+        return 7
+
+
+def _sla_dias_restantes(dia_str):
+    """Dias que faltam pro prazo de faturamento estourar (dia do exame + prazo).
+    None se a data não parseia. Negativo/0 = vencido."""
+    from datetime import date
+    d = db._parse_ddmmaaaa(dia_str)
+    if not d:
+        return None
+    hoje = datetime.now(_TZ).date() if _TZ else date.today()
+    return _prazo_dias() - (hoje - d).days
+
+
+def _send_email(assunto, corpo_txt, corpo_html=None):
+    """Envia email via SMTP (env). Retorna True/False. Pula se SMTP não configurado."""
+    host = os.environ.get("SMTP_HOST")
+    to = os.environ.get("ALERTA_EMAIL_TO")
+    if not host or not to:
+        app.logger.info("SLA email pulado: SMTP_HOST/ALERTA_EMAIL_TO não configurados.")
+        return False
+    try:
+        import smtplib
+        from email.message import EmailMessage
+        port = int(os.environ.get("SMTP_PORT", "587"))
+        user = os.environ.get("SMTP_USER")
+        pwd = os.environ.get("SMTP_PASSWORD")
+        remetente = os.environ.get("SMTP_FROM") or user or "radiobras@localhost"
+        destinos = [e.strip() for e in to.split(",") if e.strip()]
+        msg = EmailMessage()
+        msg["Subject"] = assunto
+        msg["From"] = remetente
+        msg["To"] = ", ".join(destinos)
+        msg.set_content(corpo_txt)
+        if corpo_html:
+            msg.add_alternative(corpo_html, subtype="html")
+        with smtplib.SMTP(host, port, timeout=30) as s:
+            s.ehlo()
+            try:
+                s.starttls(); s.ehlo()
+            except Exception:
+                pass
+            if user and pwd:
+                s.login(user, pwd)
+            s.send_message(msg)
+        app.logger.info("SLA email enviado para %s", destinos)
+        return True
+    except Exception as e:
+        app.logger.error("SLA email falhou: %s", str(e)[:140])
+        return False
+
+
+def _enviar_alertas_sla():
+    """Email diário APENAS das pendências que vencem amanhã (1 dia p/ o prazo)."""
+    if os.environ.get("ALERTA_SLA", "1") == "0":
+        return
+    try:
+        itens = db.listar_pendencias("abertas")
+    except Exception:
+        return
+    urgentes = []
+    for p in itens:
+        if _sla_dias_restantes(p.get("dia")) == 1:
+            p["unidade"] = _plano_nome(p.get("conta")) or (p.get("conta") or "—")
+            urgentes.append(p)
+    if not urgentes:
+        app.logger.info("SLA: nenhuma pendência vence amanhã — sem email.")
+        return
+    linhas = "\n".join(
+        f"  • {p['unidade']} · dia {p['dia']} · GTO {p['gto']} · {p.get('paciente') or '—'} "
+        f"— {p.get('motivo') or 'revisão'}" for p in urgentes)
+    txt = (f"ATENÇÃO: {len(urgentes)} GTO(s) NÃO FATURADA(S) vencem AMANHÃ "
+           f"(prazo de {_prazo_dias()} dias da OdontoPrev).\n\n{linhas}\n\n"
+           f"Resolva no PRORADIS ou faça a correção na origem hoje, senão o prazo estoura.\n"
+           f"Painel de pendências: /revisao")
+    rows = "".join(
+        f"<tr><td style='padding:6px 10px'>{p['unidade']}</td>"
+        f"<td style='padding:6px 10px'>{p['dia']}</td>"
+        f"<td style='padding:6px 10px'><b>{p['gto']}</b></td>"
+        f"<td style='padding:6px 10px'>{(p.get('paciente') or '—')}</td>"
+        f"<td style='padding:6px 10px'>{(p.get('motivo') or 'revisão')}</td></tr>"
+        for p in urgentes)
+    html = (f"<div style='font-family:Arial,sans-serif'>"
+            f"<h2 style='color:#b3261e'>⚠️ {len(urgentes)} GTO(s) vencem AMANHÃ</h2>"
+            f"<p>Prazo de <b>{_prazo_dias()} dias</b> da OdontoPrev. Resolva hoje.</p>"
+            f"<table style='border-collapse:collapse;font-size:13px' border='1'>"
+            f"<tr style='background:#f0f0f0'><th style='padding:6px 10px'>Unidade</th>"
+            f"<th style='padding:6px 10px'>Dia</th><th style='padding:6px 10px'>GTO</th>"
+            f"<th style='padding:6px 10px'>Paciente</th><th style='padding:6px 10px'>Motivo</th></tr>"
+            f"{rows}</table></div>")
+    _send_email(f"⚠️ RadioBras — {len(urgentes)} GTO(s) vencem amanhã (prazo de faturamento)",
+                txt, html)
+
+
 _faturar_cron_running = threading.Event()
 
 
@@ -493,6 +591,10 @@ def _faturar_cron_body():
             app.logger.error("Cron faturar %s %s FALHOU: %s", conta, dia, str(e)[:120])
     db.cron_marcar_faturar(target)
     app.logger.info("Cron faturar concluído: %s execução(ões), %s faturada(s).", ndias, nfat)
+    try:
+        _enviar_alertas_sla()      # email só dos que vencem amanhã (1 dia p/ o prazo)
+    except Exception as e:
+        app.logger.error("Alerta SLA falhou: %s", str(e)[:120])
 
 
 def _faturar_scheduler():
@@ -568,7 +670,24 @@ def revisao_page():
     for p in itens:
         p["unidade"] = _plano_nome(p.get("conta")) or (p.get("conta") or "—")
         p["grupo"] = "%s · dia %s" % (p["unidade"], p.get("dia") or "—")
+        p["sla"] = _sla_dias_restantes(p.get("dia"))   # dias p/ o prazo (None/negativo=vencido)
+    sla_ct = {"venc": 0, "d1": 0, "d2": 0, "d3": 0}
+    for p in itens:
+        if p.get("resolvido"):
+            continue
+        s = p.get("sla")
+        if s is None:
+            continue
+        if s <= 0:
+            sla_ct["venc"] += 1
+        elif s == 1:
+            sla_ct["d1"] += 1
+        elif s == 2:
+            sla_ct["d2"] += 1
+        elif s == 3:
+            sla_ct["d3"] += 1
     return render_template("revisao.html", itens=itens, status=status,
+                           prazo=_prazo_dias(), sla_ct=sla_ct,
                            n_abertas=db.contar_pendencias_abertas())
 
 
