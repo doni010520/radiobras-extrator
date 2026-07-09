@@ -504,8 +504,20 @@ def _send_email(assunto, corpo_txt, corpo_html=None):
         return False
 
 
+def _sla_status(sla):
+    """(rótulo, cor) do estágio de urgência de um SLA. Assume sla <= 2."""
+    if sla <= 0:
+        return ("VENCIDA", "#7a0d0d")
+    if sla == 1:
+        return ("vence amanhã", "#b3261e")
+    return ("faltam 2 dias", "#9a4d00")
+
+
 def _enviar_alertas_sla():
-    """Email diário APENAS das pendências que vencem amanhã (1 dia p/ o prazo)."""
+    """Email diário das pendências dentro de 2 dias do prazo — vencidas, vence
+    amanhã (1 dia) e faltam 2 dias. `sla <= 2` (e não `== 1`) dá margem de correção
+    e é rede de segurança: se o cron pular um dia, a vencida ainda é alertada (e
+    reforçada todo dia até resolver), em vez de o aviso de '1 dia' sumir pra sempre."""
     if os.environ.get("ALERTA_SLA", "1") == "0":
         return
     try:
@@ -514,36 +526,51 @@ def _enviar_alertas_sla():
         return
     urgentes = []
     for p in itens:
-        if _sla_dias_restantes(p.get("dia")) == 1:
+        s = _sla_dias_restantes(p.get("dia"))
+        if s is not None and s <= 2:
+            p["sla"] = s
             p["unidade"] = _plano_nome(p.get("conta")) or (p.get("conta") or "—")
             urgentes.append(p)
     if not urgentes:
-        app.logger.info("SLA: nenhuma pendência vence amanhã — sem email.")
+        app.logger.info("SLA: nenhuma pendência dentro de 2 dias do prazo — sem email.")
         return
+    urgentes.sort(key=lambda p: p["sla"])          # vencidas primeiro
+    n_venc = sum(1 for p in urgentes if p["sla"] <= 0)
+    n_d1 = sum(1 for p in urgentes if p["sla"] == 1)
+    n_d2 = sum(1 for p in urgentes if p["sla"] == 2)
+    partes = []
+    if n_venc: partes.append(f"{n_venc} vencida(s)")
+    if n_d1: partes.append(f"{n_d1} vence(m) amanhã")
+    if n_d2: partes.append(f"{n_d2} em 2 dias")
+    resumo = " · ".join(partes)
+
     linhas = "\n".join(
-        f"  • {p['unidade']} · dia {p['dia']} · GTO {p['gto']} · {p.get('paciente') or '—'} "
-        f"— {p.get('motivo') or 'revisão'}" for p in urgentes)
-    txt = (f"ATENÇÃO: {len(urgentes)} GTO(s) NÃO FATURADA(S) vencem AMANHÃ "
-           f"(prazo de {_prazo_dias()} dias da OdontoPrev).\n\n{linhas}\n\n"
+        f"  • [{_sla_status(p['sla'])[0]}] {p['unidade']} · dia {p['dia']} · GTO {p['gto']} "
+        f"· {p.get('paciente') or '—'} — {p.get('motivo') or 'revisão'}" for p in urgentes)
+    txt = (f"ATENÇÃO: {len(urgentes)} GTO(s) NÃO FATURADA(S) no limite do prazo "
+           f"(prazo de {_prazo_dias()} dias da OdontoPrev): {resumo}.\n\n{linhas}\n\n"
            f"Resolva no PRORADIS ou faça a correção na origem hoje, senão o prazo estoura.\n"
            f"Painel de pendências: /revisao")
     rows = "".join(
-        f"<tr><td style='padding:6px 10px'>{p['unidade']}</td>"
+        f"<tr><td style='padding:6px 10px;color:{_sla_status(p['sla'])[1]};font-weight:700'>"
+        f"{_sla_status(p['sla'])[0]}</td>"
+        f"<td style='padding:6px 10px'>{p['unidade']}</td>"
         f"<td style='padding:6px 10px'>{p['dia']}</td>"
         f"<td style='padding:6px 10px'><b>{p['gto']}</b></td>"
         f"<td style='padding:6px 10px'>{(p.get('paciente') or '—')}</td>"
         f"<td style='padding:6px 10px'>{(p.get('motivo') or 'revisão')}</td></tr>"
         for p in urgentes)
     html = (f"<div style='font-family:Arial,sans-serif'>"
-            f"<h2 style='color:#b3261e'>⚠️ {len(urgentes)} GTO(s) vencem AMANHÃ</h2>"
-            f"<p>Prazo de <b>{_prazo_dias()} dias</b> da OdontoPrev. Resolva hoje.</p>"
+            f"<h2 style='color:#b3261e'>⚠️ {len(urgentes)} GTO(s) no limite do prazo</h2>"
+            f"<p>{resumo}. Prazo de <b>{_prazo_dias()} dias</b> da OdontoPrev. Resolva hoje.</p>"
             f"<table style='border-collapse:collapse;font-size:13px' border='1'>"
-            f"<tr style='background:#f0f0f0'><th style='padding:6px 10px'>Unidade</th>"
+            f"<tr style='background:#f0f0f0'><th style='padding:6px 10px'>Prazo</th>"
+            f"<th style='padding:6px 10px'>Unidade</th>"
             f"<th style='padding:6px 10px'>Dia</th><th style='padding:6px 10px'>GTO</th>"
             f"<th style='padding:6px 10px'>Paciente</th><th style='padding:6px 10px'>Motivo</th></tr>"
             f"{rows}</table></div>")
-    _send_email(f"⚠️ RadioBras — {len(urgentes)} GTO(s) vencem amanhã (prazo de faturamento)",
-                txt, html)
+    assunto = (f"⚠️ RadioBras — {resumo} (prazo de faturamento)")
+    _send_email(assunto, txt, html)
 
 
 _faturar_cron_running = threading.Event()

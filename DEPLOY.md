@@ -32,6 +32,25 @@ A tela antiga (relatório analítico `.xlsx` + download `.zip`) fica em `/relato
      Supabase). **Sem** essa variável o app cai em SQLite local — que é apagado a cada
      redeploy do container, então o histórico se perde. Para produção, **defina-a**.
 
+### Alerta de prazo (SLA) por email — opcional, recomendado
+O app envia um email diário (ao fim do cron de faturamento) com as GTOs não faturadas
+**dentro de 2 dias do prazo** (vencidas, vence amanhã, faltam 2 dias). Sem SMTP, o
+email pula limpo e a tela `/revisao` segue mostrando os alertas. Para ligar o email,
+adicione (Settings → Environment):
+```
+SMTP_HOST=smtp.hostinger.com     # SMTP da Hostinger (ou outro provedor)
+SMTP_PORT=587                    # 587 (STARTTLS). NÃO use 465 — o código faz STARTTLS.
+SMTP_USER=alertas@seudominio.com.br
+SMTP_PASSWORD=<senha da caixa>
+SMTP_FROM=alertas@seudominio.com.br   # mesmo endereço (bate com SPF/DKIM do domínio)
+ALERTA_EMAIL_TO=voce@seudominio.com.br  # destinatários, separados por vírgula
+```
+   - Criar a caixa no hPanel da Hostinger → **Emails**. Remetente do próprio domínio
+     evita cair em spam (SPF/DKIM já configurados pela Hostinger).
+   - `FATURAR_PRAZO_DIAS` (default **7**) = prazo de faturamento da OdontoPrev; é a base
+     do cálculo de SLA. Desligar o email: `ALERTA_SLA=0`.
+   - Testar depois do deploy (logado como admin): `POST /alerta/testar-email`.
+
 ### Como obter a DATABASE_URL no Supabase
 1. supabase.com → New project (guarde a senha do banco).
 2. Project → **Settings → Database → Connection string → URI**.
