@@ -1606,6 +1606,26 @@ def api_diag():
         } for r in db.runs_recentes(10)]
     except Exception as e:
         diag["runs_error"] = str(e)[:200]
+    # faturamento (fluxo atual): estado do cron D-3, backlog e últimas execuções
+    try:
+        ult = db.cron_faturar_last_at()
+        diag["faturamento"] = {
+            "cron_ligado": os.environ.get("FATURAR_CRON", "1") != "0",
+            "cron_ultima": ult.isoformat() if ult else None,
+            "cron_rodou_hoje": _faturar_rodou_hoje(),
+            "prazo_dias": _prazo_dias(),
+            "pendencias_abertas": db.contar_pendencias_abertas(),
+            "alerta_sla_ligado": os.environ.get("ALERTA_SLA", "1") != "0",
+            "smtp_configurado": bool(os.environ.get("SMTP_HOST") and os.environ.get("ALERTA_EMAIL_TO")),
+            "execucoes": [{
+                "id": e["id"], "dia": e["dia"], "conta": e["conta"],
+                "dry_run": e["dry_run"], "faturadas": e["faturadas"],
+                "pendentes": e["pendentes"], "criado_em": (
+                    e["criado_em"].isoformat() if e.get("criado_em") else None),
+            } for e in db.listar_execucoes(5)],
+        }
+    except Exception as e:
+        diag["faturamento_error"] = str(e)[:200]
     return jsonify(diag)
 
 
