@@ -720,6 +720,88 @@ def alerta_testar_email():
                     else "Não enviou. Confira SMTP_HOST/PORT/USER/PASSWORD e ALERTA_EMAIL_TO."})
 
 
+def _email_resumo_faturamentos(dias: int = 7):
+    """(assunto, txt, html) com os faturamentos REAIS dos últimos `dias`
+    (execuções não-dry-run do banco). Retorna (None, None, None) se não houver."""
+    hoje = datetime.now(_TZ).date() if _TZ else datetime.now().date()
+    limite = hoje - timedelta(days=dias)
+    execs = []
+    for e in db.listar_execucoes(200):
+        if e.get("dry_run"):
+            continue
+        c = e.get("criado_em")
+        if not c:
+            continue
+        cd = c.astimezone(_TZ).date() if (_TZ and c.tzinfo) else c.date()
+        if cd < limite:
+            continue
+        e["quando"] = cd
+        e["unidade"] = _plano_nome(e.get("conta")) or (e.get("conta") or "—")
+        execs.append(e)
+    if not execs:
+        return None, None, None
+    execs.sort(key=lambda e: (e["quando"], e["unidade"]))
+    tot_fat = sum(e.get("faturadas", 0) or 0 for e in execs)
+    tot_pend = sum(e.get("pendentes", 0) or 0 for e in execs)
+    assunto = (f"RadioBras — Faturamentos da semana: {tot_fat} GTO(s) faturada(s) "
+               f"em {len(execs)} execução(ões)")
+    intro = (f"Resumo dos faturamentos reais dos últimos {dias} dias "
+             f"({limite.strftime('%d/%m')} a {hoje.strftime('%d/%m/%Y')}):")
+    total = (f"TOTAL: {tot_fat} GTO(s) faturada(s) · {tot_pend} pendência(s) "
+             f"· {len(execs)} execução(ões).")
+    linhas = "\n".join(
+        f"  • {e['quando'].strftime('%d/%m')} · {e['unidade']} · dia do exame {e.get('dia') or '—'} "
+        f"— {e.get('faturadas', 0)} faturada(s), {e.get('pendentes', 0)} pendente(s)"
+        for e in execs)
+    txt = f"{intro}\n\n{total}\n\n{linhas}\n\nPainel: /relatorios · Pendências: /revisao"
+    rows = "".join(
+        f"<tr><td style='padding:6px 10px'>{e['quando'].strftime('%d/%m')}</td>"
+        f"<td style='padding:6px 10px'>{e['unidade']}</td>"
+        f"<td style='padding:6px 10px'>{e.get('dia') or '—'}</td>"
+        f"<td style='padding:6px 10px;text-align:center'><b>{e.get('faturadas', 0)}</b></td>"
+        f"<td style='padding:6px 10px;text-align:center'>{e.get('pendentes', 0)}</td></tr>"
+        for e in execs)
+    html = (f"<div style='font-family:Arial,sans-serif;max-width:680px'>"
+            f"<h2 style='color:#0b6b4f'>Faturamentos da semana</h2>"
+            f"<p>{intro}</p>"
+            f"<p style='font-size:15px'><b>{total}</b></p>"
+            f"<table style='border-collapse:collapse;font-size:13px' border='1'>"
+            f"<tr style='background:#f0f0f0'><th style='padding:6px 10px'>Rodou em</th>"
+            f"<th style='padding:6px 10px'>Unidade</th><th style='padding:6px 10px'>Dia do exame</th>"
+            f"<th style='padding:6px 10px'>Faturadas</th><th style='padding:6px 10px'>Pendentes</th></tr>"
+            f"{rows}</table></div>")
+    return assunto, txt, html
+
+
+def _enviar_resumo_faturamentos():
+    """Monta e envia o resumo de faturamentos da semana. Loga o resultado."""
+    assunto, txt, html = _email_resumo_faturamentos()
+    if not assunto:
+        app.logger.info("Resumo faturamentos: nenhuma execução real na semana — sem email.")
+        return
+    ok = _send_email(assunto, txt, html)
+    app.logger.info("Resumo faturamentos enviado=%s", ok)
+
+
+@app.route("/alerta/resumo-faturamentos", methods=["POST"])
+def alerta_resumo_faturamentos():
+    """Agenda (ou envia já) o resumo dos faturamentos da semana por email (admin).
+    ?delay=<segundos> agenda pra daqui a N segundos (default 300 = 5 min)."""
+    if not _admin_ok():
+        return jsonify({"error": "apenas admin"}), 403
+    try:
+        delay = int(request.args.get("delay", "300"))
+    except ValueError:
+        delay = 300
+    delay = max(0, min(delay, 3600))
+    if delay == 0:
+        _enviar_resumo_faturamentos()
+        return jsonify({"ok": True, "msg": "Resumo enviado agora — confira a caixa."})
+    threading.Timer(delay, _enviar_resumo_faturamentos).start()
+    return jsonify({"ok": True, "agendado_s": delay,
+                    "msg": f"Agendado — o resumo chega em ~{delay // 60} min."})
+
+
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")

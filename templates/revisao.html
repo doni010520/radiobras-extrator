@@ -101,19 +101,31 @@
                    border:1px solid var(--rb-border,#ccc);background:#fff;cursor:pointer">
       ✉️ Testar e-mail de alerta
     </button>
+    <button id="btnResumoFat" onclick="resumoFaturamentos()"
+            style="font-size:13px;font-weight:600;padding:7px 14px;border-radius:8px;margin-left:8px;
+                   border:1px solid var(--rb-border,#ccc);background:#fff;cursor:pointer">
+      📊 Enviar resumo de faturamentos (em ~5 min)
+    </button>
     <span id="testMailMsg" style="font-size:12px;margin-left:10px;color:#666"></span>
   </div>
   <script>
-  async function testarEmail(){
-    const b=document.getElementById('btnTestMail'), m=document.getElementById('testMailMsg');
-    b.disabled=true; m.style.color='#666'; m.textContent='Enviando…';
+  async function _postAlerta(url){
+    const m=document.getElementById('testMailMsg');
+    m.style.color='#666'; m.textContent='Processando…';
     try{
-      const r=await fetch('/alerta/testar-email',{method:'POST',headers:{'X-Requested-With':'fetch'}});
+      const r=await fetch(url,{method:'POST',headers:{'X-Requested-With':'fetch'}});
       const j=await r.json();
       m.style.color = j.ok ? '#0b6b4f' : '#b3261e';
-      m.textContent = j.msg || (j.ok?'Enviado.':'Falhou.');
+      m.textContent = j.msg || (j.ok?'OK.':'Falhou.');
     }catch(e){ m.style.color='#b3261e'; m.textContent='Erro de rede.'; }
-    finally{ b.disabled=false; }
+  }
+  async function testarEmail(){
+    const b=document.getElementById('btnTestMail'); b.disabled=true;
+    await _postAlerta('/alerta/testar-email'); b.disabled=false;
+  }
+  async function resumoFaturamentos(){
+    const b=document.getElementById('btnResumoFat'); b.disabled=true;
+    await _postAlerta('/alerta/resumo-faturamentos?delay=300'); b.disabled=false;
   }
   </script>
   {% endif %}
