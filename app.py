@@ -666,17 +666,55 @@ def faturar_cron_status():
                     "ultima": last.isoformat() if last else None})
 
 
+def _email_resumo_semana():
+    """(assunto, txt, html) do resumo do que foi implementado na semana.
+    Usado pelo teste de email — confirma o SMTP entregando conteúdo útil."""
+    itens = [
+        ("Faturamento automático diário (05/07)",
+         "O robô roda sozinho todo dia (~5h): fatura o dia D-3 nas 3 unidades da Rede "
+         "Una e reprocessa pendências ainda dentro do prazo. Idempotente (não duplica "
+         "anexo) e já ligado em produção. Prazo da OdontoPrev confirmado em 7 dias."),
+        ("Alerta de prazo / SLA (05/07, ampliado 09/07)",
+         "Painel /revisao mostra cada pendência com selo de urgência (vencida / vence "
+         "amanhã / 2 / 3 dias). O e-mail de alerta agora cobre vencidas + vence amanhã + "
+         "faltam 2 dias (antes só 'amanhã'), ordenado por urgência — reduz o risco de "
+         "perder um prazo."),
+        ("Backlog de revisão humana (03/07)",
+         "Toda GTO não faturada vira uma tarefa com checkbox no painel /revisao, "
+         "guardada no banco durável (Supabase)."),
+        ("Login do portal mais seguro (03/07)",
+         "Login que falha aborta com erro claro (fim do 'sucesso' silencioso); a senha "
+         "passou a ser por código de conta na tela /portal."),
+        ("Diagnóstico do sistema (09/07)",
+         "A tela /api/diag passou a mostrar se o robô rodou hoje, o tamanho do backlog "
+         "e as últimas execuções — auditoria num relance."),
+    ]
+    assunto = "RadioBras — Resumo da semana (03–10/07): faturamento automático, alerta de prazo e diagnóstico"
+    intro = ("Resumo do que foi implementado no sistema RadioBras Digital nesta semana "
+             "(03 a 10/07/2026):")
+    txt = intro + "\n\n" + "\n\n".join(
+        f"{i}. {t}\n   {d}" for i, (t, d) in enumerate(itens, 1))
+    txt += ("\n\n— E-mail enviado pelo próprio sistema para validar a configuração de "
+            "envio (Hostinger).")
+    blocos = "".join(
+        f"<li style='margin:0 0 12px'><b>{t}</b><br>"
+        f"<span style='color:#333'>{d}</span></li>" for t, d in itens)
+    html = (f"<div style='font-family:Arial,sans-serif;max-width:640px'>"
+            f"<h2 style='color:#0b6b4f'>RadioBras — Resumo da semana</h2>"
+            f"<p>{intro}</p>"
+            f"<ol style='font-size:14px;line-height:1.5;padding-left:18px'>{blocos}</ol>"
+            f"<p style='color:#888;font-size:12px'>E-mail enviado pelo próprio sistema "
+            f"para validar a configuração de envio (Hostinger).</p></div>")
+    return assunto, txt, html
+
+
 @app.route("/alerta/testar-email", methods=["POST"])
 def alerta_testar_email():
-    """Envia um email de teste (admin) — pra confirmar a configuração SMTP."""
+    """Envia um email de teste (admin) — confirma o SMTP com o resumo da semana."""
     if not _admin_ok():
         return jsonify({"error": "apenas admin"}), 403
-    ok = _send_email(
-        "RadioBras — teste de email (alerta de prazo)",
-        "Este é um email de teste do RadioBras. Se você recebeu, o SMTP está OK "
-        "e os alertas de prazo (1 dia) vão chegar por aqui.",
-        "<p>Este é um <b>email de teste</b> do RadioBras.</p><p>Se você recebeu, "
-        "o SMTP está configurado e os <b>alertas de prazo (1 dia)</b> vão chegar aqui.</p>")
+    assunto, txt, html = _email_resumo_semana()
+    ok = _send_email(assunto, txt, html)
     return jsonify({"ok": ok,
                     "msg": "Email enviado — confira a caixa de entrada." if ok
                     else "Não enviou. Confira SMTP_HOST/PORT/USER/PASSWORD e ALERTA_EMAIL_TO."})
