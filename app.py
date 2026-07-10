@@ -647,6 +647,64 @@ if os.environ.get("FATURAR_CRON", "1") != "0":
     threading.Thread(target=_faturar_scheduler, daemon=True).start()
 
 
+# ── Resumo de faturamentos por email (automático, 1x/dia) ───────────────────────
+def _resumo_fat_enviado_hoje() -> bool:
+    try:
+        d = db.cron_resumo_fat_last_at()
+        if not d:
+            return False
+        if _TZ:
+            if d.tzinfo is None:
+                from datetime import timezone as _tzc
+                d = d.replace(tzinfo=_tzc.utc)
+            d = d.astimezone(_TZ)
+            hoje = datetime.now(_TZ).date()
+        else:
+            hoje = datetime.now().date()
+        return d.date() == hoje
+    except Exception:
+        return False
+
+
+_resumo_fat_lock = threading.Lock()
+
+
+def _resumo_fat_tentar(ignorar_hora: bool = False):
+    """Envia o resumo dos faturamentos da semana no máximo 1x/dia (dedupe via
+    banco). Thread-safe. Sem `ignorar_hora`, só envia após RESUMO_FAT_HOUR."""
+    with _resumo_fat_lock:
+        if _resumo_fat_enviado_hoje():
+            return
+        if not ignorar_hora:
+            try:
+                hora = int(os.environ.get("RESUMO_FAT_HOUR", "8"))
+            except ValueError:
+                hora = 8
+            agora = datetime.now(_TZ) if _TZ else datetime.now()
+            if agora.hour < hora:
+                return
+        _enviar_resumo_faturamentos()
+        db.cron_marcar_resumo_fat()
+
+
+def _resumo_fat_scheduler():
+    """Envia o resumo de faturamentos 1x/dia (após RESUMO_FAT_HOUR, Brasília,
+    default 8h). Sem faturamentos reais na semana ou sem SMTP, nada é enviado
+    (mas o dia é marcado, pra não retentar em loop). 1 worker -> sem corrida."""
+    while not _glosa_stop.is_set():
+        try:
+            _resumo_fat_tentar()
+        except Exception as e:
+            app.logger.error("Resumo fat scheduler: %s", e)
+        _glosa_stop.wait(1800)
+
+
+if os.environ.get("RESUMO_FAT_AUTO", "1") != "0":
+    threading.Thread(target=_resumo_fat_scheduler, daemon=True).start()
+    # garante o envio de hoje logo após o boot, independente da hora (1x/dia)
+    threading.Timer(60, lambda: _resumo_fat_tentar(ignorar_hora=True)).start()
+
+
 @app.route("/faturar/cron/rodar", methods=["POST"])
 def faturar_cron_rodar_now():
     """Dispara o faturamento automático sob demanda (admin) — roda em background."""

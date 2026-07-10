@@ -367,6 +367,7 @@ class CronState(Base):
     id = Column(Integer, primary_key=True)
     faturar_last_at = Column(DateTime(timezone=True))
     faturar_last_dia = Column(String(10))
+    resumo_fat_last_at = Column(DateTime(timezone=True))
 
 
 def cron_marcar_faturar(dia: str):
@@ -383,6 +384,24 @@ def cron_faturar_last_at():
         with SessionLocal() as s:
             c = s.get(CronState, 1)
             return c.faturar_last_at if c else None
+    except Exception:
+        return None
+
+
+def cron_marcar_resumo_fat():
+    with SessionLocal() as s:
+        c = s.get(CronState, 1)
+        if not c:
+            c = CronState(id=1); s.add(c)
+        c.resumo_fat_last_at = _now()
+        s.commit()
+
+
+def cron_resumo_fat_last_at():
+    try:
+        with SessionLocal() as s:
+            c = s.get(CronState, 1)
+            return c.resumo_fat_last_at if c else None
     except Exception:
         return None
 
@@ -538,6 +557,7 @@ def _ensure_columns():
         "ALTER TABLE glosa_eventos ADD COLUMN IF NOT EXISTS demo_glosado VARCHAR(20)",
         "ALTER TABLE glosa_eventos ADD COLUMN IF NOT EXISTS demo_pago BOOLEAN DEFAULT FALSE",
         "ALTER TABLE anexacao_gtos ADD COLUMN IF NOT EXISTS liberacao VARCHAR(10)",
+        "ALTER TABLE cron_state ADD COLUMN IF NOT EXISTS resumo_fat_last_at TIMESTAMPTZ",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS conta VARCHAR(20)",
     ]
     for a in alters:
