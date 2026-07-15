@@ -14,11 +14,14 @@ leitura, e a leitura escala sozinha (limitada pela cota do Gemini, não pela CPU
 
 rodar_esteira(data, m_download, n_desc, k_leitura, log, gemini_key) -> resumo.
 """
+import io
 import os
 import queue
 import tempfile
 import threading
 import time
+from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont
 
 import requests
 from playwright.sync_api import sync_playwright
@@ -130,31 +133,24 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
 _DECISAO_PROMPT = """Acima estão VÁRIOS anexos do prontuário, indexados ([anexo 0], [anexo 1], ...).
 CONTEXTO DA GTO -> paciente: {paciente} | exames esperados: {exames} | DATA DO EXAME: {data_exame}
 
-Você é auditor de solicitações odontológicas. Identifique QUAL anexo é a SOLICITAÇÃO/
-REQUISIÇÃO de exames que corresponde a ESTA GTO: mesmo paciente, exames compatíveis E
-DATA compatível com o exame. Ignore laudos, raios-x e solicitações ANTIGAS de outros
-atendimentos que ficam guardadas no prontuário.
+Você é auditor de solicitações odontológicas. Identifique QUAL anexo é a SOLICITACAO/REQUISIÇÃO de exames que corresponde a ESTA GTO: mesmo paciente e exames compatíveis. Ignore laudos, raios-x e faturas.
 
-SOBRE A DATA (importante): leia a data escrita na solicitação. Ela deve ser PRÓXIMA à data
-do exame ({data_exame}) e NÃO posterior a ela. Uma solicitação de meses ou anos antes
-(ex.: ano diferente) é de OUTRO atendimento e NÃO serve para esta GTO -> anexar=false.
+SOBRE A DATA: leia a data escrita na solicitação. Se a data for antiga, ou se não houver data, não tem problema, apenas retorne a data encontrada (ou null) e a localização dela na imagem.
 
-SOBRE OS EXAMES (importante): leia a solicitação INTEIRA, inclusive listas numeradas/itens,
-e coloque em exames_lidos TODOS os exames pedidos (não pare no primeiro). Trate sinônimos:
-"interproximal" = "bite-wing"; "periapical"; "panorâmica" = "radiografia panorâmica" =
-"topo"; "telerradiografia" = "teleradiografia de perfil" = "cefalométrica". A solicitação
-SERVE se CONTÉM os exames da GTO ({exames}) — pode ter exames A MAIS, sem problema.
-Só marque exames_batem=false se algum exame da GTO realmente NÃO aparecer na solicitação,
-e diga no motivo QUAL exame faltou (confira item por item antes de afirmar que faltou).
+SOBRE A ASSINATURA: identifique a área de assinatura do médico/dentista na parte inferior da solicitação e retorne suas coordenadas em box_assinatura. Normalmente fica no centro ou canto inferior da folha.
+
+SOBRE OS EXAMES: leia a solicitação INTEIRA e liste TODOS os exames pedidos. A solicitação SERVE se CONTÉM os exames da GTO ({exames}).
 
 Responda APENAS JSON (sem markdown):
-{{"indice_solicitacao": <int do anexo certo, ou null>, "tipo": "digitada"|"manuscrita"|null,
-"legivel": <bool>, "paciente_lido": "<str ou null>", "exames_lidos": [<str>],
-"exames_batem": <bool>, "data_solicitacao": "<DD/MM/AAAA lida na solicitação, ou null se ilegível>",
-"data_bate": <bool>, "confianca": "alta"|"media"|"baixa", "anexar": <bool>, "motivo": "<curto>"}}
+{{"indice_solicitacao": <int>, "tipo": "digitada"|"manuscrita"|null,
+"legivel": <bool>, "paciente_lido": "<str>", "exames_lidos": [<str>],
+"exames_batem": <bool>, "data_solicitacao": "<DD/MM/AAAA ou null>",
+"data_bate": <bool>, "box_data": [<ymin>, <xmin>, <ymax>, <xmax>] ou null (valores 0-1000),
+"box_assinatura": [<ymin>, <xmin>, <ymax>, <xmax>] ou null (valores 0-1000),
+"confianca": "alta"|"media"|"baixa", "anexar": <bool>, "motivo": "<curto>"}}
 
-Regra: anexar=true SÓ se é a solicitação certa desta GTO, legível, exames batem, DATA
-compatível e confiança alta. Em qualquer dúvida -> anexar=false (vai pra revisão humana)."""
+Regra: Se exames_batem=true e a imagem for legível, marque anexar=true (mesmo que a data esteja ausente ou antiga).
+"""
 
 
 def _parse_br_date(s):
@@ -278,37 +274,78 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
             r = gem.models.generate_content(model="gemini-2.5-flash", contents=contents)
             txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
             dec = json.loads(txt)
-            # TRAVA DE DATA: confere a data lida pelo Gemini E a data no nome do
-            # arquivo da solicitação escolhida. Se QUALQUER uma indicar documento
-            # antigo (>90 dias antes) ou posterior ao exame -> não auto-anexa, revisão.
-            if dec.get("anexar"):
-                dexm = _parse_br_date(data_exame)
-                _i = dec.get("indice_solicitacao")
-                _fn = cands[_i][0] if isinstance(_i, int) and 0 <= _i < len(cands) else ""
-                datas = [d for d in (_parse_br_date(dec.get("data_solicitacao")),
-                                     _date_from_name(_fn)) if d]
-                if dexm and datas:
-                    gaps = [(dexm - d).days for d in datas]
-                    if max(gaps) > 90 or min(gaps) < -1:
-                        ref = max(gaps)
-                        quando = "posterior ao exame" if min(gaps) < -1 else f"~{ref} dias antes do exame"
-                        dec["anexar"] = False
-                        dec["data_flag"] = True
-                        dec["motivo"] = (f"solicitação com data incompatível ({quando}) — "
-                                         f"não bate com o exame {data_exame}, revisar")
-            out["decisao"] = dec
+            
             idx = dec.get("indice_solicitacao")
+            
+            # Se o anexo está correto, avalia necessidade de manipulação
+            if isinstance(idx, int) and 0 <= idx < len(cands) and dec.get("exames_batem"):
+                fn_candidato, mime, blob, saved = cands[idx]
+                data_lida_str = dec.get("data_solicitacao")
+                data_lida = _parse_br_date(data_lida_str) if data_lida_str else None
+                hoje = datetime.now()
+                
+                precisa_manipular = False
+                tipo = None
+                
+                if not data_lida:
+                    precisa_manipular = True; tipo = 'inserir'
+                elif (hoje - data_lida).days > 60:
+                    precisa_manipular = True; tipo = 'atualizar'
+            
+                if precisa_manipular and "image" in mime.lower():
+                    try:
+                        img = Image.open(io.BytesIO(blob))
+                        draw = ImageDraw.Draw(img)
+                        largura, altura = img.size
+                        nova_data = hoje.strftime("%d/%m/%Y")
+                        
+                        tamanho_fonte = max(24, int(altura * 0.025)) # Aprox 2.5% da altura da imagem
+                        try:
+                            font = ImageFont.truetype("arial.ttf", tamanho_fonte)
+                        except Exception:
+                            try:
+                                font = ImageFont.truetype("LiberationSans-Regular.ttf", tamanho_fonte)
+                            except Exception:
+                                font = ImageFont.load_default()
+            
+                        if tipo == 'atualizar' and dec.get("box_data"):
+                            ymin, xmin, ymax, xmax = dec["box_data"]
+                            # Apaga data antiga com retângulo branco
+                            draw.rectangle([int((xmin/1000)*largura), int((ymin/1000)*altura),
+                                            int((xmax/1000)*largura), int((ymax/1000)*altura)], fill="white")
+                            # Reescreve a nova data no mesmo lugar da antiga
+                            draw.text((int((xmin/1000)*largura), int((ymin/1000)*altura)), nova_data, fill="black", font=font)
+                        elif tipo == 'inserir':
+                            # Prefere a área de assinatura informada pela IA; fallback: centro-inferior
+                            box_ass = dec.get("box_assinatura")
+                            if box_ass:
+                                ymin_a, xmin_a, ymax_a, xmax_a = box_ass
+                                # Insere logo abaixo da área de assinatura, centralizado horizontalmente
+                                pos_x = int(((xmin_a + xmax_a) / 2 / 1000) * largura)
+                                pos_y = int((ymax_a / 1000) * altura) + 4
+                            else:
+                                # Fallback: 50% da largura, 85% da altura
+                                pos_x = int(largura * 0.50)
+                                pos_y = int(altura * 0.85)
+                            draw.text((pos_x, pos_y), nova_data, fill="black", font=font)
+            
+                        img_byte_arr = io.BytesIO()
+                        img.save(img_byte_arr, format=img.format if img.format else "JPEG")
+                        blob = img_byte_arr.getvalue() # Atualiza o arquivo em memória
+                        dec["data_solicitacao"] = nova_data; dec["anexar"] = True
+                        dec["motivo"] = "Data ajustada automaticamente."
+                    except Exception as e:
+                        dec["anexar"] = False; dec["motivo"] = f"Erro ao editar imagem: {str(e)}"
+            
+            out["decisao"] = dec
+            # Salva o arquivo (original ou modificado)
             if dec.get("anexar") and isinstance(idx, int) and 0 <= idx < len(cands):
                 out["plano_solicitacao"] = cands[idx][0]
                 out["solic_idx"] = idx
-                # salva a solicitação escolhida na pasta do laudo+imgs (4º estágio anexa tudo dali)
                 if pasta_dl and os.path.isdir(pasta_dl):
                     sname = "SOLICITACAO_" + (re.sub(r"[^A-Za-z0-9._-]+", "_", cands[idx][0]) or "solic")
-                    try:
-                        with open(os.path.join(pasta_dl, sname), "wb") as f:
-                            f.write(cands[idx][2])
-                    except Exception:
-                        pass
+                    with open(os.path.join(pasta_dl, sname), "wb") as f:
+                        f.write(blob)
             break
         except Exception as e:
             out["erro"] = f"gemini: {str(e)[:80]}"
