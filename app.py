@@ -925,6 +925,22 @@ def alerta_pendencias_agora():
                     else "Não enviou (confira SMTP_HOST/ALERTA_EMAIL_TO)."})
 
 
+@app.route("/api/pendencias")
+def api_pendencias():
+    """Relação única de pendências (todas as contas juntas), c/ unidade e SLA.
+    ?status=abertas|resolvidas|todas (default abertas). Admin."""
+    if not _admin_ok():
+        return jsonify({"error": "apenas admin"}), 403
+    status = request.args.get("status", "abertas")
+    itens = db.listar_pendencias(status)
+    for p in itens:
+        p["sla"] = _sla_dias_restantes(p.get("dia"))
+        p["unidade"] = _plano_nome(p.get("conta")) or (p.get("conta") or "—")
+        p["prazo_rotulo"] = _rotulo_sla(p["sla"])[0]
+    itens.sort(key=lambda p: (p["sla"] is None, p["sla"] if p["sla"] is not None else 9999))
+    return jsonify({"total": len(itens), "prazo_dias": _prazo_dias(), "pendencias": itens})
+
+
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
