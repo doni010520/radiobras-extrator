@@ -860,6 +860,71 @@ def alerta_resumo_faturamentos():
                     "msg": f"Agendado — o resumo chega em ~{delay // 60} min."})
 
 
+def _rotulo_sla(sla):
+    """(rótulo, cor) de qualquer SLA (inclusive no-prazo e sem-data)."""
+    if sla is None:
+        return ("sem data", "#666")
+    if sla <= 0:
+        return ("VENCIDA", "#7a0d0d")
+    if sla == 1:
+        return ("vence amanhã", "#b3261e")
+    if sla == 2:
+        return ("faltam 2 dias", "#9a4d00")
+    return (f"no prazo ({sla}d)", "#0b6b4f")
+
+
+def _email_pendencias_abertas():
+    """(assunto, txt, html) com TODAS as pendências abertas agora, ordenadas por
+    urgência (vencidas primeiro). (None, None, None) se não houver."""
+    try:
+        itens = db.listar_pendencias("abertas")
+    except Exception:
+        return None, None, None
+    if not itens:
+        return None, None, None
+    for p in itens:
+        p["sla"] = _sla_dias_restantes(p.get("dia"))
+        p["unidade"] = _plano_nome(p.get("conta")) or (p.get("conta") or "—")
+    itens.sort(key=lambda p: (p["sla"] is None, p["sla"] if p["sla"] is not None else 9999))
+    total = len(itens)
+    n_venc = sum(1 for p in itens if p["sla"] is not None and p["sla"] <= 0)
+    assunto = f"RadioBras — {total} pendência(s) aberta(s) · {n_venc} vencida(s)"
+    linhas = "\n".join(
+        f"  • [{_rotulo_sla(p['sla'])[0]}] {p['unidade']} · dia {p.get('dia') or '—'} · GTO {p.get('gto')} "
+        f"· {p.get('paciente') or '—'} — {p.get('motivo') or 'revisão'}" for p in itens)
+    txt = (f"Todas as pendências abertas agora: {total} ({n_venc} vencidas). "
+           f"Prazo OdontoPrev {_prazo_dias()} dias.\n\n{linhas}\n\nPainel: /revisao")
+    rows = "".join(
+        f"<tr><td style='padding:5px 9px;color:{_rotulo_sla(p['sla'])[1]};font-weight:700'>{_rotulo_sla(p['sla'])[0]}</td>"
+        f"<td style='padding:5px 9px'>{p['unidade']}</td>"
+        f"<td style='padding:5px 9px'>{p.get('dia') or '—'}</td>"
+        f"<td style='padding:5px 9px'><b>{p.get('gto')}</b></td>"
+        f"<td style='padding:5px 9px'>{p.get('paciente') or '—'}</td>"
+        f"<td style='padding:5px 9px'>{p.get('motivo') or 'revisão'}</td></tr>" for p in itens)
+    html = (f"<div style='font-family:Arial,sans-serif'>"
+            f"<h2 style='color:#b3261e'>{total} pendência(s) aberta(s) · {n_venc} vencida(s)</h2>"
+            f"<p>Prazo de faturamento OdontoPrev: <b>{_prazo_dias()} dias</b>. Painel: /revisao</p>"
+            f"<table style='border-collapse:collapse;font-size:12px' border='1'>"
+            f"<tr style='background:#f0f0f0'><th style='padding:5px 9px'>Prazo</th>"
+            f"<th style='padding:5px 9px'>Unidade</th><th style='padding:5px 9px'>Dia</th>"
+            f"<th style='padding:5px 9px'>GTO</th><th style='padding:5px 9px'>Paciente</th>"
+            f"<th style='padding:5px 9px'>Motivo</th></tr>{rows}</table></div>")
+    return assunto, txt, html
+
+
+@app.route("/alerta/pendencias-agora", methods=["POST"])
+def alerta_pendencias_agora():
+    """Envia AGORA um email com TODAS as pendências abertas (admin)."""
+    if not _admin_ok():
+        return jsonify({"error": "apenas admin"}), 403
+    assunto, txt, html = _email_pendencias_abertas()
+    if not assunto:
+        return jsonify({"ok": False, "msg": "Nenhuma pendência aberta no momento."})
+    ok = _send_email(assunto, txt, html)
+    return jsonify({"ok": ok, "msg": "Email enviado — confira a caixa." if ok
+                    else "Não enviou (confira SMTP_HOST/ALERTA_EMAIL_TO)."})
+
+
 # ── Rotas ─────────────────────────────────────────────────────────────────────
 
 @app.route("/")
