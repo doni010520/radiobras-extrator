@@ -40,37 +40,50 @@ def normaliza_nome(nome: str) -> str:
     s = unicodedata.normalize("NFKD", nome or "")
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = re.sub(r"\s+", " ", s).strip().upper()
-    return s
-
-
 # ── Login ──────────────────────────────────────────────────────────────────────
 def login_odonto(pw, user: str, password: str):
     """Retorna (browser, ctx, page) logado no portal. Lança RuntimeError se falhar."""
-    browser = pw.chromium.launch(
-        headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
-    )
-    # locale/timezone fixos: no Docker o Chromium roda em en-US e renderiza datas
-    # como MM/DD/AAAA, quebrando o filtro de Liberação (== DD/MM/AAAA) -> "0 GTOs".
-    ctx = browser.new_context(
-        viewport={"width": 1500, "height": 900},
-        locale="pt-BR",
-        timezone_id="America/Sao_Paulo",
-    )
-    page = ctx.new_page()
-    page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=45000)
-    page.wait_for_timeout(2500)
-    page.fill('input[name="username"]', user)
-    page.fill('input[name="current-password"]', password)
-    page.click('button[type="submit"]')
-    try:
-        page.wait_for_load_state("networkidle", timeout=30000)
-    except Exception:
-        pass
-    page.wait_for_timeout(4000)
-    if page.query_selector('input[name="current-password"]'):
-        browser.close()
-        raise RuntimeError("Falha no login OdontoPrev (campo de senha ainda visível).")
-    return browser, ctx, page
+    for tentativa in range(3):
+        browser = pw.chromium.launch(
+            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+        ctx = browser.new_context(
+            viewport={"width": 1500, "height": 900},
+            locale="pt-BR",
+            timezone_id="America/Sao_Paulo",
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = ctx.new_page()
+        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=45000)
+    
+        page.wait_for_timeout(2500)
+        page.fill('input[name="username"]', user)
+        page.fill('input[name="current-password"]', password)
+        page.click('button[type="submit"]')
+        
+        try:
+            page.wait_for_selector('input[name="current-password"]', state="hidden", timeout=40000)
+        except Exception:
+            pass
+        
+        if not page.query_selector('input[name="current-password"]') or not page.is_visible('input[name="current-password"]'):
+            return browser, ctx, page
+            
+        bloqueado = page.query_selector("text=/Aguarde.*segundos/i") or page.query_selector("text=/Usuário bloqueado/i")
+        if bloqueado:
+            print(f"[_odonto_setup] Rate-limit detectado. Fechando browser. Aguardando 85s para tentar novamente (tentativa {tentativa+1}/3)...", flush=True)
+            browser.close()
+            import time
+            time.sleep(85)
+        else:
+            try:
+                page.screenshot(path="login_failed.png")
+            except Exception:
+                pass
+            browser.close()
+            raise RuntimeError("Falha no login OdontoPrev (campo de senha ainda visível sem mensagem de bloqueio 80s).")
+
+    raise RuntimeError("Falha no login OdontoPrev após lidar com rate-limit.")
 
 
 # ── Navegação até Consultar GTOs ────────────────────────────────────────────────

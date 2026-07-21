@@ -294,19 +294,31 @@ def contar_pendencias_abertas() -> int:
         return 0
 
 
-def listar_pendencias(status: str = "abertas", limit: int = 500) -> list:
+def listar_pendencias(status: str = "abertas", limit: int = 5000) -> list:
     with SessionLocal() as s:
         q = s.query(Pendencia)
         if status == "abertas":
             q = q.filter(Pendencia.resolvido == False)      # noqa: E712
         elif status == "resolvidas":
             q = q.filter(Pendencia.resolvido == True)        # noqa: E712
-        rows = q.order_by(Pendencia.resolvido, Pendencia.dia, Pendencia.criado_em.desc()).limit(limit).all()
-        return [{"id": p.id, "conta": p.conta, "dia": p.dia, "gto": p.gto,
+        rows = q.order_by(Pendencia.resolvido, Pendencia.criado_em.desc()).limit(limit).all()
+        
+        def _parse(d_str):
+            try:
+                import datetime
+                return datetime.datetime.strptime(d_str, "%d/%m/%Y").date()
+            except Exception:
+                import datetime
+                return datetime.date.min
+
+        out = [{"id": p.id, "conta": p.conta, "dia": p.dia, "gto": p.gto,
                  "paciente": p.paciente, "categoria": p.categoria, "motivo": p.motivo,
                  "criado_em": p.criado_em, "resolvido": p.resolvido,
                  "resolvido_em": p.resolvido_em, "resolvido_por": p.resolvido_por,
                  "obs": p.obs} for p in rows]
+        if status == "abertas":
+            out.sort(key=lambda x: _parse(x["dia"]))
+        return out
 
 
 def resolver_pendencia(pid: int, username: str, obs: str = None):
@@ -559,6 +571,7 @@ def _ensure_columns():
         "ALTER TABLE anexacao_gtos ADD COLUMN IF NOT EXISTS liberacao VARCHAR(10)",
         "ALTER TABLE cron_state ADD COLUMN IF NOT EXISTS resumo_fat_last_at TIMESTAMPTZ",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS conta VARCHAR(20)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uix_pendencias ON pendencias (conta, dia, gto)",
     ]
     for a in alters:
         try:
