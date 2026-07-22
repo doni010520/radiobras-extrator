@@ -113,19 +113,31 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
         wl = listar_worklist_por_pacientes(pg, data, [pac["nome"]])
     else:
         wl = listar_worklist_por_pacientes(pg, data, [g["nome"]])
+        
+        def _wl_valida(cands, nn):
+            for it in cands:
+                wn = normaliza_nome(it.get("nome", ""))
+                if _prefixo_casa(wn, nn) or _prefixo_casa(nn, wn):
+                    return True
+            return False
+
         accs = sorted({w["accession"] for w in wl if w.get("accession")})
+        if accs and not _wl_valida(wl, nn): accs = []
+
         toks = g["nome"].split()
         while not accs and len(toks) > 2:
             toks = toks[:-1]
             wl = listar_worklist_por_pacientes(pg, data, [" ".join(toks)])
             accs = sorted({w["accession"] for w in wl if w.get("accession")})
+            if accs and not _wl_valida(wl, nn): accs = []
         if not accs:
             return {"gto": g["gto"], "nome": g["nome"], "status": "SEM_MATCH", "dt_dl": time.monotonic() - t0}
         pac = {"nome": g["nome"], "cod_pac": "WL" + accs[0], "accessions": accs}
     res = _processar_paciente(pg, ctx, pac, wl, tmp, data)
     pasta = os.path.join(tmp, res["pasta"])
     nf = len(os.listdir(pasta)) if os.path.isdir(pasta) else 0
-    return {"gto": g["gto"], "nome": pac["nome"], "status": "BAIXADO",
+    status = "BAIXADO" if nf > 0 else "SEM_ARQUIVOS"
+    return {"gto": g["gto"], "nome": pac["nome"], "status": status,
             "arquivos": nf, "imgs": res.get("imagens", {}).get("qtd", 0),
             "_pac": pac, "_pasta": pasta, "dt_dl": time.monotonic() - t0}
 
@@ -282,7 +294,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                 fn_candidato, mime, blob, saved = cands[idx]
                 data_lida_str = dec.get("data_solicitacao")
                 data_lida = _parse_br_date(data_lida_str) if data_lida_str else None
-                hoje = datetime.now()
+                hoje = datetime.now().date()
                 
                 precisa_manipular = False
                 tipo = None
@@ -330,6 +342,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                             draw.text((pos_x, pos_y), nova_data, fill="black", font=font)
             
                         img_byte_arr = io.BytesIO()
+                        if img.mode in ("RGBA", "P"): img = img.convert("RGB")
                         img.save(img_byte_arr, format=img.format if img.format else "JPEG")
                         blob = img_byte_arr.getvalue() # Atualiza o arquivo em memória
                         dec["data_solicitacao"] = nova_data; dec["anexar"] = True
@@ -462,6 +475,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 nomes, cnt = set(), -1
             if cnt >= 2 or (cnt >= 0 and _ja_anexado_por_nos(nomes)):
                 _t(f"[DESC] GTO {g['gto']}: {cnt} anexos -> completa, pula")
+                with _lock:
+                    resultados.append({"gto": g["gto"], "nome": g["nome"], "status": "JA_ANEXADO"})
                 return
             g["nome_norm"] = normaliza_nome(g["nome"])
             with _lock:
@@ -691,7 +706,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     com_justif = [r for r in baixados if (r.get("decisao") or {}).get("justificativa")]
     # painel das decisões (pro dry-run que você revisa)
     decisoes = []
-    for r in baixados:
+    _outros_res = [r for r in resultados if r["status"] in ("SEM_MATCH", "AMBIGUO", "SEM_ARQUIVOS", "JA_ANEXADO")]
+    
+    for r in baixados + _outros_res:
+        if r.get("status") == "JA_ANEXADO":
+            decisoes.append({
+                "gto": r["gto"], "paciente": r["nome"], "categoria": "auto",
+                "anexado": "OK", "laudo_imgs": [], "solicitacao": None,
+                "anexar_solic": False, "justificativa": True, "gto_exames": [],
+                "candidatos": [], "solic_idx": None,
+                "gemini": {"motivo": "GTO com anexos completos no OdontoPrev"}, "erro": None
+            })
+            continue
+
         dec = r.get("decisao") or {}
         d = dec.get("decisao") or {}
         if dec.get("justificativa"):
