@@ -94,6 +94,9 @@ def normaliza_nome(nome: str) -> str:
     s = unicodedata.normalize("NFKD", nome or "")
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = re.sub(r"\s+", " ", s).strip().upper()
+    return s
+
+
 # ── Login ──────────────────────────────────────────────────────────────────────
 def login_odonto(pw, user: str, password: str):
     """Retorna (browser, ctx, page) logado no portal. Lança RuntimeError se falhar."""

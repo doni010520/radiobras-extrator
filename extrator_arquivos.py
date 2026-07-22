@@ -240,27 +240,9 @@ def _get_relatorio_analitico(page, convenios: list, segmentos: list, data: str):
 
     # Capturar cookies da sessão para o POST via requests
     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
-    # O relatório às vezes volta TRUNCADO (1-2 linhas) de forma intermitente —
-    # visto em produção: 1ª chamada 1 paciente, 2ª chamada 31. Re-POST até 3x
-    # quando vier suspeito de truncado e fica com o MAIOR resultado.
-    best, last_err = None, None
-    for tentativa in range(3):
-        try:
-            html_rel = post_relatorio(cookies, ins_toks, seg_toks, data, data)
-            df, _, _ = parse_html_to_df(html_rel)
-        except Exception as e:
-            last_err = e
-            df = None
-        if df is not None and (best is None or len(df) > len(best)):
-            best = df
-        if best is not None and len(best) > 2:
-            break
-        print(f"[relatorio] retorno suspeito ({0 if best is None else len(best)} linha(s)), "
-              f"re-tentando POST ({tentativa + 1}/3)...", flush=True)
-        _time.sleep(6)
-    if best is None:
-        raise last_err if last_err else RuntimeError("Relatório analítico sem linhas.")
-    return best
+    html_rel = post_relatorio(cookies, ins_toks, seg_toks, data, data)
+    df, _, _ = parse_html_to_df(html_rel)
+    return df
 
 
 def listar_worklist_dia(page, data: str) -> list:
