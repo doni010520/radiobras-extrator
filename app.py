@@ -348,9 +348,15 @@ def _glosa_atualizou_hoje() -> bool:
         return False
 
 
+_glosa_ultima_tentativa = None  # data da última tentativa: garante 1x/dia (mesmo se falhar)
+
+
 def _glosa_scheduler():
     """Atualiza o panorama de glosas 1x/dia (após GLOSA_UPDATE_HOUR, Brasília).
-    gunicorn roda 1 worker -> sem concorrência de agendadores."""
+    gunicorn roda 1 worker -> sem concorrência de agendadores.
+    Tenta no máximo 1x por dia — mesmo se o login falhar — pra não martelar o
+    OdontoPrev de 30 em 30 min (o que dispara o rate-limit/bot-detection)."""
+    global _glosa_ultima_tentativa
     try:
         hora = int(os.environ.get("GLOSA_UPDATE_HOUR", "6"))
     except ValueError:
@@ -363,7 +369,9 @@ def _glosa_scheduler():
             except Exception:
                 pass
             agora = datetime.now(_TZ) if _TZ else datetime.now()
-            if agora.hour >= hora and not _glosa_atualizou_hoje():
+            if (agora.hour >= hora and not _glosa_atualizou_hoje()
+                    and _glosa_ultima_tentativa != agora.date()):
+                _glosa_ultima_tentativa = agora.date()  # marca a tentativa do dia (mesmo se falhar)
                 dia = agora.strftime("%d/%m/%Y")
                 jid = "auto" + uuid.uuid4().hex[:8]
                 with _jobs_lock:
@@ -400,9 +408,15 @@ def _anexacao_atualizou_hoje() -> bool:
         return False
 
 
+_anexacao_ultima_tentativa = None  # data da última tentativa: garante 1x/dia (mesmo se falhar)
+
+
 def _anexacao_scheduler():
     """Varre anexação/faturamento das 3 unidades 1x/dia (após ANEXACAO_UPDATE_HOUR,
-    default 7h Brasília — escalonado da glosa p/ não rodarem juntas)."""
+    default 7h Brasília — escalonado da glosa p/ não rodarem juntas).
+    Tenta no máximo 1x por dia — mesmo se o login falhar — pra não martelar o
+    OdontoPrev de 30 em 30 min (o que dispara o rate-limit/bot-detection)."""
+    global _anexacao_ultima_tentativa
     try:
         hora = int(os.environ.get("ANEXACAO_UPDATE_HOUR", "7"))
     except ValueError:
@@ -410,7 +424,9 @@ def _anexacao_scheduler():
     while not _glosa_stop.is_set():
         try:
             agora = datetime.now(_TZ) if _TZ else datetime.now()
-            if agora.hour >= hora and not _anexacao_atualizou_hoje():
+            if (agora.hour >= hora and not _anexacao_atualizou_hoje()
+                    and _anexacao_ultima_tentativa != agora.date()):
+                _anexacao_ultima_tentativa = agora.date()  # marca a tentativa do dia (mesmo se falhar)
                 hoje = agora.strftime("%d/%m/%Y")
                 de = "01/" + hoje[3:]
                 jid = "anxauto" + uuid.uuid4().hex[:8]
