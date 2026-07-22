@@ -671,6 +671,17 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             f"Login/consulta no PRORADIS falhou. Detalhe: {_ep[:140]}")
     by_norm, state = setup.get("by_norm", {}), setup.get("state")
     token, alvos = setup.get("token"), setup.get("alvos", [])
+    # Guarda anti-truncamento: com 5+ alvos no OdontoPrev, um by_norm de <=2
+    # pacientes é relatório truncado (intermitência do PRORADIS), não dia vazio.
+    # Refaz o setup do PRORADIS uma vez antes de condenar os downloads.
+    if len(alvos) >= 5 and len(by_norm) <= 2:
+        _t(f"[SETUP] by_norm={len(by_norm)} suspeito p/ {len(alvos)} alvo(s) — refazendo PRORADIS...")
+        setup.pop("err_prorad", None)
+        _prorad_setup()
+        novo_bn = setup.get("by_norm", {})
+        if setup.get("err_prorad") is None and len(novo_bn) > len(by_norm):
+            by_norm, state = novo_bn, setup.get("state", state)
+        _t(f"[SETUP] PRORADIS refeito: by_norm={len(by_norm)}")
     _t(f"PRORADIS by_norm={len(by_norm)} | OdontoPrev token={'ok' if token else 'FALHOU'} "
        f"| {len(alvos)} alvo(s)")
     tmp = tempfile.mkdtemp(prefix="_esteira_")
