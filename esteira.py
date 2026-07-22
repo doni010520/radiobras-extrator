@@ -35,7 +35,7 @@ from extrator_arquivos import (
 from extrator_odontoprev import (
     login_odonto, get_credentials_odonto, abrir_consultar_gtos,
     consultar_periodo, listar_gtos, abrir_gto, _anexos_nomes, _anexos_count,
-    normaliza_nome, upload_arquivos,
+    normaliza_nome, upload_arquivos, _odo_requests_proxies,
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
@@ -460,6 +460,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         HTTP puro em paralelo (ThreadPool) -> sem popup, sem render, ~zero CPU."""
         from concurrent.futures import ThreadPoolExecutor
         sess = requests.Session()
+        _pxy = _odo_requests_proxies()   # OdontoPrev via proxy residencial (PRORADIS fica direto)
+        if _pxy:
+            sess.proxies.update(_pxy)
         sess.headers.update({"Authorization": token or "", "User-Agent": "Mozilla/5.0",
                              "Origin": "https://credenciado.odontoprev.com.br",
                              "Referer": "https://credenciado.odontoprev.com.br/"})

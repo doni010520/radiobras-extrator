@@ -12,6 +12,7 @@ Fluxo mapeado e validado em 08/06/2026 (GTO 193176575 - CHIMENE):
 import os
 import re
 import unicodedata
+from urllib.parse import urlparse, unquote
 
 # Carrega .env em desenvolvimento local (no Render/EasyPanel as vars já vêm do ambiente).
 try:
@@ -35,6 +36,59 @@ def get_credentials_odonto():
     return user, pwd
 
 
+# ── Proxy (SOMENTE OdontoPrev) ───────────────────────────────────────────────
+# O servidor (datacenter) é bloqueado pelo OdontoPrev (rate-limit/anti-bot). Um
+# proxy residencial STICKY (IP fixo durante a sessão) contorna. O PRORADIS é
+# acessado DIRETO (sem proxy) — por isso a var é ODONTO_PROXY_URL, não global.
+# Formato esperado: http://usuario:senha@host:porta
+def _odo_proxy_url() -> str:
+    return (os.environ.get("ODONTO_PROXY_URL") or "").strip()
+
+
+def _fresh_sessid(username: str) -> str:
+    """Se o proxy usa ';sessid.<x>' (sticky DataImpulse), troca <x> por um token
+    NOVO a cada chamada -> um IP residencial BR diferente por sessao, porém ESTAVEL
+    durante ela. Espalha a carga entre varios IPs e evita re-bloqueio no mesmo IP."""
+    import binascii
+    if ";sessid." not in (username or ""):
+        return username
+    tok = binascii.hexlify(os.urandom(4)).decode()
+    return re.sub(r";sessid\.[^;]*", f";sessid.{tok}", username)
+
+
+def _odo_playwright_proxy():
+    """Dict de proxy pro Playwright (chromium.launch). None se não configurado.
+    Cada chamada gera um sessid novo (IP BR fresco, sticky durante a sessao)."""
+    url = _odo_proxy_url()
+    if not url:
+        return None
+    p = urlparse(url)
+    server = f"{p.scheme or 'http'}://{p.hostname}"
+    if p.port:
+        server += f":{p.port}"
+    proxy = {"server": server}
+    if p.username:
+        proxy["username"] = _fresh_sessid(unquote(p.username))
+    if p.password:
+        proxy["password"] = unquote(p.password)
+    return proxy
+
+
+def _odo_requests_proxies():
+    """Dict de proxies pro requests (http/https). None se não configurado.
+    Reconstroi a URL com sessid novo (mesmo IP BR pra todos os requests da sessao)."""
+    url = _odo_proxy_url()
+    if not url:
+        return None
+    p = urlparse(url)
+    user = _fresh_sessid(unquote(p.username or ""))
+    pwd = unquote(p.password or "")
+    hostport = (p.hostname or "") + (f":{p.port}" if p.port else "")
+    auth = f"{user}:{pwd}@" if user else ""
+    base = f"{p.scheme or 'http'}://{auth}{hostport}"
+    return {"http": base, "https": base}
+
+
 def normaliza_nome(nome: str) -> str:
     """MAIÚSCULAS, sem acento, espaços colapsados — chave de comparação."""
     s = unicodedata.normalize("NFKD", nome or "")
@@ -44,8 +98,12 @@ def normaliza_nome(nome: str) -> str:
 def login_odonto(pw, user: str, password: str):
     """Retorna (browser, ctx, page) logado no portal. Lança RuntimeError se falhar."""
     for tentativa in range(3):
+        _pxy = _odo_playwright_proxy()   # sessid novo por tentativa -> IP BR fresco
+        if _pxy:
+            print(f"[_odonto] login via proxy {_pxy['server']} (tentativa {tentativa+1}/3)", flush=True)
         browser = pw.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"]
+            headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"],
+            proxy=_pxy,
         )
         ctx = browser.new_context(
             viewport={"width": 1500, "height": 900},
@@ -54,11 +112,59 @@ def login_odonto(pw, user: str, password: str):
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = ctx.new_page()
-        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=45000)
+        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
     
-        page.wait_for_timeout(2500)
-        page.fill('input[name="username"]', user)
-        page.fill('input[name="current-password"]', password)
+        # SPA Vue/Vuetify pode hidratar devagar (sobretudo via proxy residencial).
+        # Espera os campos ficarem VISIVEIS + rede ociosa ANTES de preencher; senao o
+        # v-model do Vue nao captura o valor e o submit acusa "Campo obrigatorio".
+        try:
+            page.wait_for_selector('input[name="username"]', state="visible", timeout=45000)
+            page.wait_for_selector('input[name="current-password"]', state="visible", timeout=45000)
+        except Exception:
+            browser.close(); continue
+        try:
+            page.wait_for_load_state("networkidle", timeout=20000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1200)
+
+        def _fill_robusto(sel, val):
+            loc = page.locator(sel)
+            for _ in range(3):
+                try:
+                    loc.click(timeout=8000); loc.fill(val)
+                except Exception:
+                    pass
+                try:
+                    if loc.input_value() == val:
+                        page.keyboard.press("Tab"); return
+                except Exception:
+                    pass
+                # fallback: seta o valor via JS e dispara os eventos que o Vue escuta
+                try:
+                    page.eval_on_selector(
+                        sel,
+                        "(el, v) => { el.value = v;"
+                        " el.dispatchEvent(new Event('input', {bubbles:true}));"
+                        " el.dispatchEvent(new Event('change', {bubbles:true})); }",
+                        val)
+                except Exception:
+                    pass
+            page.keyboard.press("Tab")
+
+        _fill_robusto('input[name="username"]', user)
+        _fill_robusto('input[name="current-password"]', password)
+
+        # confirma que AMBOS ficaram preenchidos ANTES de enviar
+        try:
+            u_ok = page.locator('input[name="username"]').input_value() == user
+            p_ok = page.locator('input[name="current-password"]').input_value() == password
+        except Exception:
+            u_ok = p_ok = False
+        if not (u_ok and p_ok):
+            print(f"[_odonto] campos nao preencheram (tentativa {tentativa+1}/3), retry", flush=True)
+            browser.close(); continue
+
         page.click('button[type="submit"]')
         
         try:
@@ -76,14 +182,13 @@ def login_odonto(pw, user: str, password: str):
             import time
             time.sleep(85)
         else:
+            print(f"[_odonto] login nao completou (tentativa {tentativa+1}/3), retry", flush=True)
             try:
                 page.screenshot(path="login_failed.png")
             except Exception:
                 pass
             browser.close()
-            raise RuntimeError("Falha no login OdontoPrev (campo de senha ainda visível sem mensagem de bloqueio 80s).")
-
-    raise RuntimeError("Falha no login OdontoPrev após lidar com rate-limit.")
+    raise RuntimeError("Falha no login OdontoPrev apos 3 tentativas (campo de senha ainda visivel).")
 
 
 # ── Navegação até Consultar GTOs ────────────────────────────────────────────────
