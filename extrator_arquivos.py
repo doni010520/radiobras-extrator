@@ -636,7 +636,11 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
             seen_tokens.add(tok)
             try:
                 r = sess.get(f"{BASE}/report/pdf?studies={tok}", timeout=60)
-                if r.content[:4] == b"%PDF":
+                # Mesma guarda do CEPH (linha ~607): o laudo OFICIAL as vezes volta
+                # como PDF de ~857B (pagina em branco/erro renderizada) — comeca com
+                # %PDF, mas esta VAZIO. Sem o limite de tamanho, esse laudo em branco
+                # era salvo e anexado (ex.: JOSE IVAN). Rejeita < 10KB como NAO_PRONTO.
+                if r.content[:4] == b"%PDF" and len(r.content) >= 10_000:
                     ch = hashlib.md5(r.content).hexdigest()
                     if ch in seen_content:
                         continue  # mesmo laudo ja salvo (token diferente, conteudo igual)

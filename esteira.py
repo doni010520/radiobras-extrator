@@ -476,11 +476,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 cnt = len(imgs)
             except Exception:
                 nomes, cnt = set(), -1
-            if cnt >= 2 or (cnt >= 0 and _ja_anexado_por_nos(nomes)):
-                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos -> completa, pula")
+            # Um GTO só é "completo" se JÁ tiver um LAUDO entre os anexos. Antes o
+            # código pulava por CONTAGEM (cnt >= 2), então GTO com imagens/solicitação
+            # mas SEM laudo (ex.: JOAO PEDRO — 4 anexos, 0 laudo) era marcado como
+            # completo e sumia do radar. Agora, sem laudo, ele ENTRA na fila (baixa o
+            # laudo real do PRORADIS e anexa; se não houver, vira pendência sem_laudo).
+            tem_laudo = any("LAUDO" in str(n).upper() for n in nomes)
+            if tem_laudo and (cnt >= 2 or (cnt >= 0 and _ja_anexado_por_nos(nomes))):
+                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos (c/ laudo) -> completa, pula")
                 with _lock:
                     resultados.append({"gto": g["gto"], "nome": g["nome"], "status": "JA_ANEXADO"})
                 return
+            if cnt >= 2 and not tem_laudo:
+                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos mas SEM laudo -> fila (falta laudo)")
             g["nome_norm"] = normaliza_nome(g["nome"])
             with _lock:
                 n_pend["n"] += 1
@@ -554,8 +562,13 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 item["dt_decisao"] = time.monotonic() - t0
                 with _lock:
                     ativos_le["n"] -= 1
-                # auto/justificativa -> anexa (4º estágio); resto fica avisado (não fatura)
-                anexa = bool(dec.get("justificativa") or dec.get("plano_solicitacao"))
+                # GATE: só anexa se tiver LAUDO válido (a menos que seja por
+                # justificativa/campo 49, que dispensa laudo). Sem laudo, NÃO fatura
+                # e o item cai como pendência 'sem_laudo' na classificação abaixo.
+                _tem_laudo = any(str(f).upper().startswith("LAUDO_")
+                                 for f in dec.get("plano_laudo_imgs", []))
+                anexa = bool(dec.get("justificativa")) or (
+                        bool(dec.get("plano_solicitacao")) and _tem_laudo)
                 if anexar_on and anexa:
                     fila_anexar.put(item)
                 else:
@@ -724,10 +737,14 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
 
         dec = r.get("decisao") or {}
         d = dec.get("decisao") or {}
+        _tem_laudo = any(str(f).upper().startswith("LAUDO_")
+                         for f in dec.get("plano_laudo_imgs", []))
         if dec.get("justificativa"):
             cat = "justificativa"
-        elif dec.get("plano_solicitacao"):
+        elif dec.get("plano_solicitacao") and _tem_laudo:
             cat = "auto"
+        elif dec.get("plano_solicitacao") and not _tem_laudo:
+            cat = "sem_laudo"          # GATE: solicitação OK mas falta laudo -> pendência
         elif d.get("indice_solicitacao") is None:
             cat = "sem_solicitacao"
         else:

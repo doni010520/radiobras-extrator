@@ -488,6 +488,8 @@ def salvar_execucao(resumo: dict) -> int:
                 motivo = ""
             elif cat == "sem_solicitacao":
                 motivo = g.get("motivo") or x.get("erro") or "Sem solicitação e sem justificativa (campo 49 vazio)"
+            elif cat == "sem_laudo":
+                motivo = "Solicitação OK, mas falta o LAUDO válido no PRORADIS (anexos sem laudo, ou laudo veio em branco/não pronto)"
             elif cat == "justificativa":
                 motivo = ""  # foi faturado por justificativa (se anexado)
             else:
