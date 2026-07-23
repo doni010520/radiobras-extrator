@@ -597,13 +597,21 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
             try:
                 url = f"{BASE}/report_ceph/print_preview/{tok}"
                 ceph_page.goto(url, wait_until="networkidle")
-                ceph_page.wait_for_timeout(3500)
-                ceph_page.evaluate(
-                    "() => { document.querySelectorAll"
-                    "('#bg-loading,.loading,#loading').forEach(e => e.remove()); }"
-                )
-                pdf_bytes = ceph_page.pdf(format="A4", print_background=True)
-                size = len(pdf_bytes)
+                # Render intermitente: as vezes a pagina nao terminou de carregar e o
+                # PDF sai ~857B em branco. Re-renderiza ate vir >=10KB (ficando com o
+                # maior). O dedup por (acc,exame) evita duplicar.
+                pdf_bytes, size = b"", 0
+                for _r in range(3):
+                    ceph_page.wait_for_timeout(3500 if _r == 0 else 2500)
+                    ceph_page.evaluate(
+                        "() => { document.querySelectorAll"
+                        "('#bg-loading,.loading,#loading').forEach(e => e.remove()); }"
+                    )
+                    _b = ceph_page.pdf(format="A4", print_background=True)
+                    if len(_b) > size:
+                        pdf_bytes, size = _b, len(_b)
+                    if size >= 10_000:
+                        break
                 if size < 10_000:  # ≈857B = pagina de erro renderizada
                     resultados.append(
                         {"exame": exame, "arquivo": None, "bytes": size, "status": "NAO_PRONTO"}
@@ -635,25 +643,34 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
                 continue
             seen_tokens.add(tok)
             try:
-                r = sess.get(f"{BASE}/report/pdf?studies={tok}", timeout=60)
-                # Mesma guarda do CEPH (linha ~607): o laudo OFICIAL as vezes volta
-                # como PDF de ~857B (pagina em branco/erro renderizada) — comeca com
-                # %PDF, mas esta VAZIO. Sem o limite de tamanho, esse laudo em branco
-                # era salvo e anexado (ex.: JOSE IVAN). Rejeita < 10KB como NAO_PRONTO.
-                if r.content[:4] == b"%PDF" and len(r.content) >= 10_000:
-                    ch = hashlib.md5(r.content).hexdigest()
+                # O laudo OFICIAL e gerado ON-DEMAND pelo servidor (SmartRIS imprime
+                # a pagina web pra PDF via Chromium/Skia). Quando o servidor responde
+                # ANTES de a pagina carregar, volta um PDF de ~857B EM BRANCO — de
+                # forma INTERMITENTE (as vezes cheio, as vezes vazio). O laudo EXISTE:
+                # e so o servidor devolver cedo. Entao re-tentamos ate vir >=10KB
+                # (dando tempo pro servidor renderizar), ficando com o MAIOR resultado.
+                content, size = b"", 0
+                for _t in range(4):
+                    r = sess.get(f"{BASE}/report/pdf?studies={tok}", timeout=60)
+                    if r.content[:4] == b"%PDF" and len(r.content) > size:
+                        content, size = r.content, len(r.content)
+                    if size >= 10_000:      # laudo completo -> para
+                        break
+                    time.sleep(3)           # espera o servidor terminar de gerar
+                if size >= 10_000:
+                    ch = hashlib.md5(content).hexdigest()
                     if ch in seen_content:
                         continue  # mesmo laudo ja salvo (token diferente, conteudo igual)
                     seen_content.add(ch)
                     fname = _nome_unico(f"LAUDO_{exame}_{acc}_OFICIAL.pdf")
                     with open(os.path.join(out_dir, fname), "wb") as f:
-                        f.write(r.content)
+                        f.write(content)
                     resultados.append(
-                        {"exame": exame, "arquivo": fname, "bytes": len(r.content), "status": "OK"}
+                        {"exame": exame, "arquivo": fname, "bytes": size, "status": "OK"}
                     )
                 else:
                     resultados.append(
-                        {"exame": exame, "arquivo": None, "bytes": len(r.content), "status": "NAO_PRONTO"}
+                        {"exame": exame, "arquivo": None, "bytes": size, "status": "NAO_PRONTO"}
                     )
             except Exception as e:
                 resultados.append(
