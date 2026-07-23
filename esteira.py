@@ -92,6 +92,47 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
     return len(comuns) >= max(2, len(menor) - 1)
 
 
+def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands):
+    """NÍVEL 2 — o CÓDIGO escolhe a solicitação certa entre as leituras que o Gemini
+    transcreveu (uma por anexo). Determinístico: tipo solicitação, legível, paciente
+    compatível (tokens) e exames que COBREM os da GTO. Desempate: mais exames em
+    comum, depois o mais recente (idx menor). Retorna (idx, leitura, motivo_ou_None)."""
+    melhor = None
+    algum_pac = False
+    for a in leituras or []:
+        if not isinstance(a, dict):
+            continue
+        ai = a.get("idx")
+        if not (isinstance(ai, int) and 0 <= ai < n_cands):
+            continue
+        # CONSERVADOR: só é candidato o que o Gemini LEU positivamente como
+        # "solicitacao". "outro"/"laudo"/null NÃO passam — evita anexar um laudo
+        # mal-rotulado no lugar da solicitação (o código nunca fatura errado; na
+        # dúvida vai pra revisão). Recomendação do revisor.
+        if a.get("tipo") != "solicitacao":
+            continue
+        if not bool(a.get("legivel", True)):
+            continue
+        if not _nomes_compat(a.get("paciente_lido") or "", nome_gto):
+            continue
+        algum_pac = True
+        ex = canon_exames(" ".join(str(e) for e in (a.get("exames_lidos") or [])))
+        if not (gto_ex and gto_ex.issubset(ex)):
+            continue
+        score = (len(gto_ex & ex), -ai)
+        if melhor is None or score > melhor[0]:
+            melhor = (score, ai, a)
+    if melhor is not None:
+        return melhor[1], melhor[2], None
+    if not leituras:
+        return None, None, "Gemini nao leu nenhum anexo"
+    if not gto_ex:
+        return None, None, "GTO ilegivel (sem exames de referencia)"
+    if not algum_pac:
+        return None, None, "nenhum anexo com paciente compativel com a GTO"
+    return None, None, "solicitacao do paciente nao cobre os exames da GTO"
+
+
 def _build_by_norm(df):
     cod_col = "Cód. Pac" if "Cód. Pac" in df.columns else df.columns[1]
     ped_col = "Pedido" if "Pedido" in df.columns else df.columns[6]
@@ -163,25 +204,27 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
 
 
 _DECISAO_PROMPT = """Acima estão VÁRIOS anexos do prontuário, indexados ([anexo 0], [anexo 1], ...).
-CONTEXTO DA GTO -> paciente: {paciente} | exames esperados: {exames} | DATA DO EXAME: {data_exame}
 
-Você é auditor de solicitações odontológicas. Identifique QUAL anexo é a SOLICITACAO/REQUISIÇÃO de exames que corresponde a ESTA GTO: mesmo paciente e exames compatíveis. Ignore laudos, raios-x e faturas.
+Você é um LEITOR/transcritor. NÃO escolha qual anexo serve, NÃO decida nada, NÃO
+compare com nenhuma GTO. Apenas LEIA CADA anexo e transcreva fielmente o que está
+escrito. Quem decide é o sistema, não você.
 
-SOBRE A DATA: leia a data escrita na solicitação. Se a data for antiga, ou se não houver data, não tem problema, apenas retorne a data encontrada (ou null) e a localização dela na imagem.
-
-SOBRE A ASSINATURA: identifique a área de assinatura do médico/dentista na parte inferior da solicitação e retorne suas coordenadas em box_assinatura. Normalmente fica no centro ou canto inferior da folha.
-
-SOBRE OS EXAMES: leia a solicitação INTEIRA e liste TODOS os exames pedidos. A solicitação SERVE se CONTÉM os exames da GTO ({exames}).
+Para CADA anexo, retorne um objeto com:
+- "idx": o número do anexo ([anexo N] -> N)
+- "tipo": um de "solicitacao" (pedido/requisição de exames feito por um dentista) |
+  "laudo" (resultado/relatório de exame) | "documento" (RG/CNH/identidade) |
+  "nota_fiscal" | "raio_x" (imagem de radiografia) | "outro"
+- "legivel": true/false
+- "paciente_lido": nome do paciente escrito no anexo (string; "" se não houver)
+- "exames_lidos": lista com TODOS os exames pedidos/citados no anexo, ex.:
+  ["panoramica","periapical","interproximal","telerradiografia","documentacao"]
+- "data_solicitacao": data escrita no anexo, "DD/MM/AAAA" ou null
+- "box_data": [ymin,xmin,ymax,xmax] (valores 0-1000) da data, ou null
+- "box_assinatura": [ymin,xmin,ymax,xmax] (0-1000) da assinatura do dentista, ou null
 
 Responda APENAS JSON (sem markdown):
-{{"indice_solicitacao": <int>, "tipo": "digitada"|"manuscrita"|null,
-"legivel": <bool>, "paciente_lido": "<str>", "exames_lidos": [<str>],
-"exames_batem": <bool>, "data_solicitacao": "<DD/MM/AAAA ou null>",
-"data_bate": <bool>, "box_data": [<ymin>, <xmin>, <ymax>, <xmax>] ou null (valores 0-1000),
-"box_assinatura": [<ymin>, <xmin>, <ymax>, <xmax>] ou null (valores 0-1000),
-"confianca": "alta"|"media"|"baixa", "anexar": <bool>, "motivo": "<curto>"}}
-
-Regra: Se exames_batem=true e a imagem for legível, marque anexar=true (mesmo que a data esteja ausente ou antiga).
+{"anexos": [ {"idx":0, "tipo":"...", "legivel":true, "paciente_lido":"...",
+"exames_lidos":[...], "data_solicitacao":null, "box_data":null, "box_assinatura":null}, ... ]}
 """
 
 
@@ -296,44 +339,31 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
         return out
     contents = []
     for i, (fn, mime, blob, saved) in enumerate(cands):
-        contents.append(f"[anexo {i}] {fn}")
+        contents.append(f"[anexo {i}]")
         contents.append(types.Part.from_bytes(data=blob, mime_type=mime))
-    contents.append(_DECISAO_PROMPT.format(
-        paciente=pac["nome"], exames=(sorted(gto_ex) or "(GTO ilegível)"),
-        data_exame=(data_exame or "(desconhecida)")))
+    contents.append(_DECISAO_PROMPT)
     for tent in range(3):
         try:
             r = gem.models.generate_content(model="gemini-2.5-flash", contents=contents)
             txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
-            dec = json.loads(txt)
-            
-            idx = dec.get("indice_solicitacao")
-            
-            # ── DECISAO DETERMINISTICA (o Gemini LE; o CODIGO decide) ──────────
-            # NAO confiamos no 'anexar'/'exames_batem' que o Gemini devolve. O
-            # codigo recalcula com REGRAS NOSSAS sobre o que o Gemini LEU:
-            #  - exames: canon_exames(exames_lidos) tem que CONTER os exames da GTO
-            #  - paciente: o nome lido tem que casar com o da GTO (normalizado)
-            _exames_lidos = dec.get("exames_lidos") or []
-            _exames_solic = canon_exames(" ".join(str(e) for e in _exames_lidos))
-            _exames_batem = bool(gto_ex) and gto_ex.issubset(_exames_solic)
-            _paciente_bate = _nomes_compat(dec.get("paciente_lido") or "", pac["nome"])
-            _legivel = bool(dec.get("legivel", True))
-            candidato_valido = (isinstance(idx, int) and 0 <= idx < len(cands)
-                                and _exames_batem and _paciente_bate and _legivel)
-            # sobrescreve os campos com a DECISAO do codigo (log/motivo corretos)
-            dec["exames_batem"] = _exames_batem
-            dec["paciente_bate"] = _paciente_bate
-            dec["anexar"] = candidato_valido
-            if not candidato_valido:
-                if not (isinstance(idx, int) and 0 <= idx < len(cands)):
-                    dec["motivo"] = "nenhum anexo identificado como solicitacao"
-                elif not _paciente_bate:
-                    dec["motivo"] = f"paciente lido ({dec.get('paciente_lido')}) nao casa com a GTO"
-                elif not _exames_batem:
-                    dec["motivo"] = f"exames {sorted(_exames_solic)} nao cobrem os da GTO {sorted(gto_ex)}"
-                elif not _legivel:
-                    dec["motivo"] = "solicitacao ilegivel"
+            data = json.loads(txt)
+            leituras = (data.get("anexos") if isinstance(data, dict) else data) or []
+
+            # ── O CÓDIGO ESCOLHE a solicitação (o Gemini só LEU/transcreveu) ──────
+            idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], gto_ex, len(cands))
+            candidato_valido = idx is not None
+            if candidato_valido:
+                dec = {"indice_solicitacao": idx, "paciente_lido": a.get("paciente_lido"),
+                       "exames_lidos": a.get("exames_lidos"),
+                       "data_solicitacao": a.get("data_solicitacao"),
+                       "box_data": a.get("box_data"), "box_assinatura": a.get("box_assinatura"),
+                       "legivel": True, "tipo": a.get("tipo"), "exames_batem": True,
+                       "paciente_bate": True, "confianca": "alta", "anexar": True,
+                       "leituras": leituras}
+            else:
+                dec = {"indice_solicitacao": None, "exames_batem": False,
+                       "paciente_bate": False, "anexar": False,
+                       "motivo": _motivo, "leituras": leituras}
 
             # Se o candidato foi VALIDADO pelo codigo, avalia manipulação de data
             if candidato_valido:
