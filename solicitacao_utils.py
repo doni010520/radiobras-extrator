@@ -98,6 +98,33 @@ def gto_exames(gto_path: str) -> set:
     return canon_exames(txt)
 
 
+# Qualquer sinal de exame RADIOLÓGICO no texto da GTO (mesmo que o exame especifico
+# nao esteja no _CANON). Na GTO os radiologicos vem como "Rx <nome>" / "Radiografia
+# <nome>". Serve de guarda-corpo: se ha radiografia, EXIGE laudo — nao depende do
+# _CANON cobrir 100% dos exames.
+_RADIOLOGICO_RE = re.compile(
+    r"\brx\b|radiograf|raio.?-?x|panor|periap|interprox|bite.?wing|telerr|cefalom|"
+    r"ricketts|\bceph\b|tomograf|cone beam|\btc\b|\batm\b|carpal|idade ossea|"
+    r"oclus|seios? da face|sialograf|mastoid|perfil|hand.?wrist")
+
+
+def gto_dispensa_laudo(gto_path: str) -> bool:
+    """True SÓ se a GTO é EXCLUSIVAMENTE modelo de gesso / fotografia — ou seja, tem
+    esses termos E NENHUM indicador de exame radiológico. CONSERVADOR: qualquer sinal
+    de radiografia (Rx/Radiografia/etc.) -> False (exige laudo), mesmo que o exame
+    nao esteja no _CANON. Na duvida, exige laudo."""
+    try:
+        doc = fitz.open(gto_path)
+        txt = "".join(p.get_text() for p in doc)
+        doc.close()
+    except Exception:
+        return False
+    n = _strip(txt)
+    tem_modelo_foto = bool(re.search(r"\bmodelo|\bfotograf", n))
+    tem_radiologico = bool(_RADIOLOGICO_RE.search(n))
+    return tem_modelo_foto and not tem_radiologico
+
+
 # ── Classificação de anexos ───────────────────────────────────────────────────
 
 def tipo_anexo(path: str) -> dict:

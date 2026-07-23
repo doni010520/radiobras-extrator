@@ -40,7 +40,7 @@ from extrator_odontoprev import (
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
 from gto_utils import is_gto_pdf, extrair_observacao
-from solicitacao_utils import gto_exames, canon_exames
+from solicitacao_utils import gto_exames, canon_exames, gto_dispensa_laudo
 import json
 import re
 
@@ -73,7 +73,6 @@ def _mem_mb():
 
 
 _STOP_NOME = {"DE", "DA", "DO", "DAS", "DOS", "E"}
-
 
 def _nomes_compat(lido: str, alvo: str) -> bool:
     """Casa o nome LIDO na solicitação com o nome-ALVO (da GTO) por TOKENS, não por
@@ -284,6 +283,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
             return 0
     lista = sorted(lista, key=_id_key, reverse=True)
     cands_raw, gto_ex, justif_ok = [], set(), False
+    _disp_laudo = None   # None=nenhuma GTO lida ainda; vira False se qualquer GTO exigir laudo
     for it in lista[:30]:
         ext = it["filename"].lower().rsplit(".", 1)[-1] if "." in it["filename"] else ""
         try:
@@ -299,6 +299,13 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
             except Exception:
                 pass
             try:
+                # dispensa laudo SÓ se a GTO é exclusivamente modelo/fotografia.
+                # Conservador: se qualquer GTO exigir laudo, o conjunto exige.
+                _d = gto_dispensa_laudo(path)
+                _disp_laudo = _d if _disp_laudo is None else (_disp_laudo and _d)
+            except Exception:
+                _disp_laudo = False
+            try:
                 if extrair_observacao(path).get("status") == "PREENCHIDO":
                     justif_ok = True
             except Exception:
@@ -309,6 +316,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
         if mime:
             cands_raw.append((it["filename"], mime, blob))
     out["gto_exames"] = sorted(gto_ex)
+    out["dispensa_laudo"] = bool(_disp_laudo)   # só True se GTO é só modelo/fotografia
 
     # REGRA: GTO com justificativa (campo 49) -> solicitação DISPENSADA. Nem toca
     # nos anexos do prontuário (não salva, não manda pro Gemini). Só laudo+imgs.
@@ -641,13 +649,15 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 item["dt_decisao"] = time.monotonic() - t0
                 with _lock:
                     ativos_le["n"] -= 1
-                # GATE: LAUDO é SEMPRE obrigatório. A justificativa (campo 49)
-                # dispensa apenas a SOLICITAÇÃO, NUNCA o laudo. Sem laudo válido,
-                # NÃO fatura e o item cai como pendência 'sem_laudo' na classificação.
+                # GATE: LAUDO obrigatório para exames RADIOLÓGICOS. A justificativa
+                # (campo 49) dispensa a SOLICITAÇÃO, nunca o laudo. EXCEÇÃO: GTO só de
+                # MODELO/FOTOGRAFIA dispensa laudo (não são radiológicos). Sem laudo
+                # onde é exigido, NÃO fatura -> pendência 'sem_laudo' na classificação.
                 _tem_laudo = any(str(f).upper().startswith("LAUDO_")
                                  for f in dec.get("plano_laudo_imgs", []))
                 _tem_solic_ou_justif = bool(dec.get("justificativa")) or bool(dec.get("plano_solicitacao"))
-                anexa = _tem_laudo and _tem_solic_ou_justif
+                _laudo_ok = _tem_laudo or bool(dec.get("dispensa_laudo"))
+                anexa = _laudo_ok and _tem_solic_ou_justif
                 if anexar_on and anexa:
                     fila_anexar.put(item)
                 else:
@@ -818,14 +828,15 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         d = dec.get("decisao") or {}
         _tem_laudo = any(str(f).upper().startswith("LAUDO_")
                          for f in dec.get("plano_laudo_imgs", []))
-        # LAUDO obrigatorio SEMPRE — mesmo com justificativa (campo 49). A
-        # justificativa so dispensa a SOLICITACAO, nunca o laudo.
-        if not _tem_laudo and (dec.get("justificativa") or dec.get("plano_solicitacao")):
+        # LAUDO obrigatorio p/ exames RADIOLOGICOS (mesmo com justificativa). Excecao:
+        # GTO so de MODELO/FOTOGRAFIA dispensa laudo. Justificativa dispensa so a solic.
+        _laudo_falta = not _tem_laudo and not dec.get("dispensa_laudo")
+        if _laudo_falta and (dec.get("justificativa") or dec.get("plano_solicitacao")):
             cat = "sem_laudo"          # tem solic/justif mas falta laudo -> pendência
         elif dec.get("justificativa"):
-            cat = "justificativa"      # aqui ja garante _tem_laudo
+            cat = "justificativa"      # laudo ok (ou dispensado)
         elif dec.get("plano_solicitacao"):
-            cat = "auto"               # aqui ja garante _tem_laudo
+            cat = "auto"               # laudo ok (ou dispensado)
         elif d.get("indice_solicitacao") is None:
             cat = "sem_solicitacao"
         else:
