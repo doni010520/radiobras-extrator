@@ -40,7 +40,7 @@ from extrator_odontoprev import (
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
 from gto_utils import is_gto_pdf, extrair_observacao
-from solicitacao_utils import gto_exames
+from solicitacao_utils import gto_exames, canon_exames
 import json
 import re
 
@@ -70,6 +70,26 @@ def _mem_mb():
         return tot / 1e6
     except Exception:
         return -1
+
+
+_STOP_NOME = {"DE", "DA", "DO", "DAS", "DOS", "E"}
+
+
+def _nomes_compat(lido: str, alvo: str) -> bool:
+    """Casa o nome LIDO na solicitação com o nome-ALVO (da GTO) por TOKENS, não por
+    substring (evita 'ANA' casar 'ANA PAULA'). Exige >=2 tokens significativos em
+    comum (nome+sobrenome) e que o menor conjunto esteja quase todo contido no maior
+    (tolera 1 divergência — erro de OCR, ex.: IONICE/JONICE)."""
+    ta = [t for t in normaliza_nome(lido).split() if t not in _STOP_NOME and len(t) > 1]
+    tb = [t for t in normaliza_nome(alvo).split() if t not in _STOP_NOME and len(t) > 1]
+    if not ta or not tb:
+        return False
+    sa, sb = set(ta), set(tb)
+    comuns = sa & sb
+    if len(comuns) < 2:
+        return False
+    menor = sa if len(sa) <= len(sb) else sb
+    return len(comuns) >= max(2, len(menor) - 1)
 
 
 def _build_by_norm(df):
@@ -289,8 +309,34 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
             
             idx = dec.get("indice_solicitacao")
             
-            # Se o anexo está correto, avalia necessidade de manipulação
-            if isinstance(idx, int) and 0 <= idx < len(cands) and dec.get("exames_batem"):
+            # ── DECISAO DETERMINISTICA (o Gemini LE; o CODIGO decide) ──────────
+            # NAO confiamos no 'anexar'/'exames_batem' que o Gemini devolve. O
+            # codigo recalcula com REGRAS NOSSAS sobre o que o Gemini LEU:
+            #  - exames: canon_exames(exames_lidos) tem que CONTER os exames da GTO
+            #  - paciente: o nome lido tem que casar com o da GTO (normalizado)
+            _exames_lidos = dec.get("exames_lidos") or []
+            _exames_solic = canon_exames(" ".join(str(e) for e in _exames_lidos))
+            _exames_batem = bool(gto_ex) and gto_ex.issubset(_exames_solic)
+            _paciente_bate = _nomes_compat(dec.get("paciente_lido") or "", pac["nome"])
+            _legivel = bool(dec.get("legivel", True))
+            candidato_valido = (isinstance(idx, int) and 0 <= idx < len(cands)
+                                and _exames_batem and _paciente_bate and _legivel)
+            # sobrescreve os campos com a DECISAO do codigo (log/motivo corretos)
+            dec["exames_batem"] = _exames_batem
+            dec["paciente_bate"] = _paciente_bate
+            dec["anexar"] = candidato_valido
+            if not candidato_valido:
+                if not (isinstance(idx, int) and 0 <= idx < len(cands)):
+                    dec["motivo"] = "nenhum anexo identificado como solicitacao"
+                elif not _paciente_bate:
+                    dec["motivo"] = f"paciente lido ({dec.get('paciente_lido')}) nao casa com a GTO"
+                elif not _exames_batem:
+                    dec["motivo"] = f"exames {sorted(_exames_solic)} nao cobrem os da GTO {sorted(gto_ex)}"
+                elif not _legivel:
+                    dec["motivo"] = "solicitacao ilegivel"
+
+            # Se o candidato foi VALIDADO pelo codigo, avalia manipulação de data
+            if candidato_valido:
                 fn_candidato, mime, blob, saved = cands[idx]
                 data_lida_str = dec.get("data_solicitacao")
                 data_lida = _parse_br_date(data_lida_str) if data_lida_str else None
@@ -348,11 +394,14 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                         dec["data_solicitacao"] = nova_data; dec["anexar"] = True
                         dec["motivo"] = "Data ajustada automaticamente."
                     except Exception as e:
+                        # Manipulação de data FALHOU -> NÃO anexa (nao pode faturar com
+                        # a data nao-ajustada). Invalida o candidato tambem.
                         dec["anexar"] = False; dec["motivo"] = f"Erro ao editar imagem: {str(e)}"
-            
+                        candidato_valido = False
+
             out["decisao"] = dec
-            # Salva o arquivo (original ou modificado)
-            if dec.get("anexar") and isinstance(idx, int) and 0 <= idx < len(cands):
+            # Salva o arquivo (original ou modificado) — SÓ se o CÓDIGO validou
+            if candidato_valido:
                 out["plano_solicitacao"] = cands[idx][0]
                 out["solic_idx"] = idx
                 if pasta_dl and os.path.isdir(pasta_dl):
@@ -562,13 +611,13 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 item["dt_decisao"] = time.monotonic() - t0
                 with _lock:
                     ativos_le["n"] -= 1
-                # GATE: só anexa se tiver LAUDO válido (a menos que seja por
-                # justificativa/campo 49, que dispensa laudo). Sem laudo, NÃO fatura
-                # e o item cai como pendência 'sem_laudo' na classificação abaixo.
+                # GATE: LAUDO é SEMPRE obrigatório. A justificativa (campo 49)
+                # dispensa apenas a SOLICITAÇÃO, NUNCA o laudo. Sem laudo válido,
+                # NÃO fatura e o item cai como pendência 'sem_laudo' na classificação.
                 _tem_laudo = any(str(f).upper().startswith("LAUDO_")
                                  for f in dec.get("plano_laudo_imgs", []))
-                anexa = bool(dec.get("justificativa")) or (
-                        bool(dec.get("plano_solicitacao")) and _tem_laudo)
+                _tem_solic_ou_justif = bool(dec.get("justificativa")) or bool(dec.get("plano_solicitacao"))
+                anexa = _tem_laudo and _tem_solic_ou_justif
                 if anexar_on and anexa:
                     fila_anexar.put(item)
                 else:
@@ -739,12 +788,14 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         d = dec.get("decisao") or {}
         _tem_laudo = any(str(f).upper().startswith("LAUDO_")
                          for f in dec.get("plano_laudo_imgs", []))
-        if dec.get("justificativa"):
-            cat = "justificativa"
-        elif dec.get("plano_solicitacao") and _tem_laudo:
-            cat = "auto"
-        elif dec.get("plano_solicitacao") and not _tem_laudo:
-            cat = "sem_laudo"          # GATE: solicitação OK mas falta laudo -> pendência
+        # LAUDO obrigatorio SEMPRE — mesmo com justificativa (campo 49). A
+        # justificativa so dispensa a SOLICITACAO, nunca o laudo.
+        if not _tem_laudo and (dec.get("justificativa") or dec.get("plano_solicitacao")):
+            cat = "sem_laudo"          # tem solic/justif mas falta laudo -> pendência
+        elif dec.get("justificativa"):
+            cat = "justificativa"      # aqui ja garante _tem_laudo
+        elif dec.get("plano_solicitacao"):
+            cat = "auto"               # aqui ja garante _tem_laudo
         elif d.get("indice_solicitacao") is None:
             cat = "sem_solicitacao"
         else:
