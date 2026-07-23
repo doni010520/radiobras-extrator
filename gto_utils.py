@@ -54,6 +54,40 @@ def _words_display(page):
     return out
 
 
+_BOILER_49 = re.compile(
+    r"declaro|autorizo|assinatura|benefici|credenciad|emitid[oa]|"
+    r"\bcpf\b|\brg\b|carteir|protocolo|rede\s+credenciada|instituto|"
+    r"radiolog|odontolog|\bunidade\b|exames?\s+(complementar|radiolog)",
+    re.I)
+
+
+def _justif_por_texto(full: str):
+    """Lê o campo 49 (Observação/Justificativa) pelo TEXTO linearizado do PDF.
+    Retorna o conteúdo (str) se claramente PREENCHIDO, ou None (deixa a decisão
+    pra leitura por bbox). CONSERVADOR contra falso-positivo (faturar sem
+    solicitação): exige um próximo rótulo de campo real delimitando a caixa E
+    conteúdo alfabético não-boilerplate suficiente."""
+    mrot = re.search(r"49\s*-\s*Observ\w*\s*/?\s*Justificativa\s*:?", full, re.I)
+    if not mrot:
+        return None
+    resto = full[mrot.end():]
+    # SÓ aceita se houver um próximo rótulo de campo REAL (NN - Palavra) logo
+    # adiante — que delimita a caixa do 49. Sem esse corte, poderia capturar o
+    # rodapé/consentimento do documento inteiro -> falso PREENCHIDO.
+    mfim = re.search(r"\d{1,2}\s*-\s*[A-Za-zÀ-ú]", resto)
+    if not mfim:
+        return None
+    cont = re.sub(r"[/\\]+", " ", resto[:mfim.start()])
+    cont = re.sub(r"\s+", " ", cont).strip()
+    # A ORDEM DE LEITURA do PDF (content stream) não é visual: rodapé/boilerplate
+    # de outro bloco pode cair no trecho. Filtra e exige conteúdo clínico real.
+    palavras = [w for w in re.findall(r"[A-Za-zÀ-ú]{3,}", cont)
+                if not _BOILER_49.search(w)]
+    if len(palavras) >= 3 and not _BOILER_49.search(cont[:40]):
+        return cont
+    return None
+
+
 def extrair_observacao(path: str) -> dict:
     """
     Retorna {is_gto, status: 'PREENCHIDO'|'VAZIO'|'SEM_GTO', conteudo, n_tokens}.
@@ -67,6 +101,17 @@ def extrair_observacao(path: str) -> dict:
     if not is_gto_text(full):
         doc.close()
         return {"is_gto": False, "status": "SEM_GTO", "conteudo": "", "n_tokens": 0}
+
+    # ── Leitura por TEXTO (robusta p/ justificativa INLINE na linha do rótulo) ──
+    # A leitura por geometria/bbox (abaixo) falha quando o conteúdo está na MESMA
+    # linha do rótulo 49 (visto na GTO da LUIZA, onde o campo seguinte é "43 - Data
+    # de Término", não o "50"). CONSERVADOR: na dúvida NÃO retorna PREENCHIDO (cai
+    # na bbox), pra NUNCA faturar sem solicitação por falso-positivo.
+    _txt = _justif_por_texto(full)
+    if _txt:
+        doc.close()
+        return {"is_gto": True, "status": "PREENCHIDO", "conteudo": _txt,
+                "n_tokens": len(_txt.split()), "metodo": "texto"}
 
     words = _words_display(page)
 
