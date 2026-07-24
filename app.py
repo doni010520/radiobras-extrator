@@ -1819,13 +1819,16 @@ def relatorios_dia_xlsx():
     import pandas as pd
     fat = [i for i in d["itens"] if i["faturado"]]
     pen = [i for i in d["itens"] if not i["faturado"]]
-    df_f = pd.DataFrame([{"GTO": i["gto"], "Paciente": i["paciente"], "Unidade": i["unidade"],
-                          "Exames (GTO)": i["exames_gto"],
-                          "Solicitação anexada": i["solicitacao"]} for i in fat])
-    df_p = pd.DataFrame([{"GTO": i["gto"], "Paciente": i["paciente"], "Unidade": i["unidade"],
-                          "Exames (GTO)": i["exames_gto"],
-                          "Situação": (i["categoria"] or "").replace("_", " "),
-                          "Motivo": i["motivo"]} for i in pen])
+    df_f = pd.DataFrame([{"Paciente": i["paciente"] or "—", "GTO": i["gto"],
+                          "Unidade": i["unidade"],
+                          "Exames (GTO)": i["exames_gto"] or "—",
+                          "Documento anexado": i["solicitacao"] or "anexado em execução anterior"}
+                         for i in fat])
+    df_p = pd.DataFrame([{"Paciente": i["paciente"] or "—", "GTO": i["gto"],
+                          "Unidade": i["unidade"],
+                          "Exames (GTO)": i["exames_gto"] or "—",
+                          "Motivo": i["motivo"] or (i["categoria"] or "").replace("_", " ") or "—"}
+                         for i in pen])
     df_u = pd.DataFrame([{"Unidade": u["unidade"], "Total": u["total"],
                           "Faturadas": u["faturadas"], "Pendentes": u["pendentes"]}
                          for u in d["por_unidade"]])

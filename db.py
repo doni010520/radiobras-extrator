@@ -576,6 +576,8 @@ def relatorio_dia(dia: str, contas: list = None) -> dict:
             "dia": dia,
             "contas": contas or sorted({e.conta for e in execs if e.conta}),
             "itens": itens,
+            "faturadas_lista": [i for i in itens if i["faturado"]],
+            "pendentes_lista": [i for i in itens if not i["faturado"]],
             "por_unidade": sorted(uni.values(), key=lambda x: x["unidade"]),
             "resumo": {
                 "total": len(itens),

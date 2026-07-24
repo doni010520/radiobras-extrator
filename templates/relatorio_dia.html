@@ -48,6 +48,8 @@
   .tag.fat{background:#e6f4ec;color:var(--verde)}
   .tag.pen{background:#fdf1de;color:var(--warn)}
   .cat{font-size:11.5px;color:var(--sub);font-weight:600}
+  td.mono{font-family:ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;color:var(--sub);white-space:nowrap}
+  td strong{font-weight:700}
   h2{font-size:16px;margin:20px 0 8px}
   .vazio{background:var(--card);border:1px dashed var(--linha);border-radius:12px;padding:26px;
     text-align:center;color:var(--sub)}
@@ -113,24 +115,39 @@
     </table>
     {% endif %}
 
-    {% if d.itens %}
-    <h2>GTOs do dia ({{ d.itens|length }})</h2>
+    {% if d.faturadas_lista %}
+    <h2>Faturadas ({{ d.faturadas_lista|length }})</h2>
     <table>
-      <tr><th>Situação</th><th>Paciente</th><th>GTO</th><th>Unidade</th>
-          <th>Exames</th><th>Motivo / Solicitação</th></tr>
-      {% for i in d.itens %}
+      <tr><th>Paciente</th><th>GTO</th><th>Unidade</th><th>Exames</th><th>Documento anexado</th></tr>
+      {% for i in d.faturadas_lista %}
       <tr>
-        <td>{% if i.faturado %}<span class="tag fat">FATURADA</span>
-            {% else %}<span class="tag pen">PENDENTE</span><br><span class="cat">{{ i.categoria|replace('_',' ') }}</span>{% endif %}</td>
-        <td>{{ i.paciente }}</td>
-        <td>{{ i.gto }}</td>
+        <td><span class="tag fat">✓</span> <strong>{{ i.paciente or '—' }}</strong></td>
+        <td class="mono">{{ i.gto }}</td>
         <td>{{ i.unidade }}</td>
-        <td>{{ i.exames_gto }}</td>
-        <td>{% if i.faturado %}{{ i.solicitacao }}{% else %}{{ i.motivo }}{% endif %}</td>
+        <td>{{ i.exames_gto or '—' }}</td>
+        <td>{{ i.solicitacao or 'anexado em execução anterior' }}</td>
       </tr>
       {% endfor %}
     </table>
-    {% else %}
+    {% endif %}
+
+    {% if d.pendentes_lista %}
+    <h2>Pendentes ({{ d.pendentes_lista|length }})</h2>
+    <table>
+      <tr><th>Paciente</th><th>GTO</th><th>Unidade</th><th>Exames</th><th>Motivo da pendência</th></tr>
+      {% for i in d.pendentes_lista %}
+      <tr>
+        <td><span class="tag pen">!</span> <strong>{{ i.paciente or '—' }}</strong></td>
+        <td class="mono">{{ i.gto }}</td>
+        <td>{{ i.unidade }}</td>
+        <td>{{ i.exames_gto or '—' }}</td>
+        <td>{{ i.motivo or (i.categoria or '')|replace('_',' ') or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+
+    {% if not d.faturadas_lista and not d.pendentes_lista %}
       <div class="vazio">Nenhuma GTO encontrada para {{ d.dia }} nas unidades selecionadas.</div>
     {% endif %}
   {% endif %}
