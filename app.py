@@ -1753,6 +1753,108 @@ def _relatorios_data() -> dict:
     }
 
 
+def _rel_dia_params():
+    """Lê data (YYYY-MM-DD do <input type=date>) + contas do querystring.
+    Devolve (dia_br, contas, data_iso, querystring)."""
+    from config import PLANOS
+    data_iso = (request.args.get("data") or "").strip()
+    contas = [c for c in request.args.getlist("conta") if c in PLANOS]
+    dia = ""
+    if data_iso:
+        try:
+            y, m, d = data_iso.split("-")
+            dia = f"{d}/{m}/{y}"
+        except Exception:
+            dia = ""
+    qs = "&".join(["data=" + data_iso] + ["conta=" + c for c in contas])
+    return dia, (contas or None), data_iso, qs
+
+
+@app.route("/relatorios/dia")
+def relatorios_dia():
+    """Fechamento consolidado de um DIA (todas as unidades ou as escolhidas)."""
+    from config import PLANOS
+    dia, contas, data_iso, qs = _rel_dia_params()
+    d = db.relatorio_dia(dia, contas) if dia else {"dia": "", "itens": [], "por_unidade": [],
+                                                   "contas": contas or [],
+                                                   "resumo": {"total": 0, "faturadas": 0,
+                                                              "pendentes": 0, "por_categoria": {},
+                                                              "execucoes": 0}}
+    return render_template("relatorio_dia.html", d=d, planos=PLANOS,
+                           data_iso=data_iso, qs=qs, pdf=False)
+
+
+@app.route("/relatorios/dia.pdf")
+def relatorios_dia_pdf():
+    from config import PLANOS
+    dia, contas, data_iso, qs = _rel_dia_params()
+    if not dia:
+        return ("Informe a data.", 400)
+    d = db.relatorio_dia(dia, contas)
+    html = render_template("relatorio_dia.html", d=d, planos=PLANOS,
+                           data_iso=data_iso, qs=qs, pdf=True)
+    from playwright.sync_api import sync_playwright
+    try:
+        with sync_playwright() as pw:
+            br = pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            pg = br.new_page()
+            pg.set_content(html, wait_until="networkidle")
+            pdf_bytes = pg.pdf(format="A4", print_background=True,
+                               margin={"top": "12mm", "bottom": "12mm",
+                                       "left": "10mm", "right": "10mm"})
+            br.close()
+    except Exception as exc:
+        return (f"Falha ao gerar PDF: {exc}", 500)
+    nome = f"relatorio_{dia.replace('/', '-')}.pdf"
+    return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
+                     as_attachment=True, download_name=nome)
+
+
+@app.route("/relatorios/dia.xlsx")
+def relatorios_dia_xlsx():
+    dia, contas, _iso, _qs = _rel_dia_params()
+    if not dia:
+        return ("Informe a data.", 400)
+    d = db.relatorio_dia(dia, contas)
+    import pandas as pd
+    fat = [i for i in d["itens"] if i["faturado"]]
+    pen = [i for i in d["itens"] if not i["faturado"]]
+    df_f = pd.DataFrame([{"GTO": i["gto"], "Paciente": i["paciente"], "Unidade": i["unidade"],
+                          "Exames (GTO)": i["exames_gto"],
+                          "Solicitação anexada": i["solicitacao"]} for i in fat])
+    df_p = pd.DataFrame([{"GTO": i["gto"], "Paciente": i["paciente"], "Unidade": i["unidade"],
+                          "Exames (GTO)": i["exames_gto"],
+                          "Situação": (i["categoria"] or "").replace("_", " "),
+                          "Motivo": i["motivo"]} for i in pen])
+    df_u = pd.DataFrame([{"Unidade": u["unidade"], "Total": u["total"],
+                          "Faturadas": u["faturadas"], "Pendentes": u["pendentes"]}
+                         for u in d["por_unidade"]])
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as xw:
+        (df_u if not df_u.empty else pd.DataFrame([{"Unidade": "(sem dados)"}])
+         ).to_excel(xw, sheet_name="Resumo", index=False)
+        (df_f if not df_f.empty else pd.DataFrame([{"GTO": "(nenhuma)"}])
+         ).to_excel(xw, sheet_name="Faturadas", index=False)
+        (df_p if not df_p.empty else pd.DataFrame([{"GTO": "(nenhuma)"}])
+         ).to_excel(xw, sheet_name="Pendentes", index=False)
+        for nome_ws in ("Resumo", "Faturadas", "Pendentes"):
+            ws = xw.book[nome_ws]
+            from openpyxl.styles import Font, PatternFill, Alignment
+            for cell in ws[1]:
+                cell.fill = PatternFill("solid", fgColor="0F7A4F")
+                cell.font = Font(bold=True, color="FFFFFF", size=11)
+                cell.alignment = Alignment(vertical="center")
+            ws.row_dimensions[1].height = 24
+            ws.freeze_panes = "A2"
+            for col in ws.columns:
+                largura = max((len(str(c.value)) for c in col if c.value), default=10)
+                ws.column_dimensions[col[0].column_letter].width = min(max(largura + 3, 12), 60)
+    bio.seek(0)
+    nome = f"relatorio_{dia.replace('/', '-')}.xlsx"
+    return send_file(bio, as_attachment=True, download_name=nome,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 @app.route("/relatorios")
 def relatorios_page():
     return render_template("relatorios.html")

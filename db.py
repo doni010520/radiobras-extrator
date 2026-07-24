@@ -514,6 +514,79 @@ def salvar_execucao(resumo: dict) -> int:
         return ex.id
 
 
+def relatorio_dia(dia: str, contas: list = None) -> dict:
+    """Fechamento CONSOLIDADO de um dia (todas as unidades ou as informadas).
+
+    Um mesmo dia costuma ter VÁRIAS execuções (re-runs). Aqui a informação mais
+    RECENTE de cada GTO vence — e uma GTO faturada em qualquer execução conta como
+    faturada (não volta a aparecer como pendente por causa de um run antigo).
+    Retorna {dia, contas, itens[], por_unidade[], resumo{}}.
+    """
+    from config import PLANOS
+    with SessionLocal() as s:
+        q = (s.query(Execucao).filter(Execucao.dia == dia)
+             .order_by(Execucao.criado_em.asc()))          # antigo -> novo
+        execs = [e for e in q.all() if not contas or (e.conta in contas)]
+        por_gto = {}                                       # gto -> item consolidado
+        for e in execs:
+            for it in e.itens:
+                k = str(it.gto)
+                cur = por_gto.get(k)
+                novo = {
+                    "gto": k, "paciente": it.paciente, "conta": e.conta,
+                    "unidade": (PLANOS.get(e.conta, {}) or {}).get("label", e.conta),
+                    "categoria": it.categoria, "faturado": bool(it.faturado),
+                    "motivo": it.motivo or "", "solicitacao": it.solicitacao or "",
+                    "exames_gto": it.exames_gto or "", "exames_lidos": it.exames_lidos or "",
+                    "n_arquivos": it.n_arquivos or 0,
+                    "quando": e.criado_em, "execucao_id": e.id, "dry_run": bool(e.dry_run),
+                }
+                # execução REAL sempre vence DRY; entre iguais, a mais recente;
+                # e uma vez faturado, continua faturado.
+                if cur is None:
+                    por_gto[k] = novo
+                else:
+                    if cur["faturado"] and not novo["faturado"]:
+                        continue                            # não "desfatura"
+                    if cur["dry_run"] and not novo["dry_run"]:
+                        por_gto[k] = novo
+                    elif bool(cur["dry_run"]) == bool(novo["dry_run"]):
+                        por_gto[k] = novo                   # mais recente (ordem asc)
+        itens = sorted(por_gto.values(),
+                       key=lambda x: (x["unidade"], not x["faturado"], x["paciente"] or ""))
+        # agregação por unidade
+        uni = {}
+        for i in itens:
+            u = uni.setdefault(i["unidade"], {"unidade": i["unidade"], "conta": i["conta"],
+                                              "total": 0, "faturadas": 0, "pendentes": 0,
+                                              "por_categoria": {}})
+            u["total"] += 1
+            if i["faturado"]:
+                u["faturadas"] += 1
+            else:
+                u["pendentes"] += 1
+                c = i["categoria"] or "outros"
+                u["por_categoria"][c] = u["por_categoria"].get(c, 0) + 1
+        cats = {}
+        for i in itens:
+            if not i["faturado"]:
+                c = i["categoria"] or "outros"
+                cats[c] = cats.get(c, 0) + 1
+        return {
+            "dia": dia,
+            "contas": contas or sorted({e.conta for e in execs if e.conta}),
+            "itens": itens,
+            "por_unidade": sorted(uni.values(), key=lambda x: x["unidade"]),
+            "resumo": {
+                "total": len(itens),
+                "faturadas": sum(1 for i in itens if i["faturado"]),
+                "pendentes": sum(1 for i in itens if not i["faturado"]),
+                "por_categoria": cats,
+                "execucoes": len(execs),
+            },
+        }
+
+
 def listar_execucoes(limit: int = 100) -> list:
     """Histórico de execuções (consolidado) — mais recentes primeiro."""
     with SessionLocal() as s:
