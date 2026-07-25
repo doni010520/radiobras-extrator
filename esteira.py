@@ -75,11 +75,40 @@ def _mem_mb():
 
 _STOP_NOME = {"DE", "DA", "DO", "DAS", "DOS", "E"}
 
+def _dist_edicao(a: str, b: str, teto: int = 2) -> int:
+    """Distância de edição (Levenshtein), com corte em `teto` — só precisamos saber
+    se é ERRO DE GRAFIA, não a distância exata."""
+    if a == b:
+        return 0
+    if abs(len(a) - len(b)) > teto:
+        return teto + 1
+    ant = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        atual = [i]
+        for j, cb in enumerate(b, 1):
+            atual.append(min(ant[j] + 1, atual[j - 1] + 1, ant[j - 1] + (ca != cb)))
+        if min(atual) > teto:
+            return teto + 1
+        ant = atual
+    return ant[-1]
+
+
+def _erro_de_grafia(tok: str, candidatos) -> bool:
+    """True se `tok` é o mesmo token de `candidatos` escrito com erro (leitura/OCR).
+    Tolerância proporcional: 1 letra em nomes curtos, 2 em nomes longos."""
+    teto = 1 if len(tok) <= 6 else 2
+    return any(_dist_edicao(tok, c, teto) <= teto for c in candidatos)
+
+
 def _nomes_compat(lido: str, alvo: str) -> bool:
     """Casa o nome LIDO na solicitação com o nome-ALVO (da GTO) por TOKENS, não por
     substring (evita 'ANA' casar 'ANA PAULA'). Exige >=2 tokens significativos em
-    comum (nome+sobrenome) e que o menor conjunto esteja quase todo contido no maior
-    (tolera 1 divergência — erro de OCR, ex.: IONICE/JONICE)."""
+    comum (nome+sobrenome).
+
+    A divergência tolerada é APENAS ERRO DE GRAFIA (IONICE/JONICE). Antes, um token
+    podia ser COMPLETAMENTE diferente: 'PEDRO SILVA SANTOS' casava com 'JOAO SILVA
+    SANTOS' (2 sobrenomes iguais bastavam) e a solicitação do IRMÃO era anexada.
+    Agora o token divergente precisa ser o mesmo nome mal escrito."""
     ta = [t for t in normaliza_nome(lido).split() if t not in _STOP_NOME and len(t) > 1]
     tb = [t for t in normaliza_nome(alvo).split() if t not in _STOP_NOME and len(t) > 1]
     if not ta or not tb:
@@ -88,8 +117,14 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
     comuns = sa & sb
     if len(comuns) < 2:
         return False
-    menor = sa if len(sa) <= len(sb) else sb
-    return len(comuns) >= max(2, len(menor) - 1)
+    menor, maior = (sa, sb) if len(sa) <= len(sb) else (sb, sa)
+    se_falta = menor - comuns
+    if not se_falta:
+        return True                      # menor totalmente contido no maior
+    if len(se_falta) > 1:
+        return False                     # 2+ tokens divergentes -> outra pessoa
+    tok = next(iter(se_falta))
+    return _erro_de_grafia(tok, maior - comuns)
 
 
 def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands):

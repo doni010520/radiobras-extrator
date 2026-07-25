@@ -46,13 +46,23 @@ from laudo_utils import exames_pendentes_reais
 STATUS_ALVO = "REPASSE"  # só GTOs em "análise de repasse"
 
 
+# Marcadores de GERAÇÃO: quando o nome longo só acrescenta um destes, não é
+# "sobrenome a mais" — é OUTRA PESSOA (pai x filho). Sem isso, a GTO de
+# 'JOSE CARLOS SOUZA' casava com o prontuário de 'JOSE CARLOS SOUZA JUNIOR'.
+_GERACAO = {"JUNIOR", "JR", "FILHO", "FILHA", "NETO", "NETA", "SOBRINHO",
+            "SOBRINHA", "SEGUNDO", "TERCEIRO", "II", "III", "IV"}
+
+
 def _prefixo_casa(a_norm: str, b_norm: str) -> bool:
     """True se um nome normalizado é prefixo (na MESMA ordem) do outro — ex.:
     'MANUELA LOPES DA SILVA' ⊂ 'MANUELA LOPES DA SILVA RAMOS'. Exige o nome curto
-    ter >=2 tokens e ser prefixo estrito do longo (não casa diferença no meio)."""
+    ter >=2 tokens e ser prefixo estrito do longo (não casa diferença no meio).
+    NÃO casa quando o excedente é marcador de geração (JUNIOR/FILHO/NETO/...)."""
     ta, tb = (a_norm or "").split(), (b_norm or "").split()
     longo, curto = (ta, tb) if len(ta) >= len(tb) else (tb, ta)
-    return len(curto) >= 2 and len(longo) > len(curto) and longo[:len(curto)] == curto
+    if not (len(curto) >= 2 and len(longo) > len(curto) and longo[:len(curto)] == curto):
+        return False
+    return not (set(longo[len(curto):]) & _GERACAO)
 
 
 def _ja_anexado_por_nos(nomes) -> bool:
