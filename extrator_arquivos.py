@@ -200,6 +200,23 @@ def _parse_worklist_html(raw_html: str, by_acc: dict) -> None:
             by_acc[acc]["rows_html"].append(h)
 
 
+def _strip_ac(s: str) -> str:
+    """minusculo, sem acento — p/ casar texto de pagina de forma robusta."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s or "")
+    return "".join(c for c in s if not unicodedata.combining(c)).lower()
+
+
+# Marcadores de que a pagina renderizada NAO e um laudo (login, erro, sessao caida)
+_PAG_INVALIDA_RE = re.compile(
+    r"\bentrar\b|\blogin\b|\bsenha\b|acesso negado|nao autorizado|sessao expirad|"
+    r"erro 4\d\d|erro 5\d\d|page not found|internal server error")
+# Marcadores de que E um laudo/relatorio radiologico
+_PAG_LAUDO_RE = re.compile(
+    r"laudo|radiograf|paciente|solicitante|analise|impressao diagn|cefalom|"
+    r"radiologi|exame")
+
+
 def _get_relatorio_analitico(page, convenios: list, segmentos: list, data: str):
     """
     Obtém o relatório analítico REDE UNNA reutilizando a sessão Playwright ativa.
@@ -616,12 +633,23 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
                         "() => { document.querySelectorAll"
                         "('#bg-loading,.loading,#loading').forEach(e => e.remove()); }"
                     )
+                    # TAMANHO NAO E PROVA DE LAUDO: uma tela de login/erro renderizada
+                    # passa dos 10KB e virava LAUDO_*.pdf, que depois e anexado na guia
+                    # e satisfaz o gate "tem laudo". Confere o conteudo da propria
+                    # pagina antes de aceitar o render.
+                    try:
+                        _txt = _strip_ac(ceph_page.inner_text("body"))[:4000]
+                    except Exception:
+                        _txt = ""
+                    if _PAG_INVALIDA_RE.search(_txt) or not _PAG_LAUDO_RE.search(_txt):
+                        ceph_page.wait_for_timeout(1500)
+                        continue          # nao e pagina de laudo -> tenta de novo
                     _b = ceph_page.pdf(format="A4", print_background=True)
                     if len(_b) > size:
                         pdf_bytes, size = _b, len(_b)
                     if size >= 10_000:
                         break
-                if size < 10_000:  # ≈857B = pagina de erro renderizada
+                if size < 10_000:  # ≈857B = pagina de erro renderizada, ou conteudo invalido
                     resultados.append(
                         {"exame": exame, "arquivo": None, "bytes": size, "status": "NAO_PRONTO"}
                     )

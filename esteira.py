@@ -36,7 +36,7 @@ from extrator_arquivos import (
 from extrator_odontoprev import (
     login_odonto, get_credentials_odonto, abrir_consultar_gtos,
     consultar_periodo, listar_gtos, abrir_gto, _anexos_nomes, _anexos_count,
-    normaliza_nome, upload_arquivos, _odo_requests_proxies,
+    normaliza_nome, upload_arquivos, _odo_requests_proxies, ler_dados_gto,
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
@@ -187,6 +187,40 @@ def _reler_exames_focado(gem, cands, leituras, nome_gto):
             a["exames_lidos"] = novos
         except Exception:
             continue
+
+
+def _exame_do_laudo(p):
+    """Exame canônico embutido no nome do arquivo: LAUDO_<EXAME>_<acc>_TIPO.pdf"""
+    m = re.match(r"LAUDO_(.+?)_\d+_", os.path.basename(p))
+    return canon_exames(m.group(1)) if m else set()
+
+
+def _filtrar_arquivos_da_gto(pasta, dec):
+    """Só sobem para a GTO os laudos cujos exames ESTÃO na guia. Exame PARTICULAR
+    feito no mesmo dia não vai para o convênio — regra que o fechar_dia.py:324-367
+    já aplicava e a esteira nunca portou (subia a pasta inteira com os.listdir).
+
+    Caso MISTO (há laudo de fora): as imagens ficam de fora também, porque
+    ENTREGA_*.jpg não diz a que exame pertence — atribuí-las seria chute.
+    Conservador: exame não identificado no nome do arquivo é MANTIDO, e GTO
+    ilegível (sem exames de referência) não filtra nada.
+    Devolve (arquivos, excluidos, exames_fora)."""
+    todos = sorted(os.listdir(pasta)) if pasta and os.path.isdir(pasta) else []
+    cheio = [os.path.join(pasta, f) for f in todos]
+    # exames DESTA guia; sem identificar a GTO, cai na união (comportamento antigo)
+    alvo = set((dec or {}).get("gto_exames_desta") or []) or set((dec or {}).get("gto_exames") or [])
+    if not alvo:
+        return cheio, [], []          # GTO ilegível -> não filtra (como antes)
+    laudos = [p for p in cheio if os.path.basename(p).upper().startswith("LAUDO_")]
+    dentro, fora = [], []
+    for lp in laudos:
+        cex = _exame_do_laudo(lp)
+        # exclui SÓ se o exame foi identificado E está fora da guia
+        (fora if (cex and not (cex & alvo)) else dentro).append(lp)
+    if not fora:
+        return cheio, [], []
+    exames_fora = sorted({e for lp in fora for e in _exame_do_laudo(lp)})
+    return dentro, [os.path.basename(x) for x in fora], exames_fora
 
 
 def _build_by_norm(df):
@@ -406,6 +440,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
         if mime:
             cands_raw.append((it["filename"], mime, blob))
     out["gto_exames"] = sorted(gto_ex)
+    out["gto_exames_desta"] = sorted(gto_ex_desta)
     # Só dispensa laudo se a dispensa veio da GTO DESTA guia. Sem a GTO desta guia
     # no prontuário, NUNCA dispensa (regra do dono: nada dispensa laudo além de
     # modelo/fotografia — e só dá pra saber isso lendo a GTO certa).
@@ -504,7 +539,16 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                 elif (hoje - data_lida).days > 60:
                     precisa_manipular = True; tipo = 'atualizar'
             
-                if precisa_manipular and "image" in mime.lower():
+                # Solicitação em PDF: o ajuste de data só sabe editar IMAGEM. Antes o
+                # bloco inteiro era pulado em silêncio e o PDF subia com a data VELHA.
+                # Só bloqueia quando a data está VENCIDA ('atualizar'); PDF sem data
+                # legível ('inserir') segue o fluxo normal, como sempre seguiu.
+                if precisa_manipular and tipo == 'atualizar' and "image" not in mime.lower():
+                    dec["anexar"] = False
+                    dec["motivo"] = ("Solicitação em PDF com data vencida — o ajuste "
+                                     "automático só funciona em imagem; revisar")
+                    candidato_valido = False
+                elif precisa_manipular and "image" in mime.lower():
                     try:
                         img = Image.open(io.BytesIO(blob))
                         draw = ImageDraw.Draw(img)
@@ -632,6 +676,11 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     if log is None:
         log = lambda m: print(m, flush=True)
     plano = PLANOS.get(conta or "")
+    # Conta informada mas desconhecida = erro de chamada. Antes caía no login PADRÃO
+    # em silêncio e faturava na UNIDADE ERRADA. Falha explícito.
+    if conta and not plano:
+        raise ValueError(f"Conta/plano desconhecido: {conta!r}. "
+                         f"Válidos: {sorted(PLANOS)}")
     _convenios = plano["convenios"] if plano else CONVENIOS
     _segmentos = plano["segmentos"] if plano else SEGMENTOS
     _odo_user = conta if (conta and plano) else None   # None -> usa ODONTOPREV_USER padrão
@@ -891,8 +940,13 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                         break
                     continue
                 pasta = item.get("_pasta")
-                arquivos = ([os.path.join(pasta, f) for f in sorted(os.listdir(pasta))]
-                            if pasta and os.path.isdir(pasta) else [])
+                arquivos, excluidos, exames_fora = _filtrar_arquivos_da_gto(
+                    pasta, item.get("decisao") or {})
+                if excluidos:
+                    item["laudos_excluidos"] = excluidos
+                    item["exames_particulares"] = exames_fora
+                    _t(f"[ANEX{wid}] GTO {item['gto']} EXAMES MISTOS — não anexados "
+                       f"(fora da guia): {exames_fora} | {excluidos}")
                 nomes = [os.path.basename(a) for a in arquivos]
                 with _lock:
                     ativos_an["n"] += 1; ativos_an["pico"] = max(ativos_an["pico"], ativos_an["n"])
@@ -902,6 +956,28 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 else:
                     try:
                         gp = abrir_gto(pg, item["gto"])
+                        # ÚLTIMA GUARDA antes do único ponto de escrita irreversível:
+                        # confere que a guia aberta é do paciente esperado. Só bloqueia
+                        # quando lê um nome DIFERENTE — se não conseguir ler (campo
+                        # vazio/layout novo), segue, para não travar o faturamento.
+                        try:
+                            _pop = ler_dados_gto(gp).get("nome") or ""
+                        except Exception:
+                            _pop = ""
+                        if _pop and not _nomes_compat(_pop, item["nome"]):
+                            item["anexado"] = "ERRO"
+                            item["anexar_erro"] = (f"guia aberta é de {_pop!r}, esperado "
+                                                   f"{item['nome']!r} — upload cancelado")
+                            _t(f"[ANEX{wid}] GTO {item['gto']} CANCELADO: popup mostra "
+                               f"{_pop!r}, esperado {item['nome']!r}")
+                            try:
+                                gp.close()
+                            except Exception:
+                                pass
+                            with _lock:
+                                ativos_an["n"] -= 1
+                                resultados.append(item)
+                            continue
                         res = upload_arquivos(gp, arquivos)
                         try:
                             gp.close()

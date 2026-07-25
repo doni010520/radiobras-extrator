@@ -125,7 +125,9 @@
         <td class="mono">{{ i.gto }}</td>
         <td>{{ i.unidade }}</td>
         <td>{{ i.exames_gto or '—' }}</td>
-        <td>{{ i.solicitacao or 'anexado em execução anterior' }}</td>
+        <td>{% if i.solicitacao %}{{ i.solicitacao }}
+            {%- elif i.categoria == 'justificativa' %}<span class="cat">justificativa na GTO (campo 49) — solicitação dispensada</span>
+            {%- else %}<span class="cat">anexado em execução anterior</span>{% endif %}</td>
       </tr>
       {% endfor %}
     </table>

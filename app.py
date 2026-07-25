@@ -396,7 +396,7 @@ def _glosa_scheduler():
 
 
 _glosa_stop = threading.Event()
-if os.environ.get("GLOSA_AUTO_UPDATE", "1") != "0":
+if os.environ.get("GLOSA_AUTO_UPDATE", "0") == "1":
     threading.Thread(target=_glosa_scheduler, daemon=True).start()
 
 
@@ -451,7 +451,7 @@ def _anexacao_scheduler():
         _glosa_stop.wait(1800)
 
 
-if os.environ.get("ANEXACAO_AUTO_UPDATE", "1") != "0":
+if os.environ.get("ANEXACAO_AUTO_UPDATE", "0") == "1":
     threading.Thread(target=_anexacao_scheduler, daemon=True).start()
 
 
@@ -704,7 +704,7 @@ def _faturar_scheduler():
         _glosa_stop.wait(1800)  # re-checa a cada 30 min
 
 
-if os.environ.get("FATURAR_CRON", "1") != "0":
+if os.environ.get("FATURAR_CRON", "0") == "1":
     threading.Thread(target=_faturar_scheduler, daemon=True).start()
 
 
@@ -781,7 +781,7 @@ def faturar_cron_rodar_now():
 def faturar_cron_status():
     last = db.cron_faturar_last_at()
     return jsonify({"rodando": _faturar_cron_running.is_set(),
-                    "ligado": os.environ.get("FATURAR_CRON", "1") != "0",
+                    "ligado": os.environ.get("FATURAR_CRON", "0") == "1",
                     "ultima": last.isoformat() if last else None})
 
 
@@ -1882,7 +1882,11 @@ def relatorios_dia_xlsx():
     df_f = pd.DataFrame([{"Paciente": i["paciente"] or "—", "GTO": i["gto"],
                           "Unidade": i["unidade"],
                           "Exames (GTO)": i["exames_gto"] or "—",
-                          "Documento anexado": i["solicitacao"] or "anexado em execução anterior"}
+                          "Documento anexado": (
+                              i["solicitacao"]
+                              or ("justificativa na GTO (campo 49) — solicitação dispensada"
+                                  if i.get("categoria") == "justificativa"
+                                  else "anexado em execução anterior"))}
                          for i in fat])
     df_p = pd.DataFrame([{"Paciente": i["paciente"] or "—", "GTO": i["gto"],
                           "Unidade": i["unidade"],
@@ -2050,7 +2054,7 @@ def api_diag():
     try:
         ult = db.cron_faturar_last_at()
         diag["faturamento"] = {
-            "cron_ligado": os.environ.get("FATURAR_CRON", "1") != "0",
+            "cron_ligado": os.environ.get("FATURAR_CRON", "0") == "1",
             "cron_ultima": ult.isoformat() if ult else None,
             "cron_rodou_hoje": _faturar_rodou_hoje(),
             "prazo_dias": _prazo_dias(),

@@ -269,21 +269,34 @@ class Pendencia(Base):
 def _sync_pendencias(s, conta, dia, exec_id, itens_info):
     """Cria/atualiza o backlog de revisão a partir dos itens de uma execução real.
     itens_info: lista de (gto, paciente, categoria, motivo, faturado)."""
+    # Um SAVEPOINT por item: antes era um commit único no fim, então um erro em
+    # QUALQUER item (constraint, dado fora do tamanho) descartava o backlog INTEIRO
+    # daquela execução — as pendências simplesmente não eram criadas.
+    falhas = 0
     for gto, paciente, cat, motivo, faturado in itens_info:
-        p = (s.query(Pendencia)
-             .filter(Pendencia.conta == conta, Pendencia.dia == dia, Pendencia.gto == gto)
-             .first())
-        if faturado:
-            if p and not p.resolvido:        # foi anexado depois -> fecha sozinho
-                p.resolvido = True; p.resolvido_em = _now(); p.resolvido_por = "sistema"
-            continue
-        if p:                                 # já existe pendência
-            if not p.resolvido:               # atualiza (não reabre se já resolvida à mão)
-                p.motivo = motivo; p.categoria = cat; p.execucao_id = exec_id
-        else:
-            s.add(Pendencia(execucao_id=exec_id, conta=conta, dia=dia, gto=gto,
-                            paciente=paciente, categoria=cat, motivo=motivo))
+        try:
+            with s.begin_nested():
+                p = (s.query(Pendencia)
+                     .filter(Pendencia.conta == conta, Pendencia.dia == dia,
+                             Pendencia.gto == gto)
+                     .first())
+                if faturado:
+                    if p and not p.resolvido:    # foi anexado depois -> fecha sozinho
+                        p.resolvido = True
+                        p.resolvido_em = _now()
+                        p.resolvido_por = "sistema"
+                elif p:                          # já existe pendência
+                    if not p.resolvido:          # não reabre se resolvida à mão
+                        p.motivo = motivo; p.categoria = cat; p.execucao_id = exec_id
+                else:
+                    s.add(Pendencia(execucao_id=exec_id, conta=conta, dia=dia, gto=gto,
+                                    paciente=paciente, categoria=cat, motivo=motivo))
+        except Exception as e:
+            falhas += 1
+            print(f"[db] pendencia GTO {gto} falhou: {str(e)[:100]}", flush=True)
     s.commit()
+    if falhas:
+        print(f"[db] {falhas} pendencia(s) falharam; as demais foram gravadas", flush=True)
 
 
 def contar_pendencias_abertas() -> int:
@@ -951,12 +964,15 @@ def _melhores_execucoes_periodo(s, de_iso: str, ate_iso: str):
         d = _dia_to_date(e.dia)
         if not d or d < de or d > ate:
             continue
-        cur = por_dia.get(e.dia)
+        # Chave (dia, CONTA): sem a conta, as 3 unidades do mesmo dia colidiam e só
+        # UMA sobrevivia — o relatório de período descartava as outras duas.
+        k = (e.dia, e.conta or "")
+        cur = por_dia.get(k)
         melhor = (cur is None
                   or (cur.dry_run and not e.dry_run)
                   or (bool(cur.dry_run) == bool(e.dry_run) and (e.id or 0) > (cur.id or 0)))
         if melhor:
-            por_dia[e.dia] = e
+            por_dia[k] = e
     return list(por_dia.values())
 
 
@@ -977,11 +993,16 @@ def gtos_por_plano_periodo(de_iso: str, ate_iso: str) -> dict:
                 if (it.revisao_humana or "").strip():
                     a["revisao"] += 1
         # pipeline novo (Faturar dia) -> tudo no plano 'odontoprev' (RedeUna)
+        _dias_vistos = set()
         for e in _melhores_execucoes_periodo(s, de_iso, ate_iso):
             a = out.setdefault("odontoprev", {"anexadas": 0, "sem_laudo": 0, "erros": 0,
                                               "simulacao": 0, "revisao": 0, "total": 0,
                                               "dias": 0})
-            a["dias"] += 1
+            # conta DIAS distintos: agora há uma execução por unidade, e somar cada
+            # uma triplicaria o rótulo "N dia(s)".
+            if e.dia not in _dias_vistos:
+                _dias_vistos.add(e.dia)
+                a["dias"] += 1
             for it in e.itens:
                 a["total"] += 1
                 if e.dry_run:
