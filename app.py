@@ -617,6 +617,30 @@ def _faturar_cron_rodar():
         _faturar_cron_running.clear()
 
 
+def _esteira_reservar(dia, conta, tag):
+    """Reserva (dia, conta) para UMA esteira. Devolve a tag se conseguiu, None se
+    já há outra rodando. Duas esteiras no mesmo dia/unidade sobem 2x14 Chromium —
+    foi o que causou o crash-loop do container. Vale para TODOS os caminhos:
+    /faturar/run, o cron diário e /admin/esteira/run."""
+    chave = (dia, conta or "_")
+    with _esteira_ativas_lock:
+        atual = _esteira_ativas.get(chave)
+        if atual:
+            job = _esteira_jobs.get(atual)
+            # entrada órfã (job sumiu num restart) não pode travar o dia pra sempre
+            if job is not None and not job.get("done", False):
+                return None
+        _esteira_ativas[chave] = tag
+        return tag
+
+
+def _esteira_liberar(dia, conta, tag):
+    chave = (dia, conta or "_")
+    with _esteira_ativas_lock:
+        if _esteira_ativas.get(chave) == tag:
+            _esteira_ativas.pop(chave, None)
+
+
 def _faturar_cron_body():
     from datetime import date, timedelta
     try:
@@ -631,11 +655,19 @@ def _faturar_cron_body():
     from esteira import rodar_esteira
     ndias = nfat = 0
     for conta, dia in sorted(combos):
+        _tag = f"cron-{conta}-{dia}"
+        if not _esteira_reservar(dia, conta, _tag):
+            app.logger.warning("Cron faturar %s %s PULADO: já há execução em andamento",
+                               conta, dia)
+            continue
         try:
             resumo = rodar_esteira(dia, 6, 3, 5, log=lambda m: None,
                                    gemini_key=gkey, k_attach=3, dry_run=False,
                                    conta=conta, senha_portal=db.get_portal_senha(conta))
-            if resumo and resumo.get("pendentes", 0) > 0:
+            # SEMPRE salva (antes só salvava com pendentes>0): quando a última
+            # pendência do dia era resolvida, o cron pulava a gravação e ela NUNCA
+            # fechava — o alerta de SLA seguia cobrando guia já faturada.
+            if resumo:
                 db.salvar_execucao(resumo)
             nfat += (resumo or {}).get("anexado_ok", 0) or 0
             ndias += 1
@@ -643,6 +675,8 @@ def _faturar_cron_body():
                             (resumo or {}).get("anexado_ok"), (resumo or {}).get("pendentes"))
         except Exception as e:
             app.logger.error("Cron faturar %s %s FALHOU: %s", conta, dia, str(e)[:120])
+        finally:
+            _esteira_liberar(dia, conta, _tag)
     db.cron_marcar_faturar(target)
     app.logger.info("Cron faturar concluído: %s execução(ões), %s faturada(s).", ndias, nfat)
     try:
@@ -1368,14 +1402,10 @@ def faturar_run():
     # padrão = DRY. Faturamento real exige dry=0 explícito.
     dry = (request.form.get("dry") or "1") != "0"
 
-    chave = (data, plano or "_")
-    with _esteira_ativas_lock:
-        anterior = _esteira_ativas.get(chave)
-        if anterior and not (_esteira_jobs.get(anterior) or {}).get("done", True):
-            return jsonify({"error": "Já existe uma execução em andamento para esse "
-                                     "dia e unidade.", "job": anterior}), 409
-        jid = uuid.uuid4().hex[:8]
-        _esteira_ativas[chave] = jid
+    jid = uuid.uuid4().hex[:8]
+    if not _esteira_reservar(data, plano, jid):
+        return jsonify({"error": "Já existe uma execução em andamento para esse "
+                                 "dia e unidade."}), 409
 
     review_dir = f"/tmp/esteira_rev/{jid}"
     job = {"log": [], "done": False, "resumo": None, "error": None,
@@ -1403,9 +1433,7 @@ def faturar_run():
             job["log"].append(f"ERRO: {str(e)[:140]}")
         finally:
             job["done"] = True
-            with _esteira_ativas_lock:
-                if _esteira_ativas.get(chave) == jid:
-                    _esteira_ativas.pop(chave, None)
+            _esteira_liberar(data, plano, jid)
 
     threading.Thread(target=_go, daemon=True).start()
     return jsonify({"job": jid})
@@ -2248,6 +2276,9 @@ def _esteira_run():
     dry = request.args.get("dry", "1") != "0"     # dry=0 => anexação REAL
     gkey = request.args.get("gkey") or os.environ.get("GEMINI_API_KEY")
     jid = uuid.uuid4().hex[:8]
+    # mesma trava do /faturar/run e do cron: nunca 2 esteiras no mesmo dia/unidade
+    if not dry and not _esteira_reservar(data, "", jid):
+        return jsonify({"error": "já há execução em andamento para esse dia"}), 409
     review_dir = f"/tmp/esteira_rev/{jid}"
     job = {"log": [], "done": False, "resumo": None, "error": None, "review_dir": review_dir}
     _esteira_jobs[jid] = job
@@ -2269,6 +2300,8 @@ def _esteira_run():
             job["log"].append(f"ERRO: {e}")
         finally:
             job["done"] = True
+            if not dry:
+                _esteira_liberar(data, "", jid)
 
     threading.Thread(target=_go, daemon=True).start()
     return jsonify({"job": jid, "acompanhar": f"/admin/esteira/log/{jid}?key={_ESTEIRA_KEY}"})
