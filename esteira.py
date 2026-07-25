@@ -543,12 +543,18 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
     return out
 
 
-_REVIEW_TTL_DIAS = int(os.environ.get("REVIEW_TTL_DIAS", "7"))
+# TTL da pasta de revisão. 90 dias, não 7: uma pendência fica aberta enquanto
+# alguém não providencia o documento (laudo do radiologista, solicitação da
+# clínica), e isso demora. Medido em 25/07: das 24 pendências abertas, a mais
+# velha tinha 16 dias e a mediana 9 — com TTL de 7 dias, 16 delas (2/3) já
+# teriam perdido os documentos que a usuária precisa ver para resolvê-las.
+# Ajustável por env sem mexer no código.
+_REVIEW_TTL_DIAS = int(os.environ.get("REVIEW_TTL_DIAS", "90"))
 
 
 def _limpar_temporarios_antigos(review_root="/tmp/esteira_rev"):
     """Higiene de documento de paciente em disco (LGPD). Remove:
-      - pastas de revisão mais velhas que REVIEW_TTL_DIAS (padrão 7);
+      - pastas de revisão mais velhas que REVIEW_TTL_DIAS (padrão 90);
       - sobras de execuções anteriores (_att_* / _esteira_*) com mais de 1 dia,
         que só existem se um processo morreu no meio.
     Silencioso de propósito: limpeza nunca pode derrubar a esteira."""

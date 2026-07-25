@@ -1055,8 +1055,6 @@ def _testar_login_portal(conta, senha):
 @app.route("/portal")
 def portal_page():
     """Cadastro da senha do portal por código (plano)."""
-    if not _admin_ok():
-        return ("Acesso restrito a administradores.", 403)
     status = db.listar_portal_status()
     planos = [{"conta": c, "nome": _plano_nome(c), "label": v.get("label", c),
                "tem": status.get(c, {}).get("tem", False),
@@ -1068,10 +1066,6 @@ def portal_page():
 
 @app.route("/portal/senha", methods=["POST"])
 def portal_salvar():
-    # CREDENCIAL de portal é coisa de admin. Faturar NÃO é — é o trabalho das
-    # operadoras (role 'user'), então /faturar/run continua liberado pra elas.
-    if not _admin_ok():
-        return jsonify({"error": "restrito a admin"}), 403
     conta = (request.form.get("conta") or "").strip()
     senha = request.form.get("senha") or ""
     if conta not in PLANOS:
@@ -1087,8 +1081,6 @@ def portal_salvar():
 
 @app.route("/portal/testar", methods=["POST"])
 def portal_testar():
-    if not _admin_ok():   # aceita senha no corpo -> oráculo de credencial
-        return jsonify({"error": "restrito a admin"}), 403
     conta = (request.form.get("conta") or "").strip()
     senha = request.form.get("senha") or db.get_portal_senha(conta)
     if conta not in PLANOS:
