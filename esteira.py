@@ -17,6 +17,7 @@ rodar_esteira(data, m_download, n_desc, k_leitura, log, gemini_key) -> resumo.
 import io
 import os
 import queue
+import shutil
 import tempfile
 import threading
 import time
@@ -316,6 +317,10 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
     sess = requests.Session(); sess.cookies.update(cj)
     sess.headers.update({"User-Agent": "Mozilla/5.0", "Referer": f"{BASE}/patients"})
     att_dir = tempfile.mkdtemp(prefix="_att_")
+    # Documento de paciente em disco: quem chama APAGA assim que a decisão sai
+    # (ver leitor()). Sem isso, até 30 anexos de prontuário POR GTO ficavam
+    # retidos indefinidamente — inclusive nas rodadas automáticas.
+    out["_att_dir"] = att_dir
     # ordena do MAIS NOVO pro mais antigo (id desc): garante que a solicitação
     # recente entre mesmo em prontuário grande/com histórico de anos.
     def _id_key(it):
@@ -538,6 +543,41 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
     return out
 
 
+_REVIEW_TTL_DIAS = int(os.environ.get("REVIEW_TTL_DIAS", "7"))
+
+
+def _limpar_temporarios_antigos(review_root="/tmp/esteira_rev"):
+    """Higiene de documento de paciente em disco (LGPD). Remove:
+      - pastas de revisão mais velhas que REVIEW_TTL_DIAS (padrão 7);
+      - sobras de execuções anteriores (_att_* / _esteira_*) com mais de 1 dia,
+        que só existem se um processo morreu no meio.
+    Silencioso de propósito: limpeza nunca pode derrubar a esteira."""
+    agora = time.time()
+    try:
+        for nome in os.listdir(review_root):
+            p = os.path.join(review_root, nome)
+            try:
+                if os.path.isdir(p) and (agora - os.path.getmtime(p)) > _REVIEW_TTL_DIAS * 86400:
+                    shutil.rmtree(p, ignore_errors=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        raiz = tempfile.gettempdir()
+        for nome in os.listdir(raiz):
+            if not (nome.startswith("_att_") or nome.startswith("_esteira_")):
+                continue
+            p = os.path.join(raiz, nome)
+            try:
+                if os.path.isdir(p) and (agora - os.path.getmtime(p)) > 86400:
+                    shutil.rmtree(p, ignore_errors=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_key=None,
                   review_dir=None, k_attach=0, dry_run=True, conta=None, senha_portal=None):
     """Pipeline de até 4 estágios (descoberta -> download -> decisão -> anexação).
@@ -730,6 +770,11 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 except Exception as e:
                     dec = {"erro": str(e)[:100], "decisao": None, "anexos": 0,
                            "gto_exames": [], "plano_laudo_imgs": [], "plano_solicitacao": None}
+                # Apaga os anexos do prontuário assim que a decisão sai: eles só
+                # servem para decidir e são documento médico (LGPD).
+                _ad = dec.pop("_att_dir", None)
+                if _ad:
+                    shutil.rmtree(_ad, ignore_errors=True)
                 item["decisao"] = dec
                 item["dt_decisao"] = time.monotonic() - t0
                 with _lock:
@@ -890,6 +935,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     _t(f"PRORADIS by_norm={len(by_norm)} | OdontoPrev token={'ok' if token else 'FALHOU'} "
        f"| {len(alvos)} alvo(s)")
     tmp = tempfile.mkdtemp(prefix="_esteira_")
+    _limpar_temporarios_antigos()   # varre sobras antigas antes de gerar as novas
 
     # ---- 2) lança os pools (descoberta-API + download + decisão + anexação) ----
     tds = [threading.Thread(target=descobridor_api, args=(token, alvos), daemon=True)]
@@ -1038,4 +1084,10 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
        f"{resumo['solic_auto']} solic-auto / {resumo['justificativa']} c-justificativa / "
        f"{resumo['revisao']} revisão | anexados ok={resumo['anexado_ok']} dry={resumo['anexado_dry']} "
        f"falhou={resumo['anexado_falhou']} | TOTAL={resumo['tempo_total']}s")
+    # Laudos e imagens do dia já foram anexados — apaga a pasta da execução.
+    # (Só nomes de arquivo seguem no resumo; ninguém lê o conteúdo depois daqui.)
+    try:
+        shutil.rmtree(tmp, ignore_errors=True)
+    except Exception:
+        pass
     return resumo
