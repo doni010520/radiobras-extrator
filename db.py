@@ -540,7 +540,11 @@ def relatorio_dia(dia: str, contas: list = None) -> dict:
                 cur = por_gto.get(k)
                 novo = {
                     "gto": k, "paciente": it.paciente, "conta": e.conta,
-                    "unidade": (PLANOS.get(e.conta, {}) or {}).get("label", e.conta),
+                    # NUNCA None: existem execuções antigas sem conta (9 no banco em
+                    # 25/07) e o sorted() abaixo compara unidade — None x str estoura
+                    # TypeError e derruba a tela, o PDF e o Excel do dia inteiro.
+                    "unidade": ((PLANOS.get(e.conta, {}) or {}).get("label")
+                                or e.conta or "(sem unidade)"),
                     "categoria": it.categoria, "faturado": bool(it.faturado),
                     "motivo": it.motivo or "", "solicitacao": it.solicitacao or "",
                     "exames_gto": it.exames_gto or "", "exames_lidos": it.exames_lidos or "",

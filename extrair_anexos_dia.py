@@ -105,9 +105,9 @@ def _record_href(page, cod: str):
         for (const a of links) {
             let node = a, txt = '';
             for (let i = 0; i < 6 && node; i++) { node = node.parentElement; if (node) txt += ' ' + node.innerText; }
-            if (txt.includes(cod)) return a.href;
+            if (txt.includes(cod)) return {href: a.href, n: links.length};
         }
-        return links.length === 1 ? links[0].href : null;
+        return {href: links.length === 1 ? links[0].href : null, n: links.length};
     }""", cod)
 
 
@@ -126,13 +126,18 @@ def anexos_do_paciente(page, nome: str, cod: str) -> list:
     page.keyboard.press("Enter")
     page.wait_for_timeout(2500)
 
-    href = _record_href(page, cod)
+    r = _record_href(page, cod) or {}
+    href, n_cards = r.get("href"), r.get("n", 0)
     if not href:
-        # Sem correspondencia e com mais de um card: parar. Motivo explicito para
-        # a pendencia dizer a verdade (nao "sem anexo candidato a solicitacao").
+        # O motivo tem que dizer a VERDADE: 0 cards e 2+ cards sao problemas
+        # diferentes e mandam a operadora procurar coisas diferentes.
+        if n_cards == 0:
+            raise ProntuarioAmbiguo(
+                f"paciente {nome!r} não encontrado no cadastro do PRORADIS — "
+                f"conferir se o nome está escrito igual nos dois sistemas")
         raise ProntuarioAmbiguo(
-            f"mais de um paciente com o nome {nome!r} no PRORADIS — "
-            f"não foi possível identificar o prontuário com segurança")
+            f"{n_cards} pacientes com o nome {nome!r} no PRORADIS — não foi "
+            f"possível identificar o prontuário com segurança")
     page.goto(href, wait_until="networkidle")
     page.wait_for_timeout(1500)
 

@@ -133,23 +133,31 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands):
     return None, None, "solicitacao do paciente nao cobre os exames da GTO"
 
 
-_RELEITURA_PROMPT = """Este anexo é um PEDIDO/SOLICITAÇÃO de exames odontológicos — pode ser
-MANUSCRITO (letra cursiva). Leia com MÁXIMA atenção e liste TODOS os exames pedidos.
+# NÃO listar nomes de exame aqui. A versão anterior enumerava
+# ("procure: panoramica, periapical, ...") e isso entrega o gabarito: num
+# manuscrito em cursiva o modelo tende a "ver" o termo sugerido. Como a união das
+# leituras só ACRESCENTA exame, uma alucinação vira faturamento — o lado errado da
+# regra "na dúvida, pendência". Aqui ele só transcreve; quem reconhece o exame é o
+# canon_exames() do código.
+_RELEITURA_PROMPT = """Este anexo é um PEDIDO/SOLICITAÇÃO de exames odontológicos, possivelmente
+MANUSCRITO (letra cursiva). Transcreva LITERALMENTE o que está escrito no campo dos
+exames/procedimentos pedidos — palavra por palavra, como aparece no papel, mesmo que
+esteja abreviado, com grafia imperfeita ou você não reconheça o termo.
 
-Procure ESPECIFICAMENTE se algum destes aparece escrito (mesmo abreviado, em cursiva
-ou com grafia imperfeita): panoramica, periapical, interproximal (bite-wing), oclusal,
-telerradiografia (teleperfil), tomografia, documentacao ortodontica, modelo de estudo,
-fotografia.
+NÃO interprete, NÃO complete, NÃO deduza e NÃO acrescente nada que não esteja escrito.
+Se não conseguir ler um trecho, omita-o em vez de adivinhar.
 
-Transcreva TODOS os que estiverem escritos — e NENHUM que não esteja.
 Responda APENAS JSON (sem markdown): {"exames": ["...", "..."]}"""
 
 
 def _reler_exames_focado(gem, cands, leituras, nome_gto):
-    """2ª leitura DIRIGIDA quando a 1ª não cobriu os exames da GTO: reenvia SÓ os
-    candidatos que falharam apenas na cobertura (tipo=solicitacao, legível, nome ok),
-    um por vez, com prompt focado em manuscrito. Atualiza exames_lidos IN-PLACE com a
-    UNIÃO das leituras. O código continua decidindo — o Gemini só lê de novo."""
+    """2ª leitura quando a 1ª não cobriu os exames da GTO: reenvia SÓ o candidato
+    que falhou apenas na cobertura, isolado (o ganho vem de ler UM documento com
+    atenção, não de sugerir termos). Atualiza exames_lidos IN-PLACE com a união e
+    guarda a leitura original em exames_lidos_1a para auditoria.
+
+    NÃO relê quando a 1ª passada não leu exame NENHUM: aí o documento é ilegível de
+    fato, e insistir seria uma 2ª tentativa às cegas — vira pendência direto."""
     from google.genai import types
     for a in leituras or []:
         if not isinstance(a, dict):
@@ -161,6 +169,9 @@ def _reler_exames_focado(gem, cands, leituras, nome_gto):
             continue
         if not _nomes_compat(a.get("paciente_lido") or "", nome_gto):
             continue
+        _lidos1 = [str(e) for e in (a.get("exames_lidos") or [])]
+        if not _lidos1:
+            continue          # nada lido na 1ª -> não insiste
         try:
             fn2, mime2, blob2, _sv = cands[ai]
             r2 = gem.models.generate_content(
@@ -169,8 +180,11 @@ def _reler_exames_focado(gem, cands, leituras, nome_gto):
                           _RELEITURA_PROMPT])
             t2 = re.sub(r"^```json|^```|```$", "", (r2.text or "").strip(), flags=re.M).strip()
             ex2 = (json.loads(t2) or {}).get("exames") or []
-            a["exames_lidos"] = sorted({str(e) for e in (a.get("exames_lidos") or [])} |
-                                       {str(e) for e in ex2})
+            novos = sorted(set(_lidos1) | {str(e) for e in ex2})
+            if novos != sorted(set(_lidos1)):
+                a["exames_lidos_1a"] = sorted(set(_lidos1))   # rastro p/ auditoria
+                a["releitura"] = True
+            a["exames_lidos"] = novos
         except Exception:
             continue
 
@@ -345,6 +359,9 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
             return 0
     lista = sorted(lista, key=_id_key, reverse=True)
     cands_raw, gto_ex, justif_ok = [], set(), False
+    gto_ex_desta = set()   # exames SÓ da GTO desta guia (a união serve p/ cobertura,
+                           # mas não pode ir pra mensagem: acusaria a clínica de não
+                           # ter pedido exame que esta guia nunca pediu)
     _disp_laudo = None   # None=nenhuma GTO lida ainda; vira False se qualquer GTO exigir laudo
     _gtos_desta = 0      # quantas GTOs do prontuário são desta guia (nº confere)
     for it in lista[:30]:
@@ -363,7 +380,10 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
             # solicitação da atual.
             _desta = gto_e_desta_guia(path, gto) if gto is not None else False
             try:
-                gto_ex |= gto_exames(path)   # união: só torna a cobertura MAIS exigente
+                _ex_pdf = gto_exames(path)
+                gto_ex |= _ex_pdf            # união: só torna a cobertura MAIS exigente
+                if _desta:
+                    gto_ex_desta |= _ex_pdf  # os exames REAIS desta guia (p/ mensagem)
             except Exception:
                 pass
             if _desta:
@@ -459,8 +479,11 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                         break
                 if _motivo == "solicitacao do paciente nao cobre os exames da GTO":
                     _cn = sorted(canon_exames(" ".join(str(e) for e in _lidos)))
+                    # usa os exames DESTA guia; a união (gto_ex) inclui GTOs de outras
+                    # visitas e faria a mensagem cobrar pedido que esta guia não fez
+                    _pede = sorted(gto_ex_desta) or sorted(gto_ex)
                     _motivo = (f"Solicitação encontrada pede [{', '.join(_cn) or '?'}] "
-                               f"mas a GTO pede [{', '.join(sorted(gto_ex))}] — conferir "
+                               f"mas a GTO pede [{', '.join(_pede)}] — conferir "
                                f"se o pedido cobre todos os exames")
                 dec = {"indice_solicitacao": None, "exames_batem": False,
                        "exames_lidos": _lidos, "paciente_bate": False, "anexar": False,
