@@ -205,7 +205,11 @@ async function doRun(plano, dia, label){
   $('prog').style.display='block';
   $('msg').textContent='Iniciando…'; setBar(0); lastPct=0; etaLeft=null; renderEta();
   try{
-    const r=await fetch('/faturar/run?data='+encodeURIComponent(dia)+'&plano='+encodeURIComponent(plano));
+    // POST (não GET): dispara faturamento REAL, então não pode ser acionável por
+    // link/prefetch. dry=0 é explícito aqui — no servidor o padrão é dry.
+    const _fd=new URLSearchParams({data:dia, plano:plano, dry:'0'});
+    const r=await fetch('/faturar/run',{method:'POST',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:_fd});
     const j=await r.json();
     if(j.error){ $('msg').innerHTML='<span class="err">Erro: '+j.error+'</span>'; setBusy(false); return; }
     jid=j.job;

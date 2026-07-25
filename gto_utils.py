@@ -61,6 +61,23 @@ _BOILER_49 = re.compile(
     re.I)
 
 
+def gto_e_desta_guia(path: str, gto: str) -> bool:
+    """True se o PDF da GTO é o da guia `gto` que está sendo faturada.
+    O número aparece nos campos '2 - Nº Guia no Prestador' e '7 - Nº da Guia
+    Atribuída pela Operadora' (e no token SISGTO<numero>). Usado para NÃO deixar
+    a GTO de OUTRA visita do mesmo paciente ditar justificativa/dispensa de laudo."""
+    n = re.sub(r"\D", "", str(gto or ""))
+    if len(n) < 6:
+        return False
+    try:
+        doc = fitz.open(path)
+        txt = "".join(p.get_text() for p in doc)
+        doc.close()
+    except Exception:
+        return False
+    return re.search(rf"\b{re.escape(n)}\b|SISGTO{re.escape(n)}", txt) is not None
+
+
 def _justif_por_texto(full: str):
     """Lê o campo 49 (Observação/Justificativa) pelo TEXTO linearizado do PDF.
     Retorna o conteúdo (str) se claramente PREENCHIDO, ou None (deixa a decisão
@@ -155,7 +172,15 @@ def extrair_observacao(path: str) -> dict:
 
     conteudo = re.sub(r"\s+", " ", " ".join(conteudo_tokens)).strip()
     doc.close()
-    status = "PREENCHIDO" if conteudo else "VAZIO"
+    # CONSERVADOR (igual ao caminho por texto): a justificativa DISPENSA a
+    # solicitação, então um falso-positivo aqui faz faturar sem documento. A ROI
+    # cobre a largura inteira da página, então qualquer ruído — um traço, um ponto,
+    # um pedaço de rótulo vizinho — caía como "PREENCHIDO". Agora exige conteúdo
+    # clínico de verdade: >= 2 palavras alfabéticas (3+ letras) não-boilerplate.
+    _palavras = [w for w in re.findall(r"[A-Za-zÀ-ú]{3,}", conteudo)
+                 if not _BOILER_49.search(w)]
+    _preenchido = len(_palavras) >= 2 and not _BOILER_49.search(conteudo[:40])
+    status = "PREENCHIDO" if _preenchido else "VAZIO"
     return {"is_gto": True, "status": status, "conteudo": conteudo,
-            "n_tokens": len(conteudo_tokens),
+            "n_tokens": len(conteudo_tokens), "palavras_uteis": len(_palavras),
             "roi": [round(roi_x0, 1), round(roi_y0, 1), round(roi_x1, 1), round(roi_y1, 1)]}

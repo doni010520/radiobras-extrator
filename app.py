@@ -38,7 +38,18 @@ import db
 import planos as planos_mod
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY") or "rb-dev-secret-troque-em-producao"
+# SECRET_KEY assina o cookie de sessão. O fallback fixo estava COMMITADO — quem
+# lesse o repo forjava sessão de admin. Em produção agora é obrigatória; fora de
+# produção gera uma aleatória por processo (derruba as sessões a cada restart, o
+# que é o comportamento correto pra dev).
+_sk = os.environ.get("SECRET_KEY")
+if not _sk:
+    if os.environ.get("FLASK_ENV") == "production" or os.environ.get("RB_PRODUCAO") == "1":
+        raise RuntimeError("SECRET_KEY não definida — obrigatória em produção.")
+    import secrets as _secrets
+    _sk = _secrets.token_urlsafe(48)
+    logging.warning("SECRET_KEY ausente: usando chave aleatória (sessões caem no restart).")
+app.secret_key = _sk
 app.permanent_session_lifetime = timedelta(days=14)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -1337,17 +1348,35 @@ def faturar_page():
     return render_template("faturar.html", planos=planos, planos_inativos=PLANOS_INATIVOS)
 
 
-@app.route("/faturar/run")
+# Execuções em andamento por (dia, conta) — impede 2 esteiras na MESMA GTO, que
+# sobem 2x14 Chromium e já derrubaram o container (crash-loop).
+_esteira_ativas = {}
+_esteira_ativas_lock = threading.Lock()
+
+
+@app.route("/faturar/run", methods=["POST"])
 def faturar_run():
+    """Dispara a esteira. POST — nunca GET: isto ANEXA documento no portal do
+    convênio, então não pode ser acionável por link, imagem ou prefetch."""
     import time as _time
-    data = request.args.get("data")
+    data = (request.form.get("data") or "").strip()
     if not data:
         return jsonify({"error": "informe a data"}), 400
-    plano = request.args.get("plano") or ""
+    plano = (request.form.get("plano") or "").strip()
     if plano and plano not in PLANOS:
         return jsonify({"error": "plano inválido"}), 400
-    dry = request.args.get("dry", "0") != "0"
-    jid = uuid.uuid4().hex[:8]
+    # padrão = DRY. Faturamento real exige dry=0 explícito.
+    dry = (request.form.get("dry") or "1") != "0"
+
+    chave = (data, plano or "_")
+    with _esteira_ativas_lock:
+        anterior = _esteira_ativas.get(chave)
+        if anterior and not (_esteira_jobs.get(anterior) or {}).get("done", True):
+            return jsonify({"error": "Já existe uma execução em andamento para esse "
+                                     "dia e unidade.", "job": anterior}), 409
+        jid = uuid.uuid4().hex[:8]
+        _esteira_ativas[chave] = jid
+
     review_dir = f"/tmp/esteira_rev/{jid}"
     job = {"log": [], "done": False, "resumo": None, "error": None,
            "review_dir": review_dir, "execucao_id": None, "t0": _time.monotonic(),
@@ -1374,6 +1403,9 @@ def faturar_run():
             job["log"].append(f"ERRO: {str(e)[:140]}")
         finally:
             job["done"] = True
+            with _esteira_ativas_lock:
+                if _esteira_ativas.get(chave) == jid:
+                    _esteira_ativas.pop(chave, None)
 
     threading.Thread(target=_go, daemon=True).start()
     return jsonify({"job": jid})

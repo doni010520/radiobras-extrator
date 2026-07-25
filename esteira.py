@@ -39,7 +39,7 @@ from extrator_odontoprev import (
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
-from gto_utils import is_gto_pdf, extrair_observacao
+from gto_utils import is_gto_pdf, extrair_observacao, gto_e_desta_guia
 from solicitacao_utils import gto_exames, canon_exames, gto_dispensa_laudo
 import json
 import re
@@ -326,6 +326,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
     lista = sorted(lista, key=_id_key, reverse=True)
     cands_raw, gto_ex, justif_ok = [], set(), False
     _disp_laudo = None   # None=nenhuma GTO lida ainda; vira False se qualquer GTO exigir laudo
+    _gtos_desta = 0      # quantas GTOs do prontuário são desta guia (nº confere)
     for it in lista[:30]:
         ext = it["filename"].lower().rsplit(".", 1)[-1] if "." in it["filename"] else ""
         try:
@@ -336,29 +337,40 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
         with open(path, "wb") as f:
             f.write(blob)
         if ext == "pdf" and is_gto_pdf(path):     # pdf da GTO -> exames + justificativa
+            # É a GTO DESTA guia ou de outra visita do mesmo paciente? Justificativa
+            # e dispensa-de-laudo só podem vir da GTO que está sendo faturada — senão
+            # uma GTO antiga (outra guia, campo 49 preenchido) dispensaria a
+            # solicitação da atual.
+            _desta = gto_e_desta_guia(path, gto) if gto is not None else False
             try:
-                gto_ex |= gto_exames(path)
+                gto_ex |= gto_exames(path)   # união: só torna a cobertura MAIS exigente
             except Exception:
                 pass
-            try:
-                # dispensa laudo SÓ se a GTO é exclusivamente modelo/fotografia.
-                # Conservador: se qualquer GTO exigir laudo, o conjunto exige.
-                _d = gto_dispensa_laudo(path)
-                _disp_laudo = _d if _disp_laudo is None else (_disp_laudo and _d)
-            except Exception:
-                _disp_laudo = False
-            try:
-                if extrair_observacao(path).get("status") == "PREENCHIDO":
-                    justif_ok = True
-            except Exception:
-                pass
+            if _desta:
+                _gtos_desta += 1
+                try:
+                    # dispensa laudo SÓ se a GTO é exclusivamente modelo/fotografia.
+                    # Conservador: se qualquer GTO desta guia exigir laudo, exige.
+                    _d = gto_dispensa_laudo(path)
+                    _disp_laudo = _d if _disp_laudo is None else (_disp_laudo and _d)
+                except Exception:
+                    _disp_laudo = False
+                try:
+                    if extrair_observacao(path).get("status") == "PREENCHIDO":
+                        justif_ok = True
+                except Exception:
+                    pass
             continue
         mime = {"pdf": "application/pdf", "png": "image/png",
                 "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
         if mime:
             cands_raw.append((it["filename"], mime, blob))
     out["gto_exames"] = sorted(gto_ex)
-    out["dispensa_laudo"] = bool(_disp_laudo)   # só True se GTO é só modelo/fotografia
+    # Só dispensa laudo se a dispensa veio da GTO DESTA guia. Sem a GTO desta guia
+    # no prontuário, NUNCA dispensa (regra do dono: nada dispensa laudo além de
+    # modelo/fotografia — e só dá pra saber isso lendo a GTO certa).
+    out["dispensa_laudo"] = bool(_disp_laudo) and _gtos_desta > 0
+    out["gto_desta_guia"] = _gtos_desta
 
     # REGRA: GTO com justificativa (campo 49) -> solicitação DISPENSADA. Nem toca
     # nos anexos do prontuário (não salva, não manda pro Gemini). Só laudo+imgs.
@@ -465,6 +477,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                             except Exception:
                                 font = ImageFont.load_default()
             
+                        _editou = False   # a edição REALMENTE aconteceu?
                         if tipo == 'atualizar' and dec.get("box_data"):
                             ymin, xmin, ymax, xmax = dec["box_data"]
                             # Apaga data antiga com retângulo branco
@@ -472,6 +485,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                                             int((xmax/1000)*largura), int((ymax/1000)*altura)], fill="white")
                             # Reescreve a nova data no mesmo lugar da antiga
                             draw.text((int((xmin/1000)*largura), int((ymin/1000)*altura)), nova_data, fill="black", font=font)
+                            _editou = True
                         elif tipo == 'inserir':
                             # Prefere a área de assinatura informada pela IA; fallback: centro-inferior
                             box_ass = dec.get("box_assinatura")
@@ -485,13 +499,23 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                                 pos_x = int(largura * 0.50)
                                 pos_y = int(altura * 0.85)
                             draw.text((pos_x, pos_y), nova_data, fill="black", font=font)
-            
-                        img_byte_arr = io.BytesIO()
-                        if img.mode in ("RGBA", "P"): img = img.convert("RGB")
-                        img.save(img_byte_arr, format=img.format if img.format else "JPEG")
-                        blob = img_byte_arr.getvalue() # Atualiza o arquivo em memória
-                        dec["data_solicitacao"] = nova_data; dec["anexar"] = True
-                        dec["motivo"] = "Data ajustada automaticamente."
+                            _editou = True
+
+                        # 'atualizar' SEM box_data não caía em nenhum ramo: nada era
+                        # desenhado, mas o registro dizia "Data ajustada" e o documento
+                        # seguia pra anexação com a data VELHA. Agora vira pendência.
+                        if _editou:
+                            img_byte_arr = io.BytesIO()
+                            if img.mode in ("RGBA", "P"): img = img.convert("RGB")
+                            img.save(img_byte_arr, format=img.format if img.format else "JPEG")
+                            blob = img_byte_arr.getvalue() # Atualiza o arquivo em memória
+                            dec["data_solicitacao"] = nova_data; dec["anexar"] = True
+                            dec["motivo"] = "Data ajustada automaticamente."
+                        else:
+                            dec["anexar"] = False
+                            dec["motivo"] = ("Solicitação com data vencida e o sistema não "
+                                             "localizou onde ajustar (sem box da data) — revisar")
+                            candidato_valido = False
                     except Exception as e:
                         # Manipulação de data FALHOU -> NÃO anexa (nao pode faturar com
                         # a data nao-ajustada). Invalida o candidato tambem.
@@ -740,10 +764,31 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 pass
 
     # ---- ESTÁGIO 4: anexação (OdontoPrev) ----
+    _anex_falhas = []   # motivos de morte dos anexadores (p/ explicar o que sobrou)
+
     def anexador(wid):
-        user, pwd = _odo_creds()   # plano selecionado -> login = código da conta
-        with sync_playwright() as pw:
-            br, ctx, pg = login_odonto(pw, user, pwd)
+        """Um worker que morre NÃO pode levar junto as GTOs já aprovadas: o que
+        ficar na fila é drenado depois do join (ver 'sobras' mais abaixo) e vira
+        pendência com motivo, em vez de sumir do relatório em silêncio."""
+        try:
+            user, pwd = _odo_creds()   # plano selecionado -> login = código da conta
+        except Exception as e:
+            _anex_falhas.append(f"credenciais indisponíveis: {e}")
+            _t(f"[ANEX{wid}] credenciais indisponíveis: {str(e)[:80]}")
+            return
+        try:
+            pwctx = sync_playwright().start()
+        except Exception as e:
+            _anex_falhas.append(f"falha ao iniciar navegador: {e}")
+            _t(f"[ANEX{wid}] falha ao iniciar navegador: {str(e)[:80]}")
+            return
+        try:
+            try:
+                br, ctx, pg = login_odonto(pwctx, user, pwd)
+            except Exception as e:
+                _anex_falhas.append(f"login OdontoPrev falhou: {e}")
+                _t(f"[ANEX{wid}] login OdontoPrev falhou: {str(e)[:80]}")
+                return
             ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
             try:
                 abrir_consultar_gtos(pg); consultar_periodo(pg, data)
@@ -785,6 +830,14 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     resultados.append(item)
             try:
                 br.close()
+            except Exception:
+                pass
+        except Exception as e:
+            _anex_falhas.append(f"anexador interrompido: {e}")
+            _t(f"[ANEX{wid}] worker morreu: {str(e)[:90]}")
+        finally:
+            try:
+                pwctx.stop()
             except Exception:
                 pass
 
@@ -865,6 +918,26 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     stop_dec.set()
     for t in tas:
         t.join()
+    # SOBRAS: se todos os anexadores morreram (login bloqueado, navegador não subiu),
+    # as GTOs JÁ APROVADAS ficariam presas na fila e sumiriam do relatório — sem
+    # faturar e sem virar pendência. Aqui elas voltam com motivo explícito.
+    if anexar_on:
+        _sobrou = 0
+        while True:
+            try:
+                _it = fila_anexar.get_nowait()
+            except queue.Empty:
+                break
+            _it["anexado"] = "ERRO"
+            _it["anexar_erro"] = ("anexação não executada: "
+                                  + ("; ".join(_anex_falhas)[:100] if _anex_falhas
+                                     else "worker encerrou antes de processar"))
+            with _lock:
+                resultados.append(_it)
+            _sobrou += 1
+        if _sobrou:
+            _t(f"[ANEX] {_sobrou} GTO(s) NÃO anexada(s) e devolvida(s) como pendência "
+               f"(motivo: {'; '.join(_anex_falhas)[:80] or 'fila não drenada'})")
     total = time.monotonic() - t_ini
 
     baixados = [r for r in resultados if r["status"] == "BAIXADO"]
@@ -932,6 +1005,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         decisoes.append({
             "gto": r["gto"], "paciente": r["nome"], "categoria": cat,
             "anexado": r.get("anexado"),
+            "anexar_erro": r.get("anexar_erro"),   # p/ o motivo da pendência ser o REAL
             "laudo_imgs": dec.get("plano_laudo_imgs", []),
             "solicitacao": dec.get("plano_solicitacao"),
             "anexar_solic": bool(dec.get("plano_solicitacao")),

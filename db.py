@@ -486,6 +486,12 @@ def salvar_execucao(resumo: dict) -> int:
             cat = x.get("categoria")
             if faturado:
                 motivo = ""
+            elif x.get("anexar_erro"):
+                # A documentação estava OK — quem falhou foi a ANEXAÇÃO. Antes esse
+                # erro nunca era lido: a pendência saía com motivo vazio (categoria
+                # "justificativa") ou com o texto POSITIVO do Gemini (categoria
+                # "auto"), fazendo parecer culpa da clínica. Agora diz a verdade.
+                motivo = f"Documentação OK, mas a anexação falhou: {x['anexar_erro']}"
             elif cat == "sem_solicitacao":
                 motivo = g.get("motivo") or x.get("erro") or "Sem solicitação e sem justificativa (campo 49 vazio)"
             elif cat == "sem_laudo":

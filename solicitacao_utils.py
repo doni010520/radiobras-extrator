@@ -35,7 +35,9 @@ _CANON = [
     (r"interprox|bite.?wing|bitewing", "interproximal"),
     (r"telerr|cefalom|ricketts|\bceph\b|tele radio", "telerradiografia"),
     (r"documenta", "documentacao"),
-    (r"tomograf|tc\b|cone beam|feixe c", "tomografia"),
+    # \btc\b com fronteira DOS DOIS LADOS: sem ela, "etc" virava "tomografia" e a
+    # solicitacao passava a "cobrir" um exame que ninguem pediu.
+    (r"tomograf|\btc\b|cone beam|feixe c", "tomografia"),
     (r"fotograf", "fotografia"),
     (r"modelo", "modelo"),
     (r"carpal|\bmao\b|idade ossea", "carpal"),
