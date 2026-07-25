@@ -215,24 +215,39 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
         pac = cands[0]
         wl = listar_worklist_por_pacientes(pg, data, [pac["nome"]])
     else:
+        # FALLBACK: paciente fora do analítico. Aqui mora o maior risco do sistema —
+        # a busca é por NOME e pode devolver gente diferente. Lógica portada do
+        # fechar_dia.py (que já fazia certo): agrupa as linhas por paciente e só
+        # segue se sobrar UM. Antes, bastava UMA linha casar (any) para o LOTE
+        # INTEIRO de accessions ser aceito — inclusive de outros pacientes.
         wl = listar_worklist_por_pacientes(pg, data, [g["nome"]])
-        
-        def _wl_valida(cands, nn):
-            for it in cands:
-                wn = normaliza_nome(it.get("nome", ""))
-                if _prefixo_casa(wn, nn) or _prefixo_casa(nn, wn):
-                    return True
-            return False
 
-        accs = sorted({w["accession"] for w in wl if w.get("accession")})
-        if accs and not _wl_valida(wl, nn): accs = []
+        def _casam_por_paciente(linhas, nn_alvo):
+            """{nome_normalizado: [accessions]} apenas das linhas que casam com o
+            alvo. Aceita nome IDÊNTICO (o _prefixo_casa sozinho rejeita igualdade,
+            o que jogava nome exato no caminho da busca ampliada)."""
+            out = {}
+            for w in linhas:
+                if not w.get("accession"):
+                    continue
+                wn = normaliza_nome(w.get("nome", ""))
+                if wn == nn_alvo or _prefixo_casa(wn, nn_alvo) or _prefixo_casa(nn_alvo, wn):
+                    out.setdefault(wn, []).append(w["accession"])
+            return out
 
+        casam = _casam_por_paciente(wl, nn)
+        # Só encurta o nome se NADA casou. Cada tentativa é re-validada — o nome
+        # encurtado alarga a busca e é justamente por onde entrava parente/homônimo.
         toks = g["nome"].split()
-        while not accs and len(toks) > 2:
+        while not casam and len(toks) > 2:
             toks = toks[:-1]
             wl = listar_worklist_por_pacientes(pg, data, [" ".join(toks)])
-            accs = sorted({w["accession"] for w in wl if w.get("accession")})
-            if accs and not _wl_valida(wl, nn): accs = []
+            casam = _casam_por_paciente(wl, nn)
+        if len(casam) > 1:
+            # dois pacientes distintos com nome compatível -> não dá pra saber qual
+            return {"gto": g["gto"], "nome": g["nome"], "status": "AMBIGUO",
+                    "dt_dl": time.monotonic() - t0}
+        accs = sorted({a for v in casam.values() for a in v}) if casam else []
         if not accs:
             return {"gto": g["gto"], "nome": g["nome"], "status": "SEM_MATCH", "dt_dl": time.monotonic() - t0}
         pac = {"nome": g["nome"], "cod_pac": "WL" + accs[0], "accessions": accs}

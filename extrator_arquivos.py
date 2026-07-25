@@ -779,7 +779,17 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
     cod = pac["cod_pac"]
     # Fase 1: expandir para todos os exames do dia do paciente (panoramica omitida
     # pelo analitico, etc.), casando por nome dentro da worklist ja restrita ao dia.
-    accessions, _extras = _expandir_accessions_por_nome(pac["accessions"], worklist)
+    #
+    # SO EXPANDE quando a identidade do paciente esta PROVADA — isto e, quando o
+    # cod_pac veio do relatorio analitico. No fallback por nome o cod e sintetico
+    # ("WL<accession>") e a identidade e apenas provavel: expandir por string de
+    # nome ali podia juntar exames de um HOMONIMO na mesma pasta, e a pasta inteira
+    # e enviada para a GTO. Sem prova de identidade, usa so as accessions ja
+    # validadas — no maximo perde um exame (vira pendencia), nunca anexa de outro.
+    if str(cod).startswith("WL"):
+        accessions, _extras = list(pac["accessions"]), []
+    else:
+        accessions, _extras = _expandir_accessions_por_nome(pac["accessions"], worklist)
     pasta_nome = f"{slug(nome)}_{cod}"
     out_dir = os.path.join(zip_root, pasta_nome)
     os.makedirs(out_dir, exist_ok=True)

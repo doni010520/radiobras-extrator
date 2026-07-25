@@ -91,8 +91,15 @@ def sondar(nome_arq: str, body: bytes) -> dict:
 # ── Navegacao de anexos por paciente ──────────────────────────────────────────
 
 def _record_href(page, cod: str):
-    """Apos a busca, devolve o href do botao Prontuario do card cujo texto
-    contem o prontuario `cod` (desambigua homonimos)."""
+    """Href do botao Prontuario do card cujo texto contem o codigo `cod`.
+
+    FALHA FECHADO: antes, se o codigo nao fosse encontrado, devolvia links[0] —
+    o PRIMEIRO card da busca. Como o fallback da esteira usa um codigo sintetico
+    ("WL<accession>"), que NUNCA aparece no card, esse caminho abria o prontuario
+    de outra pessoa — e dali saiam campo 49, dispensa de laudo e a solicitacao.
+    Agora: sem correspondencia, so aceita quando ha UM UNICO card (nao ha o que
+    confundir). Com 2+ cards devolve None -> vira pendencia, nunca paciente errado.
+    """
     return page.evaluate("""(cod) => {
         const links = [...document.querySelectorAll('a.prontuario')];
         for (const a of links) {
@@ -100,8 +107,13 @@ def _record_href(page, cod: str):
             for (let i = 0; i < 6 && node; i++) { node = node.parentElement; if (node) txt += ' ' + node.innerText; }
             if (txt.includes(cod)) return a.href;
         }
-        return links.length ? links[0].href : null;
+        return links.length === 1 ? links[0].href : null;
     }""", cod)
+
+
+class ProntuarioAmbiguo(Exception):
+    """A busca por nome nao permitiu identificar UM prontuario com seguranca.
+    Melhor parar do que ler o prontuario de outra pessoa."""
 
 
 def anexos_do_paciente(page, nome: str, cod: str) -> list:
@@ -116,7 +128,11 @@ def anexos_do_paciente(page, nome: str, cod: str) -> list:
 
     href = _record_href(page, cod)
     if not href:
-        return []
+        # Sem correspondencia e com mais de um card: parar. Motivo explicito para
+        # a pendencia dizer a verdade (nao "sem anexo candidato a solicitacao").
+        raise ProntuarioAmbiguo(
+            f"mais de um paciente com o nome {nome!r} no PRORADIS — "
+            f"não foi possível identificar o prontuário com segurança")
     page.goto(href, wait_until="networkidle")
     page.wait_for_timeout(1500)
 
