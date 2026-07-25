@@ -204,6 +204,23 @@ def _run_ciclo_job(job_id: str, data: str, convenios: list, segmentos: list) -> 
         with _jobs_lock:
             _jobs[job_id].setdefault("log", []).append(str(msg))
 
+    # /ciclo_dia ANEXA de verdade (ciclo_dia tem dry_run=False por padrão e a rota
+    # não passa o parâmetro). É um SEGUNDO caminho de escrita, então precisa da
+    # mesma trava da esteira — senão roda junto com /faturar/run ou com o cron no
+    # mesmo dia e sobem 2x14 Chromium (o crash-loop conhecido). Reserva o dia
+    # INTEIRO (todas as contas) porque o ciclo varre o dia, não uma unidade.
+    _reservadas = []
+    for _c in list(PLANOS) + [""]:
+        if _esteira_reservar(data, _c, job_id):
+            _reservadas.append(_c)
+        else:
+            for _r in _reservadas:
+                _esteira_liberar(data, _r, job_id)
+            msg = ("Já existe um faturamento em andamento para esse dia — "
+                   "aguarde terminar antes de rodar o ciclo.")
+            with _jobs_lock:
+                _jobs[job_id].update({"status": "error", "error": msg})
+            return
     try:
         relatorio = ciclo_dia(data, convenios, segmentos, progress_cb=progress)
         with _jobs_lock:
@@ -213,6 +230,9 @@ def _run_ciclo_job(job_id: str, data: str, convenios: list, segmentos: list) -> 
         app.logger.error("Erro no ciclo %s:\n%s", job_id, tb)
         with _jobs_lock:
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
+    finally:
+        for _r in _reservadas:
+            _esteira_liberar(data, _r, job_id)
 
 
 def _run_fechar_job(job_id: str, data: str, dry_run: bool, plano: str = "odontoprev") -> None:
@@ -237,6 +257,22 @@ def _run_fechar_job(job_id: str, data: str, dry_run: bool, plano: str = "odontop
         with _jobs_lock:
             return "\n".join(_jobs[job_id].get("log", []))
 
+    # TERCEIRO caminho que anexa (fechar_dia, pipeline antigo). Mesma trava dos
+    # outros dois — em execução REAL não pode coincidir com /faturar/run, o cron
+    # ou /ciclo_dia no mesmo dia.
+    _reservadas = []
+    if not dry_run:
+        for _c in list(PLANOS) + [""]:
+            if _esteira_reservar(data, _c, job_id):
+                _reservadas.append(_c)
+            else:
+                for _r in _reservadas:
+                    _esteira_liberar(data, _r, job_id)
+                msg = ("Já existe um faturamento em andamento para esse dia — "
+                       "aguarde terminar.")
+                with _jobs_lock:
+                    _jobs[job_id].update({"status": "error", "error": msg})
+                return
     try:
         relatorio = fechar_dia(data, CONVENIOS, SEGMENTOS,
                                dry_run=dry_run, progress_cb=progress)
@@ -257,6 +293,9 @@ def _run_fechar_job(job_id: str, data: str, dry_run: bool, plano: str = "odontop
                 pass
         with _jobs_lock:
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
+    finally:
+        for _r in _reservadas:
+            _esteira_liberar(data, _r, job_id)
 
 
 def _run_glosa_job(job_id: str, dia: str, contas: list, checar: bool,
