@@ -999,7 +999,12 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                             _pop = ler_dados_gto(gp).get("nome") or ""
                         except Exception:
                             _pop = ""
-                        if _pop and not _nomes_compat(_pop, item["nome"]):
+                        # exige um nome DE VERDADE (>=2 tokens) antes de usar isto pra
+                        # bloquear: uma captura truncada do regex nao pode cancelar
+                        # upload legitimo. Na duvida sobre a leitura, deixa passar.
+                        _pop_ok = len([t for t in normaliza_nome(_pop).split()
+                                       if len(t) > 1]) >= 2
+                        if _pop_ok and not _nomes_compat(_pop, item["nome"]):
                             item["anexado"] = "ERRO"
                             item["anexar_erro"] = (f"guia aberta é de {_pop!r}, esperado "
                                                    f"{item['nome']!r} — upload cancelado")
