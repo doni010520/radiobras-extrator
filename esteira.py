@@ -132,6 +132,48 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands):
     return None, None, "solicitacao do paciente nao cobre os exames da GTO"
 
 
+_RELEITURA_PROMPT = """Este anexo é um PEDIDO/SOLICITAÇÃO de exames odontológicos — pode ser
+MANUSCRITO (letra cursiva). Leia com MÁXIMA atenção e liste TODOS os exames pedidos.
+
+Procure ESPECIFICAMENTE se algum destes aparece escrito (mesmo abreviado, em cursiva
+ou com grafia imperfeita): panoramica, periapical, interproximal (bite-wing), oclusal,
+telerradiografia (teleperfil), tomografia, documentacao ortodontica, modelo de estudo,
+fotografia.
+
+Transcreva TODOS os que estiverem escritos — e NENHUM que não esteja.
+Responda APENAS JSON (sem markdown): {"exames": ["...", "..."]}"""
+
+
+def _reler_exames_focado(gem, cands, leituras, nome_gto):
+    """2ª leitura DIRIGIDA quando a 1ª não cobriu os exames da GTO: reenvia SÓ os
+    candidatos que falharam apenas na cobertura (tipo=solicitacao, legível, nome ok),
+    um por vez, com prompt focado em manuscrito. Atualiza exames_lidos IN-PLACE com a
+    UNIÃO das leituras. O código continua decidindo — o Gemini só lê de novo."""
+    from google.genai import types
+    for a in leituras or []:
+        if not isinstance(a, dict):
+            continue
+        ai = a.get("idx")
+        if not (isinstance(ai, int) and 0 <= ai < len(cands)):
+            continue
+        if a.get("tipo") != "solicitacao" or not bool(a.get("legivel", True)):
+            continue
+        if not _nomes_compat(a.get("paciente_lido") or "", nome_gto):
+            continue
+        try:
+            fn2, mime2, blob2, _sv = cands[ai]
+            r2 = gem.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[types.Part.from_bytes(data=blob2, mime_type=mime2),
+                          _RELEITURA_PROMPT])
+            t2 = re.sub(r"^```json|^```|```$", "", (r2.text or "").strip(), flags=re.M).strip()
+            ex2 = (json.loads(t2) or {}).get("exames") or []
+            a["exames_lidos"] = sorted({str(e) for e in (a.get("exames_lidos") or [])} |
+                                       {str(e) for e in ex2})
+        except Exception:
+            continue
+
+
 def _build_by_norm(df):
     cod_col = "Cód. Pac" if "Cód. Pac" in df.columns else df.columns[1]
     ped_col = "Pedido" if "Pedido" in df.columns else df.columns[6]
@@ -359,6 +401,12 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
 
             # ── O CÓDIGO ESCOLHE a solicitação (o Gemini só LEU/transcreveu) ──────
             idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], gto_ex, len(cands))
+            # Falhou SÓ na cobertura de exames? Manuscrito costuma sair sub-lido na
+            # 1ª passada (ex.: leu "periapical" e perdeu "panorâmica"). Releitura
+            # dirigida do(s) candidato(s) e nova decisão determinística.
+            if idx is None and _motivo == "solicitacao do paciente nao cobre os exames da GTO":
+                _reler_exames_focado(gem, cands, leituras, pac["nome"])
+                idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], gto_ex, len(cands))
             candidato_valido = idx is not None
             if candidato_valido:
                 dec = {"indice_solicitacao": idx, "paciente_lido": a.get("paciente_lido"),
@@ -369,8 +417,21 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                        "paciente_bate": True, "confianca": "alta", "anexar": True,
                        "leituras": leituras}
             else:
+                # transparência p/ a pendência: o que foi LIDO do melhor candidato
+                # nome-compatível (a usuária audita "lido" vs "GTO pede")
+                _lidos = []
+                for _a2 in leituras:
+                    if (isinstance(_a2, dict) and _a2.get("tipo") == "solicitacao"
+                            and _nomes_compat(_a2.get("paciente_lido") or "", pac["nome"])):
+                        _lidos = _a2.get("exames_lidos") or []
+                        break
+                if _motivo == "solicitacao do paciente nao cobre os exames da GTO":
+                    _cn = sorted(canon_exames(" ".join(str(e) for e in _lidos)))
+                    _motivo = (f"Solicitação encontrada pede [{', '.join(_cn) or '?'}] "
+                               f"mas a GTO pede [{', '.join(sorted(gto_ex))}] — conferir "
+                               f"se o pedido cobre todos os exames")
                 dec = {"indice_solicitacao": None, "exames_batem": False,
-                       "paciente_bate": False, "anexar": False,
+                       "exames_lidos": _lidos, "paciente_bate": False, "anexar": False,
                        "motivo": _motivo, "leituras": leituras}
 
             # Se o candidato foi VALIDADO pelo codigo, avalia manipulação de data
@@ -811,8 +872,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     com_justif = [r for r in baixados if (r.get("decisao") or {}).get("justificativa")]
     # painel das decisões (pro dry-run que você revisa)
     decisoes = []
-    _outros_res = [r for r in resultados if r["status"] in ("SEM_MATCH", "AMBIGUO", "SEM_ARQUIVOS", "JA_ANEXADO")]
-    
+    _outros_res = [r for r in resultados
+                   if r["status"] in ("SEM_MATCH", "AMBIGUO", "SEM_ARQUIVOS", "JA_ANEXADO", "ERRO")]
+
     for r in baixados + _outros_res:
         if r.get("status") == "JA_ANEXADO":
             decisoes.append({
@@ -821,6 +883,30 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 "anexar_solic": False, "justificativa": True, "gto_exames": [],
                 "candidatos": [], "solic_idx": None,
                 "gemini": {"motivo": "GTO com anexos completos no OdontoPrev"}, "erro": None
+            })
+            continue
+
+        # Status em que o prontuário NEM FOI ABERTO: o motivo tem que dizer a
+        # VERDADE (nada de "campo 49 vazio" — isso acusaria a clínica sem termos
+        # olhado o campo 49). Caso MARTA 18/07.
+        _st = r.get("status")
+        if _st in ("SEM_MATCH", "SEM_ARQUIVOS", "AMBIGUO", "ERRO"):
+            _mot_st = {
+                "SEM_MATCH": (f"Exame não encontrado no PRORADIS em {data} — verificar com a "
+                              f"unidade se o exame foi realizado/registrado no sistema"),
+                "SEM_ARQUIVOS": (f"Exame consta no PRORADIS em {data}, mas sem laudo/imagem "
+                                 f"disponível para baixar — laudo provavelmente não emitido"),
+                "AMBIGUO": "Mais de um paciente com esse nome no PRORADIS no dia — conferir manualmente",
+                "ERRO": f"Falha técnica ao processar — reprocessar o dia. Detalhe: {str(r.get('erro') or '')[:110]}",
+            }[_st]
+            _cat_st = {"SEM_MATCH": "sem_exame", "SEM_ARQUIVOS": "sem_exame",
+                       "AMBIGUO": "revisao", "ERRO": "erro"}[_st]
+            decisoes.append({
+                "gto": r["gto"], "paciente": r["nome"], "categoria": _cat_st,
+                "anexado": r.get("anexado"), "laudo_imgs": [], "solicitacao": None,
+                "anexar_solic": False, "justificativa": None, "gto_exames": [],
+                "candidatos": [], "solic_idx": None,
+                "gemini": {"motivo": _mot_st}, "erro": r.get("erro"),
             })
             continue
 
@@ -837,6 +923,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             cat = "justificativa"      # laudo ok (ou dispensado)
         elif dec.get("plano_solicitacao"):
             cat = "auto"               # laudo ok (ou dispensado)
+        elif dec.get("decisao") is None:
+            cat = "erro"               # _decidir falhou (Gemini/anexos) — NÃO é culpa da clínica
         elif d.get("indice_solicitacao") is None:
             cat = "sem_solicitacao"
         else:
