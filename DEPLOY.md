@@ -26,11 +26,51 @@ A tela antiga (relatório analítico `.xlsx` + download `.zip`) fica em `/relato
    ODONTOPREV_USER=<código do credenciado OdontoPrev>
    ODONTOPREV_PASSWORD=<senha do OdontoPrev>
    DATABASE_URL=<connection string do Supabase/Postgres>
+   GEMINI_API_KEY=<chave da API do Gemini>
+   SECRET_KEY=<string aleatória longa, ver abaixo>
+   ODONTO_PROXY_URL=http://usuario:senha@host:porta
    ```
    - As credenciais são **obrigatórias** (o app falha sem elas — não há mais fallback no código).
    - `DATABASE_URL`: liga o histórico do dashboard a um Postgres durável (recomendado:
      Supabase). **Sem** essa variável o app cai em SQLite local — que é apagado a cada
      redeploy do container, então o histórico se perde. Para produção, **defina-a**.
+   - `GEMINI_API_KEY`: **sem ela o estágio de leitura não roda** — nenhuma solicitação é
+     identificada e o dia inteiro cai em pendência.
+   - `SECRET_KEY`: assina o cookie de sessão. **Sem ela o app gera uma chave aleatória a
+     cada restart** e todo mundo é deslogado a cada deploy. Gere com:
+     `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+     Nunca reaproveite uma chave que já tenha aparecido em repositório público.
+   - `ODONTO_PROXY_URL`: **crítico e fácil de esquecer numa migração de VPS.** O
+     OdontoPrev bloqueia IP de datacenter (rate-limit/anti-bot), então o login passa por
+     um proxy residencial brasileiro *sticky*. O PRORADIS é acessado direto, por isso a
+     variável é só do Odonto. Formato: `http://usuario:senha@host:porta`; se o usuário
+     tiver `;sessid.<x>`, o código troca o token a cada sessão sozinho.
+     **Sem essa variável, o faturamento simplesmente não loga no portal.**
+
+### Trocando de VPS — o que levar junto
+Todas as variáveis acima. O que costuma quebrar quando se esquece:
+
+| Variável | Se faltar |
+|---|---|
+| `ODONTO_PROXY_URL` | Login no OdontoPrev falha (IP novo é bloqueado). **Nada fatura.** |
+| `GEMINI_API_KEY` | Nenhuma solicitação é lida. Tudo vira pendência. |
+| `SECRET_KEY` | Sessões caem a cada deploy. |
+| `DATABASE_URL` | Histórico e pendências somem (cai em SQLite efêmero). |
+
+O banco é externo (Supabase), então **nada de dado precisa ser migrado** — basta apontar a
+mesma `DATABASE_URL`. Depois de subir, confira nesta ordem: `/healthz` → login →
+`/relatorios/dia` de um dia conhecido → um **DRY** em `/faturar` antes de qualquer
+execução real.
+
+### Agendadores (cron interno)
+Ficam **desligados por padrão** — precisam ser ativados explicitamente:
+```
+FATURAR_CRON=1          # faturamento diário (hora: FATURAR_CRON_HOUR, default 5)
+GLOSA_AUTO_UPDATE=1     # atualização do panorama de glosas
+ANEXACAO_AUTO_UPDATE=1  # varredura do estado das GTOs
+```
+Ligue **um de cada vez**, observando uma execução antes do próximo: os três competem
+pelo mesmo login do OdontoPrev e a soma deles já derrubou o container por memória.
 
 ### Alerta de prazo (SLA) por email — opcional, recomendado
 O app envia um email diário (ao fim do cron de faturamento) com as GTOs não faturadas
