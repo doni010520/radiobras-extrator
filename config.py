@@ -19,24 +19,32 @@ CONVENIOS = [
 SEGMENTOS = ["CENTRO", "ITAIGARA", "LAURO", "PERIPERI"]
 
 # Planos = cada conta RedeUna no OdontoPrev (login = código da conta; mesma senha
-# pras 3). Cada conta tem seus convênios/segmentos no PRORADIS. A ordem aqui é a
-# da lista do seletor.
+# pras 3). Cada conta tem seus convênios no PRORADIS. A ordem aqui é a da lista
+# do seletor.
+#
+# segmentos = [] significa NÃO RESTRINGIR por segmento no relatório analítico.
+# O convênio já identifica a unidade, então o segmento é redundante — e em
+# Camaçari era nocivo: os exames de lá são registrados com segmento diferente de
+# "CAMAÇARI" e sumiam do analítico, virando pendência FALSA ("exame não
+# encontrado no PRORADIS") mesmo estando registrados no convênio certo.
+# Medição em 15-18/07 (soltando o segmento): Centro +0, Tancredo +0,
+# Camaçari +22 pacientes recuperados. Por isso vale para as três.
 PLANOS = {
     "388336": {
         "label": "RedeUna — Centro, Lauro, Periperi e Itaigara",
         "convenios": ["REDE UNNA - CENTRO", "REDE UNNA - ITAIGARA",
                       "REDE UNNA - PERIPERI", "REDE UNNA - LAURO DE FREITAS"],
-        "segmentos": ["CENTRO", "ITAIGARA", "LAURO", "PERIPERI"],
+        "segmentos": [],
     },
     "397950": {
         "label": "RedeUna — Tancredo",
         "convenios": ["REDE UNNA CAMINHO DAS ÁRVORES - TANCREDO"],
-        "segmentos": ["TANCREDO"],
+        "segmentos": [],
     },
     "410923": {
         "label": "RedeUna — Camaçari",
         "convenios": ["REDE UNNA - CAMAÇARI", "REDE UNNA DESCONTO CAMAÇARI"],
-        "segmentos": ["CAMAÇARI"],
+        "segmentos": [],
     },
 }
 

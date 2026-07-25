@@ -236,7 +236,16 @@ def _get_relatorio_analitico(page, convenios: list, segmentos: list, data: str):
             seg_map[txt] = val
 
     ins_toks = resolve_tokens(convenios, conv_map, "convenio")
-    seg_toks = resolve_tokens(segmentos, seg_map, "segmento")
+    # SEGMENTO vazio/None = NAO restringir (usa todos). O convenio ja identifica a
+    # unidade ("REDE UNNA - CAMACARI", "REDE UNNA - CENTRO", ...), entao filtrar
+    # tambem por segmento e redundante — e em Camacari era ATIVAMENTE NOCIVO: os
+    # exames sao registrados com segmento != "CAMACARI" e sumiam do analitico,
+    # virando pendencia falsa ("exame nao encontrado no PRORADIS") mesmo estando la.
+    # Medido em 15-18/07: Centro +0, Tancredo +0, Camacari +22 pacientes recuperados.
+    if segmentos:
+        seg_toks = resolve_tokens(segmentos, seg_map, "segmento")
+    else:
+        seg_toks = list(seg_map.values())
 
     # Capturar cookies da sessão para o POST via requests
     cookies = {c["name"]: c["value"] for c in page.context.cookies()}
