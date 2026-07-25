@@ -575,6 +575,24 @@ def relatorio_dia(dia: str, contas: list = None) -> dict:
                         por_gto[k] = novo
                     elif bool(cur["dry_run"]) == bool(novo["dry_run"]):
                         por_gto[k] = novo                   # mais recente (ordem asc)
+        # RESSALVA: a regra "não desfatura" congela o status de uma GTO já anexada.
+        # Se o backlog ainda tem pendência ABERTA para ela, o relatório dizia
+        # "Faturada" enquanto a tela de Revisão dizia o contrário. Aqui a GTO
+        # continua faturada (é a verdade do portal), mas leva a ressalva junto —
+        # sem isso, os dois números do sistema se contradizem.
+        _abertas = {}
+        try:
+            q = s.query(Pendencia).filter(Pendencia.dia == dia,
+                                          Pendencia.resolvido == False)   # noqa: E712
+            for p in q.all():
+                if not contas or (p.conta in contas):
+                    _abertas[str(p.gto)] = p.motivo or ""
+        except Exception:
+            _abertas = {}
+        for i in por_gto.values():
+            i["pendencia_aberta"] = i["faturado"] and i["gto"] in _abertas
+            if i["pendencia_aberta"]:
+                i["ressalva"] = _abertas.get(i["gto"], "")
         itens = sorted(por_gto.values(),
                        key=lambda x: (x["unidade"], not x["faturado"], x["paciente"] or ""))
         # agregação por unidade

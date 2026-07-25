@@ -121,7 +121,8 @@
       <tr><th>Paciente</th><th>GTO</th><th>Unidade</th><th>Exames</th><th>Documento anexado</th></tr>
       {% for i in d.faturadas_lista %}
       <tr>
-        <td><span class="tag fat">✓</span> <strong>{{ i.paciente or '—' }}</strong></td>
+        <td><span class="tag fat">✓</span> <strong>{{ i.paciente or '—' }}</strong>
+            {%- if i.pendencia_aberta %}<br><span class="cat" style="color:var(--warn)">⚠ ainda consta na Revisão: {{ i.ressalva[:60] }}</span>{% endif %}</td>
         <td class="mono">{{ i.gto }}</td>
         <td>{{ i.unidade }}</td>
         <td>{{ i.exames_gto or '—' }}</td>
