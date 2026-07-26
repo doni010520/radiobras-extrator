@@ -34,7 +34,13 @@ _CANON = [
     (r"periap", "periapical"),
     (r"interprox|bite.?wing|bitewing", "interproximal"),
     (r"telerr|cefalom|ricketts|\bceph\b|tele radio", "telerradiografia"),
-    (r"documenta", "documentacao"),
+    # "documenta..." + as ABREVIACOES DO PORTAL OdontoPrev, colhidas do catalogo
+    # /v1/gto/eventos em 26/07: "Doc Orto Basica/Compl/Espec./Contro", "DocOrtoComp
+    # II", "Doc Ortopédica", "Doc Periodontal", "Doc Perio BD", "Doc Diag Imp BD".
+    # Sem elas, uma GTO de documentacao vinha com exames VAZIOS -> "GTO ilegivel".
+    # Exige "doc" seguido de orto/perio/diag para nao casar "documento"/"doc." solto.
+    (r"documenta|\bdoc\.?\s*orto|\bdocorto|\bdoc\.?\s*perio|\bdoc\.?\s*diag", "documentacao"),
+    (r"seios?\s*da\s*face", "seios_da_face"),
     # \btc\b com fronteira DOS DOIS LADOS: sem ela, "etc" virava "tomografia" e a
     # solicitacao passava a "cobrir" um exame que ninguem pediu.
     (r"tomograf|\btc\b|cone beam|feixe c", "tomografia"),

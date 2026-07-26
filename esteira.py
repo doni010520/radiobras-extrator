@@ -74,6 +74,8 @@ def _mem_mb():
         return -1
 
 
+_ODO_API = "https://gto-credenciado.odontoprev.com.br"
+
 _STOP_NOME = {"DE", "DA", "DO", "DAS", "DOS", "E"}
 
 def _dist_edicao(a: str, b: str, teto: int = 2) -> int:
@@ -393,7 +395,10 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
     status = "BAIXADO" if nf > 0 else "SEM_ARQUIVOS"
     return {"gto": g["gto"], "nome": pac["nome"], "status": status,
             "arquivos": nf, "imgs": res.get("imagens", {}).get("qtd", 0),
-            "_pac": pac, "_pasta": pasta, "dt_dl": time.monotonic() - t0}
+            "_pac": pac, "_pasta": pasta, "dt_dl": time.monotonic() - t0,
+            # exames da guia lidos do PORTAL (fonte autoritativa) — usados quando o
+            # PDF da GTO no prontuário vem sem a tabela de procedimentos
+            "eventos_portal": g.get("eventos_portal") or []}
 
 
 _DECISAO_PROMPT = """Acima estão VÁRIOS anexos do prontuário, indexados ([anexo 0], [anexo 1], ...).
@@ -448,7 +453,8 @@ def _date_from_name(s):
         return None
 
 
-def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=None):
+def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=None,
+             eventos_portal=None):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
     manda TUDO pro Gemini escolher a solicitação certa + decidir. NÃO anexa.
     Devolve plano (laudo+imgs sempre; solicitação se a IA confiar) + a decisão.
@@ -549,6 +555,20 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
             # NÃO volta para cands_raw: é a GTO, não a solicitação.
             out["gto_lida_por_imagem"] = fn
         cands_raw = _restantes
+
+    # FONTE AUTORITATIVA: os eventos da ficha no PORTAL. O PDF da GTO no prontuário
+    # às vezes traz só os RÓTULOS dos campos, sem a tabela de procedimentos — aí
+    # gto_exames() volta vazio e a guia caía em "GTO ilegível (sem exames de
+    # referência)" mesmo com tudo certo (casos ALEXSANDRO/EDIMAR/JORGE, 25-26/07).
+    # O portal é a própria operadora dizendo o que a guia autoriza.
+    if eventos_portal:
+        _ex_portal = canon_exames(" ".join(str(e) for e in eventos_portal))
+        if _ex_portal:
+            out["exames_portal"] = sorted(_ex_portal)
+            if not gto_ex_desta:
+                gto_ex_desta |= _ex_portal
+            if not gto_ex:
+                gto_ex |= _ex_portal
 
     out["gto_exames"] = sorted(gto_ex)
     out["gto_exames_desta"] = sorted(gto_ex_desta)
@@ -885,7 +905,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
 
         def _um(g):
             try:
-                r = sess.get("https://gto-credenciado.odontoprev.com.br/v1/gto/imagens"
+                r = sess.get(f"{_ODO_API}/v1/gto/imagens"
                              f"?numeroFicha={g['gto']}", timeout=20)
                 imgs = r.json() if r.status_code == 200 else []
                 nomes = {str(i.get("nomeArquivo", "")) for i in imgs}
@@ -906,9 +926,25 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             if cnt >= 2 and not tem_laudo:
                 _t(f"[DESC] GTO {g['gto']}: {cnt} anexos mas SEM laudo -> fila (falta laudo)")
             g["nome_norm"] = normaliza_nome(g["nome"])
+            # EXAMES DA GUIA direto do portal (fonte autoritativa). O PDF da GTO no
+            # prontuário às vezes vem SEM a tabela de procedimentos — só os rótulos
+            # dos campos — e aí gto_exames() volta vazio e a guia caía em "GTO
+            # ilegível (sem exames de referência)". Este endpoint traz os eventos
+            # DESTA ficha. ATENÇÃO: é /eventos/ficha; o /v1/gto/eventos (sem /ficha)
+            # devolve o CATÁLOGO inteiro de procedimentos — usá-lo daria todos os
+            # exames para qualquer guia.
+            try:
+                re_ = sess.get(f"{_ODO_API}/v1/gto/eventos/ficha?numeroFicha={g['gto']}",
+                               timeout=20)
+                evs = re_.json() if re_.status_code == 200 else []
+                g["eventos_portal"] = [str(e.get("descricao") or "") for e in evs
+                                       if isinstance(e, dict)]
+            except Exception:
+                g["eventos_portal"] = []
             with _lock:
                 n_pend["n"] += 1
-            _t(f"[DESC] >>> PENDENTE {g['gto']} {g['nome']} ({cnt} anexos) -> fila")
+            _t(f"[DESC] >>> PENDENTE {g['gto']} {g['nome']} ({cnt} anexos) -> fila"
+               + (f" | eventos: {g['eventos_portal']}" if g.get("eventos_portal") else ""))
             fila_pend.put(g)
         with ThreadPoolExecutor(max_workers=8) as ex:
             list(ex.map(_um, alvos))
@@ -970,7 +1006,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 t0 = time.monotonic()
                 try:
                     dec = _decidir(gem, pg, ctx, item["_pac"], item.get("_pasta"),
-                                   review_dir=review_dir, gto=item["gto"], data_exame=data)
+                                   review_dir=review_dir, gto=item["gto"], data_exame=data,
+                                   eventos_portal=item.get("eventos_portal"))
                 except Exception as e:
                     dec = {"erro": str(e)[:100], "decisao": None, "anexos": 0,
                            "gto_exames": [], "plano_laudo_imgs": [], "plano_solicitacao": None}
