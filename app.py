@@ -2265,6 +2265,20 @@ def baixar_dia_resultado(job_id: str):
 
 @app.route("/ciclo_dia", methods=["POST"])
 def ciclo_dia_route():
+    # DESATIVADA em 25/07 pela auditoria. Esta rota ANEXAVA DE VERDADE (a chamada
+    # não passava dry_run e o padrão de ciclo_dia() é False), com um clique, para
+    # qualquer usuário logado — e SEM NENHUMA das guardas que o pipeline principal
+    # tem: não lia os exames da GTO, não filtrava exame PARTICULAR (subia a pasta
+    # inteira), não conferia o nº da guia nem o nome do paciente, não exigia
+    # solicitação/justificativa e não gravava nada no banco.
+    # ciclo_completo.py não é alterado desde 12/06 — nenhuma correção chegou nele.
+    # É redundante: /faturar (esteira) e FECHAR DIA fazem o mesmo COM as guardas.
+    return jsonify({
+        "error": "O 'Ciclo Completo' foi desativado por segurança: ele anexava sem "
+                 "as verificações de paciente, laudo e exame particular. Use "
+                 "'Faturar dia' (/faturar), que faz o mesmo com todas as guardas."
+    }), 410
+
     date_from = request.form.get("date_from", "").strip()
     selected_convenios = request.form.getlist("convenios") or CONVENIOS
     selected_segmentos = request.form.getlist("segmentos") or SEGMENTOS

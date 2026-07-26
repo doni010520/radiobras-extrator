@@ -514,10 +514,10 @@
           <span class="btn-icon">⬇</span>
           Gerar Relatório
         </button>
-        <button class="btn-gerar" id="btn-ciclo" type="button" title="Baixa do PRORADIS e envia para as GTOs 'Senha Liberada' do OdontoPrev">
-          <span class="btn-icon">🔄</span>
-          Ciclo Completo
-        </button>
+        <!-- "Ciclo Completo" REMOVIDO em 25/07 (auditoria): anexava sem nenhuma
+             das verificações de paciente/laudo/exame particular, e o texto deste
+             botão ainda dizia "Senha Liberada" enquanto o código mirava as GTOs
+             em REPASSE — o conjunto oposto. Use "Faturar dia" (/faturar). -->
       </div>
     </div>
 
@@ -634,7 +634,9 @@
   function setButtons(disabled) {
     document.getElementById('btn-gerar').disabled = disabled;
     document.getElementById('btn-arquivos').disabled = disabled;
-    document.getElementById('btn-ciclo').disabled = disabled;
+    // btn-ciclo foi removido (auditoria 25/07) — guarda p/ não quebrar a tela
+    const _bc = document.getElementById('btn-ciclo');
+    if (_bc) _bc.disabled = disabled;
   }
 
   function buildFormData(dateFrom, dateTo, selConv, selSeg) {
@@ -819,7 +821,7 @@
     card.style.display = 'block';
   }
 
-  document.getElementById('btn-ciclo').addEventListener('click', async () => {
+  document.getElementById('btn-ciclo')?.addEventListener('click', async () => {
     const { dateFrom, selConv, selSeg } = getSelections();
     if (!dateFrom) { showToast('Informe o dia.', 'error'); return; }
     if (!selConv.length) { showToast('Selecione ao menos um convênio.', 'error'); return; }
