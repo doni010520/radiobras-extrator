@@ -40,7 +40,8 @@ from extrator_odontoprev import (
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
-from gto_utils import is_gto_pdf, extrair_observacao, gto_e_desta_guia
+from gto_utils import (is_gto_pdf, extrair_observacao, gto_e_desta_guia,
+                       _BOILER_49)
 from solicitacao_utils import gto_exames, canon_exames, gto_dispensa_laudo
 import json
 import re
@@ -222,6 +223,58 @@ def _reler_exames_focado(gem, cands, leituras, nome_gto):
             a["exames_lidos"] = novos
         except Exception:
             continue
+
+
+_GTO_IMG_PROMPT = """Este anexo PODE ser uma GTO (Guia de Tratamento Odontológico do padrão
+TISS) digitalizada ou fotografada. Você é um LEITOR/transcritor: NÃO decida nada,
+apenas transcreva o que está escrito.
+
+Responda APENAS JSON (sem markdown):
+{"e_gto": true|false,
+ "numero_guia": "<o número dos campos '2 - Nº Guia no Prestador' ou '7 - Nº da Guia
+                 Atribuída pela Operadora'; use SÓ dígitos; "" se não achar>",
+ "exames": ["<cada procedimento/exame listado, como está escrito>"],
+ "campo_49": "<texto do campo '49 - Observação / Justificativa'; "" se vazio>"}
+
+Regras:
+- "e_gto" só é true se o documento for mesmo a guia do convênio (tem numeração de
+  campos tipo "2 -", "7 -", "49 -", tabela de procedimentos). Receituário, pedido
+  de exame, RG, laudo ou nota fiscal => false.
+- Transcreva LITERALMENTE. Não interprete, não complete, não deduza.
+- Se não conseguir ler um trecho, omita em vez de adivinhar."""
+
+
+def _ler_gto_por_imagem(gem, blob, mime, gto):
+    """GTO ESCANEADA/FOTOGRAFADA: sem camada de texto, is_gto_pdf() não a reconhece
+    e ela ainda virava CANDIDATA A SOLICITAÇÃO (podia ser anexada como se fosse o
+    pedido do dentista). Aqui o Gemini apenas TRANSCREVE; quem valida é o código:
+    confere o número da guia, canonicaliza os exames e aplica a MESMA regra do
+    campo 49 (>=2 palavras alfabéticas não-boilerplate).
+
+    Devolve {e_desta_guia, exames(set canônico), justificativa(bool)} ou None."""
+    from google.genai import types
+    try:
+        r = gem.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[types.Part.from_bytes(data=blob, mime_type=mime), _GTO_IMG_PROMPT])
+        txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
+        d = json.loads(txt) or {}
+    except Exception:
+        return None
+    if not isinstance(d, dict) or not d.get("e_gto"):
+        return None
+    # O CÓDIGO confere a identidade da guia — sem isso, a GTO de outra visita
+    # ditaria exames/justificativa desta.
+    num = re.sub(r"\D", "", str(d.get("numero_guia") or ""))
+    alvo = re.sub(r"\D", "", str(gto or ""))
+    if not (num and alvo and num == alvo):
+        return None
+    exames = canon_exames(" ".join(str(e) for e in (d.get("exames") or [])))
+    # mesma regra conservadora do campo 49 por texto (gto_utils._justif_por_texto)
+    obs = str(d.get("campo_49") or "")
+    palavras = [w for w in re.findall(r"[A-Za-zÀ-ú]{3,}", obs) if not _BOILER_49.search(w)]
+    justif = len(palavras) >= 2 and not _BOILER_49.search(obs[:40])
+    return {"e_desta_guia": True, "exames": exames, "justificativa": justif}
 
 
 def _exame_do_laudo(p):
@@ -474,6 +527,29 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                 "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
         if mime:
             cands_raw.append((it["filename"], mime, blob))
+    # GTO ESCANEADA/FOTOGRAFADA: sem camada de texto, is_gto_pdf() não a reconhece,
+    # a guia fica "ilegível" (vira pendência) e — pior — ela mesma entra como
+    # candidata a SOLICITAÇÃO. Aqui o Gemini apenas TRANSCREVE a guia e o código
+    # valida (nº da guia, exames canônicos, regra do campo 49). Só roda quando a
+    # GTO desta guia NÃO foi encontrada pelo caminho normal, então não custa nada
+    # no fluxo comum.
+    if gem is not None and gto is not None and _gtos_desta == 0 and cands_raw:
+        _restantes = []
+        for fn, mime, blob in cands_raw:
+            if _gtos_desta:                      # já achei a GTO desta guia
+                _restantes.append((fn, mime, blob)); continue
+            lida = _ler_gto_por_imagem(gem, blob, mime, gto)
+            if not lida:
+                _restantes.append((fn, mime, blob)); continue
+            _gtos_desta += 1
+            gto_ex |= lida["exames"]
+            gto_ex_desta |= lida["exames"]
+            if lida["justificativa"]:
+                justif_ok = True
+            # NÃO volta para cands_raw: é a GTO, não a solicitação.
+            out["gto_lida_por_imagem"] = fn
+        cands_raw = _restantes
+
     out["gto_exames"] = sorted(gto_ex)
     out["gto_exames_desta"] = sorted(gto_ex_desta)
     # Só dispensa laudo se a dispensa veio da GTO DESTA guia. Sem a GTO desta guia
