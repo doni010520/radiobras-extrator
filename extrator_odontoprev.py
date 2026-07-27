@@ -457,6 +457,15 @@ def upload_arquivos(gp, arquivos: list) -> dict:
     antes = _anexos_count(gp)
     nomes_antes = _anexos_nomes(gp)
 
+    # "Nada para enviar" NÃO é "tudo anexado". Uma lista vazia caía no mesmo
+    # `return ok=True` da idempotência, o chamador lia sucesso e registrava a guia
+    # como FATURADA sem ter subido arquivo nenhum (caso JOEL, 20/07: a filtragem
+    # de exame particular esvaziou a lista e a GTO foi dada como resolvida).
+    if not arquivos:
+        return {"anexos_antes": antes, "anexos_depois": antes, "ja_anexados": [],
+                "enviados": [], "ok": False,
+                "erro": "nenhum arquivo para anexar"}
+
     # Idempotência: só enviar os que ainda não estão anexados (por nome-base).
     por_base = {}
     for a in arquivos:

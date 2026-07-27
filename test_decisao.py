@@ -236,3 +236,47 @@ def test_senha_legado_em_texto_puro_continua_lendo(monkeypatch):
     monkeypatch.delenv("PORTAL_KEY", raising=False)
     assert db._decifrar("senha-antiga") == "senha-antiga"
     assert db._cifrar("x") == "x"          # sem chave, comportamento de hoje
+
+
+# ── Guia de documentação x laudos dos componentes (achado do DRY 20/07) ──────
+# GTO pede 'documentacao'; os laudos chegam como LAUDO_PANORAMICA e
+# LAUDO_TELERRADIOGRAFIA — que SÃO a documentação. O filtro lia 'panoramica', não
+# achava na guia e descartava como exame particular: a guia subia SEM LAUDO (casos
+# DARLAN/ROSEANGELA) ou com ZERO arquivo (JOEL), e ainda assim contava como
+# faturada. Mesmo desencontro do Bug 2, do lado do laudo.
+
+def test_guia_de_documentacao_aceita_laudo_dos_componentes(tmp_path):
+    from solicitacao_utils import componentes_da_documentacao
+    assert {"panoramica", "telerradiografia"} <= componentes_da_documentacao({"documentacao"})
+    pasta = _pasta(tmp_path, ["LAUDO_PANORAMICA_40334886_OFICIAL.pdf",
+                              "LAUDO_TELERRADIOGRAFIA_40334886_CEPH.pdf",
+                              "ENTREGA_1.jpg", "SOLICITACAO_darlan.jpg"])
+    arquivos, excluidos, _f = _filtrar_arquivos_da_gto(
+        pasta, {"gto_exames_desta": ["documentacao", "periapical"]}, extras_acc=None)
+    assert len(arquivos) == 4 and excluidos == []
+
+
+def test_documentacao_nao_abre_a_porta_pra_qualquer_exame(tmp_path):
+    """A expansão cobre os componentes, não tudo: tomografia continua de fora."""
+    pasta = _pasta(tmp_path, ["LAUDO_PANORAMICA_111_OFICIAL.pdf",
+                              "LAUDO_TOMOGRAFIA_999_OFICIAL.pdf"])
+    arquivos, excluidos, fora = _filtrar_arquivos_da_gto(
+        pasta, {"gto_exames_desta": ["documentacao"]}, extras_acc=None)
+    assert [os.path.basename(a) for a in arquivos] == ["LAUDO_PANORAMICA_111_OFICIAL.pdf"]
+    assert fora == ["tomografia"]
+
+
+def test_upload_de_lista_vazia_nao_e_sucesso():
+    """'Nada para enviar' != 'tudo anexado'. A lista vazia caía no return da
+    idempotência com ok=True e a guia era registrada como FATURADA sem ter subido
+    arquivo nenhum (caso JOEL, 20/07)."""
+    from extrator_odontoprev import upload_arquivos
+
+    class _GPFake:
+        def inner_text(self, _sel): return "total de anexos) : 0"
+        def query_selector(self, _sel): return None
+        def wait_for_timeout(self, _ms): pass
+        def query_selector_all(self, _sel): return []
+
+    r = upload_arquivos(_GPFake(), [])
+    assert r["ok"] is False and r["enviados"] == []

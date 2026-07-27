@@ -82,6 +82,19 @@ _DOC_COMPONENTES = {"panoramica", "telerradiografia", "fotografia",
                     "modelo", "periapical", "oclusal", "carpal"}
 
 
+def componentes_da_documentacao(ex: set) -> set:
+    """Direção OPOSTA da expande_documentacao(), para o lado da GUIA.
+
+    Uma guia que autoriza 'documentacao' é cumprida pelos laudos dos COMPONENTES
+    (LAUDO_PANORAMICA, LAUDO_TELERRADIOGRAFIA...). Sem isso, o filtro de exame
+    particular lia 'panoramica' no nome do arquivo, não achava 'panoramica' na
+    guia (que diz 'documentacao') e descartava o laudo como se fosse exame
+    particular — anexando a guia SEM LAUDO, ou com zero arquivo, e ainda assim
+    registrando como faturada. Casos DARLAN/JOEL/ROSEANGELA, 20/07 Centro."""
+    ex = set(ex or ())
+    return (ex | _DOC_COMPONENTES) if "documentacao" in ex else ex
+
+
 def expande_documentacao(ex: set) -> set:
     """Solicitação que pede os COMPONENTES cobre uma GTO de documentação.
 
