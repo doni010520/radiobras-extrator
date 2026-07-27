@@ -43,7 +43,7 @@ from extrair_anexos_dia import anexos_do_paciente
 from gto_utils import (is_gto_pdf, extrair_observacao, gto_e_desta_guia,
                        _BOILER_49)
 from solicitacao_utils import (gto_exames, canon_exames, gto_dispensa_laudo,
-                               expande_documentacao)
+                               expande_documentacao, componentes_da_documentacao)
 import json
 import re
 
@@ -347,6 +347,10 @@ def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None):
                 or set((dec or {}).get("gto_exames") or []))
         if not alvo:
             return cheio, [], []      # GTO ilegível -> não filtra (como antes)
+        # Guia de DOCUMENTAÇÃO é cumprida pelos laudos dos componentes: sem isto,
+        # LAUDO_PANORAMICA numa guia que diz 'documentacao' era descartado como
+        # "exame particular" e a guia subia sem laudo.
+        alvo = componentes_da_documentacao(alvo)
         for lp in laudos:
             cex = _exame_do_laudo(lp)
             # exclui SÓ se o exame foi identificado E está fora da guia
@@ -1200,6 +1204,24 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     _t(f"[ANEX{wid}] GTO {item['gto']} EXAMES MISTOS — não anexados "
                        f"(fora da guia): {exames_fora} | {excluidos}")
                 nomes = [os.path.basename(a) for a in arquivos]
+                # GUARDA FINAL — o filtro acima pode remover TODOS os laudos (exame
+                # particular, ou canon que não reconheceu o exame). Se sobrou guia sem
+                # laudo, NÃO anexa: o gate lá atrás autorizou porque havia laudo na
+                # pasta, e subir só a solicitação (ou zero arquivo) registraria como
+                # FATURADA uma guia sem o documento obrigatório. Vira pendência.
+                _dec_it = item.get("decisao") or {}
+                _laudo_no_plano = any(n.upper().startswith("LAUDO_") for n in nomes)
+                if not _laudo_no_plano and not _dec_it.get("dispensa_laudo"):
+                    item["anexado"] = "ERRO"
+                    item["anexar_erro"] = (
+                        "após excluir exames fora da guia não sobrou nenhum laudo — "
+                        "conferir se o exame é do convênio" if excluidos else
+                        "nenhum laudo disponível para anexar")
+                    _t(f"[ANEX{wid}] GTO {item['gto']} NÃO ANEXADA: sem laudo no plano "
+                       f"(excluídos: {excluidos or '—'})")
+                    with _lock:
+                        resultados.append(item)
+                    continue
                 with _lock:
                     ativos_an["n"] += 1; ativos_an["pico"] = max(ativos_an["pico"], ativos_an["n"])
                 if dry_run:
