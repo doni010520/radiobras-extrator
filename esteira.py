@@ -973,7 +973,15 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     r = {"gto": g["gto"], "nome": g["nome"], "status": "ERRO", "erro": str(e)[:120]}
                 with _lock:
                     ativos_dl["n"] -= 1
-                _t(f"[DL{wid}] {g['gto']} -> {r['status']} ({r.get('dt_dl', 0):.0f}s)")
+                # inclui o NOME e o significado do status: SEM_MATCH/SEM_ARQUIVOS
+                # sozinhos não dizem nada a quem lê o log pra decidir o que cobrar.
+                _sig = {"SEM_MATCH": "paciente não localizado no PRORADIS neste dia",
+                        "SEM_ARQUIVOS": "sem laudo/imagem para baixar (laudo não emitido?)",
+                        "AMBIGUO": "mais de um paciente com esse nome — não dá pra saber qual",
+                        "ERRO": r.get("erro", "")}.get(r["status"], "")
+                _t(f"[DL{wid}] {g['gto']} {g['nome'][:22]} -> {r['status']}"
+                   + (f" ({_sig})" if _sig else "")
+                   + f" ({r.get('dt_dl', 0):.0f}s)")
                 if gem is not None and r.get("status") == "BAIXADO" and r.get("_pac"):
                     fila_leit.put(r)         # entrega pro estágio de leitura
                 else:
@@ -1041,9 +1049,25 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     solic = f"SOLIC={dec['plano_solicitacao']}"
                 else:
                     solic = "solic->REVISÃO"
+                # MOTIVO no log: o DRY existe pra revisar decisões, e sem o motivo
+                # ele dizia "REVISÃO" sem contar POR QUE — inútil pra quem precisa
+                # agir. Inclui também o que falta pro gate (laudo/solicitação).
+                _falta = []
+                if not _laudo_ok:
+                    _falta.append("LAUDO")
+                if not _tem_solic_ou_justif:
+                    _falta.append("SOLICITAÇÃO/JUSTIFICATIVA")
+                _mot = d.get("motivo") or dec.get("erro") or ""
+                _extra = ""
+                if _falta:
+                    _extra += f" | FALTA: {'+'.join(_falta)}"
+                if _mot:
+                    _extra += f" | MOTIVO: {str(_mot)[:110]}"
+                if dec.get("gto_exames_desta") or dec.get("gto_exames"):
+                    _extra += f" | GTO pede: {dec.get('gto_exames_desta') or dec.get('gto_exames')}"
                 _t(f"[DEC{wid}] {item['gto']} {item['nome'][:22]} | laudo+img={len(dec.get('plano_laudo_imgs', []))} "
-                   f"| {solic} | conf={d.get('confianca')} batem={d.get('exames_batem')} "
-                   f"({item['dt_decisao']:.0f}s, mem={em:.0f}MB)")
+                   f"| {solic} | conf={d.get('confianca')} batem={d.get('exames_batem')}"
+                   f"{_extra} ({item['dt_decisao']:.0f}s, mem={em:.0f}MB)")
             try:
                 br.close()
             except Exception:
