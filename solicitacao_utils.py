@@ -61,6 +61,41 @@ def canon_exames(texto: str) -> set:
     return out
 
 
+# ── Documentação x seus componentes ───────────────────────────────────────────
+# A GTO pede o procedimento fechado ("Doc Orto Compl" -> 'documentacao'). A
+# solicitação do dentista costuma escrever os COMPONENTES ("panorâmica, telerra-
+# diografia, fotografias, modelos, periapicais"). O issubset falhava — {documentacao}
+# não está contido em {panoramica, telerradiografia, ...} — e uma solicitação
+# CORRETA, e mais detalhada que a exigência, virava pendência.
+#
+# Âncoras, não só contagem: uma documentação ortodôntica sempre tem panorâmica E
+# telerradiografia. Só contar componentes aceitaria {periapical, oclusal,
+# fotografia}, que não é documentação.
+#
+# LIMITAÇÃO CONHECIDA: o _CANON colapsa "Doc Orto", "Doc Periodontal" e "Doc Diag
+# Imp" no mesmo token 'documentacao', e a periodontal é de periapicais completos —
+# não tem telerradiografia, então NÃO passa por aqui e continua virando pendência
+# (comportamento de hoje, não regride). A correção estrutural é canonizar o
+# subtipo; esta função é o passo conservador.
+_DOC_ANCORAS = {"panoramica", "telerradiografia"}
+_DOC_COMPONENTES = {"panoramica", "telerradiografia", "fotografia",
+                    "modelo", "periapical", "oclusal", "carpal"}
+
+
+def expande_documentacao(ex: set) -> set:
+    """Solicitação que pede os COMPONENTES cobre uma GTO de documentação.
+
+    Aplicar SÓ ao conjunto LIDO DA SOLICITAÇÃO — a direção importa. Pedir os
+    componentes satisfaz uma guia de documentação; pedir 'documentação' NÃO
+    satisfaz uma guia que exige panorâmica avulsa."""
+    ex = set(ex or ())
+    if "documentacao" in ex:
+        return ex
+    if _DOC_ANCORAS <= ex and len(ex & _DOC_COMPONENTES) >= 3:
+        return ex | {"documentacao"}
+    return ex
+
+
 def _tem(texto: str, marks: list) -> bool:
     n = _strip(texto)
     return any(m in n for m in marks)

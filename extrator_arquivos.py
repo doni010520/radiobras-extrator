@@ -827,6 +827,14 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
         "cod_pac": cod,
         "convenio": pac.get("convenio", ""),
         "accessions": accessions,
+        # PROCEDENCIA (nao descartar): o analitico ja vem filtrado pelos convenios
+        # do plano, entao accession que veio DELE e, por construcao, do convenio.
+        # Os 'extras' foram acrescentados por _expandir_accessions_por_nome e podem
+        # ser exame PARTICULAR do mesmo paciente no mesmo dia. Quem decide o que
+        # sobe pra GTO precisa saber a diferenca — antes isso virava so uma nota de
+        # texto e o filtro final tinha que ADIVINHAR pelo nome do arquivo.
+        "accessions_convenio": list(pac["accessions"]),
+        "accessions_extras": list(_extras),
         "pasta": pasta_nome,
         "status": "PENDENTE",
         "imagens": {"qtd": 0, "arquivos": []},
