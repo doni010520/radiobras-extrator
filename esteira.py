@@ -57,7 +57,9 @@ except Exception:
 _GEM_PROMPT = ("É uma solicitação/requisição de exames odontológicos? Se sim, responda em "
                "JSON {solicitacao:true, tipo:'digitada'|'manuscrita', legivel:bool, exames:[...]}. "
                "Se não, {solicitacao:false}. Responda só o JSON.")
-_MAX_LEITURAS = 5  # teto de anexos lidos por paciente (mesmo no tier pago)
+# Modelo do Gemini. Estava hardcoded em 3 chamadas — trocar de modelo exigia
+# editar codigo e arriscar deixar uma para tras.
+_GEM_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def _mem_mb():
@@ -231,7 +233,7 @@ def _reler_exames_focado(gem, cands, leituras, nome_gto):
         try:
             fn2, mime2, blob2, _sv = cands[ai]
             r2 = gem.models.generate_content(
-                model="gemini-2.5-flash",
+                model=_GEM_MODEL,
                 contents=[types.Part.from_bytes(data=blob2, mime_type=mime2),
                           _RELEITURA_PROMPT])
             t2 = re.sub(r"^```json|^```|```$", "", (r2.text or "").strip(), flags=re.M).strip()
@@ -275,7 +277,7 @@ def _ler_gto_por_imagem(gem, blob, mime, gto):
     from google.genai import types
     try:
         r = gem.models.generate_content(
-            model="gemini-2.5-flash",
+            model=_GEM_MODEL,
             contents=[types.Part.from_bytes(data=blob, mime_type=mime), _GTO_IMG_PROMPT])
         txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
         d = json.loads(txt) or {}
@@ -509,7 +511,7 @@ def _date_from_name(s):
         return None
 
 
-def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=None,
+def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
              eventos_portal=None):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
     manda TUDO pro Gemini escolher a solicitação certa + decidir. NÃO anexa.
@@ -668,7 +670,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
     contents.append(_DECISAO_PROMPT)
     for tent in range(3):
         try:
-            r = gem.models.generate_content(model="gemini-2.5-flash", contents=contents)
+            r = gem.models.generate_content(model=_GEM_MODEL, contents=contents)
             txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
             data = json.loads(txt)
             leituras = (data.get("anexos") if isinstance(data, dict) else data) or []
@@ -1084,7 +1086,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 t0 = time.monotonic()
                 try:
                     dec = _decidir(gem, pg, ctx, item["_pac"], item.get("_pasta"),
-                                   review_dir=review_dir, gto=item["gto"], data_exame=data,
+                                   review_dir=review_dir, gto=item["gto"],
                                    eventos_portal=item.get("eventos_portal"))
                 except Exception as e:
                     dec = {"erro": str(e)[:100], "decisao": None, "anexos": 0,

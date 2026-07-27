@@ -215,8 +215,37 @@ except Exception as _e:
     app.logger.error("Falha ao inicializar banco: %s", _e)
 
 # ── Job store (em memória) ────────────────────────────────────────────────────
+# Cresciam para sempre: nada nunca era removido daqui nem de _esteira_jobs, e o
+# processo roda com --workers 1 --timeout 0 (não recicla). Cada job guarda o log
+# completo e, no caso do /baixar_dia, o ZIP do dia INTEIRO em bytes. Com o tempo
+# isso é OOM garantido — e o container reiniciando no meio de um faturamento.
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
+_JOB_TTL_S = 6 * 3600
+
+
+def _purgar_jobs(store, lock=None, ttl=_JOB_TTL_S):
+    """Remove jobs terminados há mais de `ttl`. Chamado ao criar um job novo —
+    sem thread extra, sem custo quando o sistema está parado."""
+    agora = time.monotonic()
+
+    def _varre():
+        for k, j in list(store.items()):
+            if not (j.get("done") or j.get("status") in ("done", "error")):
+                continue
+            t_fim = j.get("t_fim")
+            if t_fim is None:            # terminou sem carimbo: marca e deixa envelhecer
+                j["t_fim"] = agora
+                continue
+            if (agora - t_fim) > ttl:
+                store.pop(k, None)
+    if lock:
+        with lock:
+            _varre()
+    else:
+        _varre()
+
+
 
 
 def _run_job(job_id: str, data: str, convenios: list, segmentos: list) -> None:
@@ -229,9 +258,16 @@ def _run_job(job_id: str, data: str, convenios: list, segmentos: list) -> None:
 
     try:
         zip_bytes, relatorio = processar_dia(data, convenios, segmentos, progress_cb=progress)
+        # O ZIP do dia INTEIRO ficava na RAM até o restart do processo (o job store
+        # nunca era limpo). Vai pro disco; o job guarda só o caminho.
+        import tempfile
+        fd, zpath = tempfile.mkstemp(prefix="_zipdia_", suffix=".zip")
+        with os.fdopen(fd, "wb") as f:
+            f.write(zip_bytes)
+        del zip_bytes
         with _jobs_lock:
             _jobs[job_id].update(
-                {"status": "done", "zip_bytes": zip_bytes, "relatorio": relatorio}
+                {"status": "done", "zip_path": zpath, "relatorio": relatorio}
             )
     except Exception as exc:
         tb = traceback.format_exc()
@@ -468,6 +504,7 @@ def _glosa_scheduler():
                 _glosa_ultima_tentativa = agora.date()  # marca a tentativa do dia (mesmo se falhar)
                 dia = agora.strftime("%d/%m/%Y")
                 jid = "auto" + uuid.uuid4().hex[:8]
+                _purgar_jobs(_jobs, _jobs_lock)
                 with _jobs_lock:
                     _jobs[jid] = {"status": "queued", "log": [], "kind": "glosa"}
                 app.logger.info("Glosa auto-update iniciando (%s)…", dia)
@@ -524,6 +561,7 @@ def _anexacao_scheduler():
                 hoje = agora.strftime("%d/%m/%Y")
                 de = "01/" + hoje[3:]
                 jid = "anxauto" + uuid.uuid4().hex[:8]
+                _purgar_jobs(_jobs, _jobs_lock)
                 with _jobs_lock:
                     _jobs[jid] = {"status": "queued", "log": [], "kind": "anexacao"}
                 app.logger.info("Anexação auto-update iniciando (%s a %s)…", de, hoje)
@@ -1506,6 +1544,7 @@ def faturar_run():
     job = {"log": [], "done": False, "resumo": None, "error": None,
            "review_dir": review_dir, "execucao_id": None, "t0": _time.monotonic(),
            "dia": data}
+    _purgar_jobs(_esteira_jobs)
     _esteira_jobs[jid] = job
     gkey = os.environ.get("GEMINI_API_KEY")
 
@@ -1523,6 +1562,12 @@ def faturar_run():
                     job["execucao_id"] = db.salvar_execucao(job["resumo"])
                 except Exception as e:
                     job["log"].append(f"(falha ao salvar: {str(e)[:80]})")
+            # 'resultados' carrega o objeto inteiro de cada GTO (inclusive as
+            # leituras cruas do Gemini) e ninguém lê depois daqui — o que a tela usa
+            # é 'decisoes', e o durável já foi pro banco. Segurava dezenas de MB por
+            # execução, para sempre.
+            if job["resumo"]:
+                job["resumo"].pop("resultados", None)
         except Exception as e:
             job["error"] = str(e)
             job["log"].append(f"ERRO: {str(e)[:140]}")
@@ -1845,6 +1890,7 @@ def glosas_atualizar():
     checar_demo = bool(body.get("checar_demonstrativo", True))
     contas = body.get("contas") or []
     job_id = uuid.uuid4().hex[:12]
+    _purgar_jobs(_jobs, _jobs_lock)
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": [], "kind": "glosa"}
     threading.Thread(target=_run_glosa_job, args=(job_id, dia, contas, checar, checar_demo),
@@ -2094,6 +2140,7 @@ def anexacao_atualizar():
     contas = body.get("contas") or []
     limite = int(body.get("limite") or 0)
     job_id = uuid.uuid4().hex[:12]
+    _purgar_jobs(_jobs, _jobs_lock)
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": [], "kind": "anexacao"}
     threading.Thread(target=_run_anexacao_job, args=(job_id, de, ate, contas, limite),
@@ -2184,6 +2231,7 @@ def fechar_route():
                                  "está configurado para automação."}), 400
 
     job_id = str(uuid.uuid4())[:8]
+    _purgar_jobs(_jobs, _jobs_lock)
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": [], "plano": plano}
     threading.Thread(
@@ -2273,6 +2321,7 @@ def baixar_dia():
 
     # Usar date_from como data do dia (dia único)
     job_id = str(uuid.uuid4())[:8]
+    _purgar_jobs(_jobs, _jobs_lock)
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": []}
 
@@ -2309,14 +2358,15 @@ def baixar_dia_resultado(job_id: str):
     if job["status"] != "done":
         return jsonify({"error": "Job ainda não concluído."}), 400
 
-    zip_bytes = job["zip_bytes"]
+    zpath = job.get("zip_path")
+    if not zpath or not os.path.exists(zpath):
+        return jsonify({"error": "Arquivo expirado — rode a extração de novo."}), 410
     data_tag = (
         job.get("relatorio", {}).get("periodo", {}).get("de", "").replace("/", "")
     )
     filename = f"arquivos_REDEUNNA_{data_tag}.zip"
-    buf = io.BytesIO(zip_bytes)
-    buf.seek(0)
-    return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/zip")
+    return send_file(zpath, as_attachment=True, download_name=filename,
+                     mimetype="application/zip")
 
 
 @app.route("/ciclo_dia", methods=["POST"])
@@ -2343,6 +2393,7 @@ def ciclo_dia_route():
         return jsonify({"error": "Informe o dia."}), 400
 
     job_id = str(uuid.uuid4())[:8]
+    _purgar_jobs(_jobs, _jobs_lock)
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": []}
 
