@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import threading
+import time
 import traceback
 import uuid
 from datetime import datetime, timedelta
@@ -51,11 +52,42 @@ if not _sk:
     logging.warning("SECRET_KEY ausente: usando chave aleatória (sessões caem no restart).")
 app.secret_key = _sk
 app.permanent_session_lifetime = timedelta(days=14)
+# Explícito, não na sorte do default do navegador. Secure só fora de dev (em
+# http://localhost o cookie com Secure é descartado e ninguém consegue logar).
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=(os.environ.get("RB_PRODUCAO") == "1"
+                           or os.environ.get("FLASK_ENV") == "production"),
+)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # ── Autenticação (usuário + senha, sessão) ────────────────────────────────────
 # Rotas liberadas sem login (prefixos). Todo o resto exige sessão.
 _PUBLICO = ("/login", "/logout", "/static", "/healthz", "/favicon")
+
+
+# Cache curto da validação do usuário: {uid: (expira_em, dict_ou_None)}. Sem ele,
+# revalidar a cada request bateria no banco em toda navegação.
+_USER_CACHE: dict = {}
+_USER_CACHE_S = 60
+_user_cache_lock = threading.Lock()
+
+
+def _usuario_valido(uid):
+    """Usuário ainda existe e está ativo? (cache de 60s)"""
+    agora = time.monotonic()
+    with _user_cache_lock:
+        hit = _USER_CACHE.get(uid)
+        if hit and hit[0] > agora:
+            return hit[1]
+    try:
+        u = db.get_usuario(uid)          # devolve None se inativo/inexistente
+    except Exception:
+        return {"id": uid}               # banco fora: não derruba quem já está logado
+    with _user_cache_lock:
+        _USER_CACHE[uid] = (agora + _USER_CACHE_S, u)
+    return u
 
 
 @app.before_request
@@ -64,6 +96,16 @@ def _exigir_login():
     if any(p == x or p.startswith(x + "/") or p.startswith(x) for x in _PUBLICO):
         return None
     if session.get("uid"):
+        # A sessão dura 14 dias e só era conferida no login: desativar um usuário
+        # NÃO o desconectava, e uma mudança de papel só valia no próximo login.
+        u = _usuario_valido(session["uid"])
+        if u is None:
+            session.clear()
+            if p.startswith("/api/") or request.headers.get("Accept", "").startswith("application/json"):
+                return jsonify({"error": "sessão encerrada"}), 401
+            return redirect(url_for("login", next=p))
+        if u.get("role"):
+            session["role"] = u["role"]
         return None
     # API/JSON -> 401; navegador -> redireciona pro login
     if p.startswith("/api/") or request.headers.get("Accept", "").startswith("application/json"):
@@ -151,6 +193,8 @@ def usuarios_ativo(uid: int):
     if uid == session.get("uid"):
         return jsonify({"error": "não pode desativar a si mesmo"}), 400
     db.set_usuario_ativo(uid, request.form.get("ativo") == "1")
+    with _user_cache_lock:                 # efeito imediato, sem esperar o cache
+        _USER_CACHE.pop(uid, None)
     return jsonify({"ok": True})
 
 # Escopo REDE UNNA — definido em config.py (evita import circular).
@@ -171,8 +215,37 @@ except Exception as _e:
     app.logger.error("Falha ao inicializar banco: %s", _e)
 
 # ── Job store (em memória) ────────────────────────────────────────────────────
+# Cresciam para sempre: nada nunca era removido daqui nem de _esteira_jobs, e o
+# processo roda com --workers 1 --timeout 0 (não recicla). Cada job guarda o log
+# completo e, no caso do /baixar_dia, o ZIP do dia INTEIRO em bytes. Com o tempo
+# isso é OOM garantido — e o container reiniciando no meio de um faturamento.
 _jobs: dict = {}
 _jobs_lock = threading.Lock()
+_JOB_TTL_S = 6 * 3600
+
+
+def _purgar_jobs(store, lock=None, ttl=_JOB_TTL_S):
+    """Remove jobs terminados há mais de `ttl`. Chamado ao criar um job novo —
+    sem thread extra, sem custo quando o sistema está parado."""
+    agora = time.monotonic()
+
+    def _varre():
+        for k, j in list(store.items()):
+            if not (j.get("done") or j.get("status") in ("done", "error")):
+                continue
+            t_fim = j.get("t_fim")
+            if t_fim is None:            # terminou sem carimbo: marca e deixa envelhecer
+                j["t_fim"] = agora
+                continue
+            if (agora - t_fim) > ttl:
+                store.pop(k, None)
+    if lock:
+        with lock:
+            _varre()
+    else:
+        _varre()
+
+
 
 
 def _run_job(job_id: str, data: str, convenios: list, segmentos: list) -> None:
@@ -185,9 +258,16 @@ def _run_job(job_id: str, data: str, convenios: list, segmentos: list) -> None:
 
     try:
         zip_bytes, relatorio = processar_dia(data, convenios, segmentos, progress_cb=progress)
+        # O ZIP do dia INTEIRO ficava na RAM até o restart do processo (o job store
+        # nunca era limpo). Vai pro disco; o job guarda só o caminho.
+        import tempfile
+        fd, zpath = tempfile.mkstemp(prefix="_zipdia_", suffix=".zip")
+        with os.fdopen(fd, "wb") as f:
+            f.write(zip_bytes)
+        del zip_bytes
         with _jobs_lock:
             _jobs[job_id].update(
-                {"status": "done", "zip_bytes": zip_bytes, "relatorio": relatorio}
+                {"status": "done", "zip_path": zpath, "relatorio": relatorio}
             )
     except Exception as exc:
         tb = traceback.format_exc()
@@ -424,6 +504,7 @@ def _glosa_scheduler():
                 _glosa_ultima_tentativa = agora.date()  # marca a tentativa do dia (mesmo se falhar)
                 dia = agora.strftime("%d/%m/%Y")
                 jid = "auto" + uuid.uuid4().hex[:8]
+                _purgar_jobs(_jobs, _jobs_lock)
                 with _jobs_lock:
                     _jobs[jid] = {"status": "queued", "log": [], "kind": "glosa"}
                 app.logger.info("Glosa auto-update iniciando (%s)…", dia)
@@ -480,6 +561,7 @@ def _anexacao_scheduler():
                 hoje = agora.strftime("%d/%m/%Y")
                 de = "01/" + hoje[3:]
                 jid = "anxauto" + uuid.uuid4().hex[:8]
+                _purgar_jobs(_jobs, _jobs_lock)
                 with _jobs_lock:
                     _jobs[jid] = {"status": "queued", "log": [], "kind": "anexacao"}
                 app.logger.info("Anexação auto-update iniciando (%s a %s)…", de, hoje)
@@ -656,27 +738,39 @@ def _faturar_cron_rodar():
         _faturar_cron_running.clear()
 
 
-def _esteira_reservar(dia, conta, tag):
+# Tempo máximo que uma reserva vale sem ser liberada. É rede de segurança para o
+# caso do `finally` não rodar (container morto no meio da execução) — uma esteira
+# real leva minutos, não horas.
+_ESTEIRA_TTL_S = 2 * 3600
+
+
+def _esteira_reservar(dia, conta, tag, ttl=_ESTEIRA_TTL_S):
     """Reserva (dia, conta) para UMA esteira. Devolve a tag se conseguiu, None se
-    já há outra rodando. Duas esteiras no mesmo dia/unidade sobem 2x14 Chromium —
-    foi o que causou o crash-loop do container. Vale para TODOS os caminhos:
-    /faturar/run, o cron diário e /admin/esteira/run."""
+    já há outra rodando. Duas esteiras no mesmo dia/unidade sobem 2x15 Chromium
+    (crash-loop do container), podem anexar em DUPLICIDADE — a idempotência do
+    upload lê os anexos ANTES de enviar, então duas leituras simultâneas concluem
+    as duas que "falta anexar" — e disputam o mesmo login no portal.
+
+    A reserva é AUTOCONTIDA: guarda o próprio instante. A versão anterior perguntava
+    a `_esteira_jobs` se o dono ainda estava vivo, mas só o /faturar/run registra a
+    tag lá — o cron usa 'cron-<conta>-<dia>' e o /fechar usa um job_id que vive em
+    `_jobs`. Para esses dois, `job` era None, o `if` não barrava e a reserva alheia
+    era SOBRESCRITA: o cenário real (cron às 5h + alguém clicando em Faturar) passava
+    direto, que era exatamente o que a trava deveria impedir."""
     chave = (dia, conta or "_")
+    agora = time.monotonic()
     with _esteira_ativas_lock:
         atual = _esteira_ativas.get(chave)
-        if atual:
-            job = _esteira_jobs.get(atual)
-            # entrada órfã (job sumiu num restart) não pode travar o dia pra sempre
-            if job is not None and not job.get("done", False):
-                return None
-        _esteira_ativas[chave] = tag
+        if atual and (agora - atual["t"]) < ttl:
+            return None
+        _esteira_ativas[chave] = {"tag": tag, "t": agora}
         return tag
 
 
 def _esteira_liberar(dia, conta, tag):
     chave = (dia, conta or "_")
     with _esteira_ativas_lock:
-        if _esteira_ativas.get(chave) == tag:
+        if (_esteira_ativas.get(chave) or {}).get("tag") == tag:
             _esteira_ativas.pop(chave, None)
 
 
@@ -1450,6 +1544,7 @@ def faturar_run():
     job = {"log": [], "done": False, "resumo": None, "error": None,
            "review_dir": review_dir, "execucao_id": None, "t0": _time.monotonic(),
            "dia": data}
+    _purgar_jobs(_esteira_jobs)
     _esteira_jobs[jid] = job
     gkey = os.environ.get("GEMINI_API_KEY")
 
@@ -1467,6 +1562,12 @@ def faturar_run():
                     job["execucao_id"] = db.salvar_execucao(job["resumo"])
                 except Exception as e:
                     job["log"].append(f"(falha ao salvar: {str(e)[:80]})")
+            # 'resultados' carrega o objeto inteiro de cada GTO (inclusive as
+            # leituras cruas do Gemini) e ninguém lê depois daqui — o que a tela usa
+            # é 'decisoes', e o durável já foi pro banco. Segurava dezenas de MB por
+            # execução, para sempre.
+            if job["resumo"]:
+                job["resumo"].pop("resultados", None)
         except Exception as e:
             job["error"] = str(e)
             job["log"].append(f"ERRO: {str(e)[:140]}")
@@ -1789,6 +1890,7 @@ def glosas_atualizar():
     checar_demo = bool(body.get("checar_demonstrativo", True))
     contas = body.get("contas") or []
     job_id = uuid.uuid4().hex[:12]
+    _purgar_jobs(_jobs, _jobs_lock)
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": [], "kind": "glosa"}
     threading.Thread(target=_run_glosa_job, args=(job_id, dia, contas, checar, checar_demo),
@@ -2038,6 +2140,7 @@ def anexacao_atualizar():
     contas = body.get("contas") or []
     limite = int(body.get("limite") or 0)
     job_id = uuid.uuid4().hex[:12]
+    _purgar_jobs(_jobs, _jobs_lock)
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": [], "kind": "anexacao"}
     threading.Thread(target=_run_anexacao_job, args=(job_id, de, ate, contas, limite),
@@ -2128,6 +2231,7 @@ def fechar_route():
                                  "está configurado para automação."}), 400
 
     job_id = str(uuid.uuid4())[:8]
+    _purgar_jobs(_jobs, _jobs_lock)
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": [], "plano": plano}
     threading.Thread(
@@ -2217,6 +2321,7 @@ def baixar_dia():
 
     # Usar date_from como data do dia (dia único)
     job_id = str(uuid.uuid4())[:8]
+    _purgar_jobs(_jobs, _jobs_lock)
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": []}
 
@@ -2253,14 +2358,15 @@ def baixar_dia_resultado(job_id: str):
     if job["status"] != "done":
         return jsonify({"error": "Job ainda não concluído."}), 400
 
-    zip_bytes = job["zip_bytes"]
+    zpath = job.get("zip_path")
+    if not zpath or not os.path.exists(zpath):
+        return jsonify({"error": "Arquivo expirado — rode a extração de novo."}), 410
     data_tag = (
         job.get("relatorio", {}).get("periodo", {}).get("de", "").replace("/", "")
     )
     filename = f"arquivos_REDEUNNA_{data_tag}.zip"
-    buf = io.BytesIO(zip_bytes)
-    buf.seek(0)
-    return send_file(buf, as_attachment=True, download_name=filename, mimetype="application/zip")
+    return send_file(zpath, as_attachment=True, download_name=filename,
+                     mimetype="application/zip")
 
 
 @app.route("/ciclo_dia", methods=["POST"])
@@ -2287,6 +2393,7 @@ def ciclo_dia_route():
         return jsonify({"error": "Informe o dia."}), 400
 
     job_id = str(uuid.uuid4())[:8]
+    _purgar_jobs(_jobs, _jobs_lock)
     with _jobs_lock:
         _jobs[job_id] = {"status": "queued", "log": []}
 
@@ -2312,184 +2419,18 @@ def ciclo_dia_status(job_id: str):
     return jsonify(resp)
 
 
-# ── TESTE DE ESTEIRA (temporário) — medir descoberta+download paralelos ───────
-# Disparo:    /admin/esteira/run?key=...&data=DD/MM/AAAA&m=4&n=2
-# Acompanhar: /admin/esteira/log/<job_id>?key=...
+# ── Job store da esteira (/faturar) ───────────────────────────────────────────
+# As rotas /admin/esteira/* foram REMOVIDAS em 27/07 (auditoria). Eram a mesma
+# porta dos fundos fechada no /ciclo_dia: GET (acionável por link/prefetch), chave
+# com default `rb-esteira-2026` COMMITADO em repositório público, sem checagem de
+# admin, aceitando dry=0 (anexação REAL) e sem receber `conta` — caía no
+# ODONTOPREV_USER padrão, ou seja, faturava na UNIDADE ERRADA, justamente o que o
+# rodar_esteira passou a rejeitar com ValueError.
+# A tela de revisão que vivia ali servia documento de paciente autenticado por
+# chave na URL (vaza em log de proxy, histórico e print). Tudo que faziam tem
+# substituto: /faturar dispara, /revisao mostra o backlog, /faturar/log/<jid> traz
+# o log técnico.
 _esteira_jobs: dict = {}
-_ESTEIRA_KEY = os.environ.get("ESTEIRA_KEY", "rb-esteira-2026")
-
-
-@app.route("/admin/esteira/run")
-def _esteira_run():
-    if request.args.get("key") != _ESTEIRA_KEY:
-        return jsonify({"error": "forbidden"}), 403
-    data = request.args.get("data")
-    if not data:
-        return jsonify({"error": "faltou ?data=DD/MM/AAAA"}), 400
-    m = int(request.args.get("m", 6))
-    n = int(request.args.get("n", 3))
-    k = int(request.args.get("k", 5))
-    k2 = int(request.args.get("k2", 0))           # pool de anexação (0 = sem anexar)
-    dry = request.args.get("dry", "1") != "0"     # dry=0 => anexação REAL
-    gkey = request.args.get("gkey") or os.environ.get("GEMINI_API_KEY")
-    jid = uuid.uuid4().hex[:8]
-    # mesma trava do /faturar/run e do cron: nunca 2 esteiras no mesmo dia/unidade
-    if not dry and not _esteira_reservar(data, "", jid):
-        return jsonify({"error": "já há execução em andamento para esse dia"}), 409
-    review_dir = f"/tmp/esteira_rev/{jid}"
-    job = {"log": [], "done": False, "resumo": None, "error": None, "review_dir": review_dir}
-    _esteira_jobs[jid] = job
-
-    def _go():
-        try:
-            from esteira import rodar_esteira
-            job["resumo"] = rodar_esteira(data, m, n, k, lambda msg: job["log"].append(msg),
-                                          gemini_key=gkey, review_dir=review_dir,
-                                          k_attach=k2, dry_run=dry)
-            if not dry and k2 > 0 and job["resumo"]:   # só persiste execução REAL
-                try:
-                    job["execucao_id"] = db.salvar_execucao(job["resumo"])
-                    job["log"].append(f"(execução salva: #{job['execucao_id']})")
-                except Exception as e:
-                    job["log"].append(f"(falha ao salvar execução: {str(e)[:100]})")
-        except Exception as e:
-            job["error"] = str(e)
-            job["log"].append(f"ERRO: {e}")
-        finally:
-            job["done"] = True
-            if not dry:
-                _esteira_liberar(data, "", jid)
-
-    threading.Thread(target=_go, daemon=True).start()
-    return jsonify({"job": jid, "acompanhar": f"/admin/esteira/log/{jid}?key={_ESTEIRA_KEY}"})
-
-
-@app.route("/admin/esteira/log/<jid>")
-def _esteira_log(jid: str):
-    if request.args.get("key") != _ESTEIRA_KEY:
-        return jsonify({"error": "forbidden"}), 403
-    job = _esteira_jobs.get(jid)
-    if not job:
-        return jsonify({"error": "job não encontrado"}), 404
-    return jsonify({"done": job["done"], "error": job["error"],
-                    "resumo": job["resumo"], "log": job["log"][-300:]})
-
-
-@app.route("/admin/esteira/revisao/<jid>")
-def _esteira_revisao(jid: str):
-    if request.args.get("key") != _ESTEIRA_KEY:
-        return "forbidden", 403
-    job = _esteira_jobs.get(jid)
-    if not job or not job.get("resumo"):
-        return "job não encontrado ou ainda rodando", 404
-    r = job["resumo"]
-    _ord = {"auto": 0, "justificativa": 1, "revisao": 2}
-    decs = sorted(r.get("decisoes", []), key=lambda x: (_ord.get(x.get("categoria"), 3), x.get("gto")))
-    h = ["<html><head><meta charset=utf-8><title>Revisão</title><style>",
-         "body{font-family:sans-serif;background:#111;color:#eee;margin:18px}",
-         ".card{border:1px solid #333;border-radius:8px;padding:12px;margin:12px 0;background:#1a1a1a}",
-         ".auto{border-left:6px solid #2ecc71}.justificativa{border-left:6px solid #3498db}.revisao{border-left:6px solid #e67e22}",
-         "img,embed{max-height:360px;max-width:47%;border:2px solid #333;margin:4px;background:#fff;vertical-align:top;cursor:zoom-in}",
-         ".chosen{border:4px solid #2ecc71}.h{color:#999;font-size:13px;margin:4px 0}b{color:#fff}",
-         ".aviso{background:#222;border:1px solid #444;padding:10px;border-radius:6px;color:#ddd}",
-         "#lb{display:none;position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:99;text-align:center;cursor:zoom-out}",
-         "#lb img{max-height:96vh;max-width:96vw;margin-top:2vh;border:0}",
-         ".btn{display:inline-block;background:#c0392b;color:#fff;padding:8px 14px;border-radius:6px;text-decoration:none;margin:6px 0}"
-         "</style></head><body>",
-         f"<h2>Revisão — {r.get('data')} | {r.get('solic_auto')} solic-auto / "
-         f"{r.get('justificativa')} c/ justificativa / {r.get('revisao')} revisão</h2>",
-         f"<a class='btn' href='/admin/esteira/descartar/{jid}?key={_ESTEIRA_KEY}' "
-         "onclick=\"return confirm('Apagar os arquivos desta revisão?')\">🗑️ Descartar arquivos</a>",
-         "<div class='aviso'>⚠️ O que é anexado no RedeUna: <b>laudo + imagens</b> (sempre) e, "
-         "<b>só quando a GTO não tem justificativa</b>, a <b>solicitação destacada em verde</b>. "
-         "Os outros anexos abaixo são apenas o que o Gemini analisou pra escolher — <b>NENHUM deles é "
-         "anexado</b>. (Clique numa imagem pra ampliar; PDF use o '🔍 abrir'.)</div>"]
-    import re as _re
-    from datetime import date as _date
-
-    def _fdate(s):
-        m = _re.search(r"(20\d{2})[-_]?(\d{2})[-_]?(\d{2})", str(s))
-        try:
-            return _date(int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
-        except Exception:
-            return None
-    _dm = _re.findall(r"\d+", r.get("data") or "")
-    dexm = None
-    if len(_dm) >= 3:
-        try:
-            dexm = _date(int(_dm[2]), int(_dm[1]), int(_dm[0]))
-        except Exception:
-            dexm = None
-    for x in decs:
-        g = x.get("gemini") or {}
-        cat = x.get("categoria", "revisao")
-        if cat == "auto":
-            tag_dec = f"→ <span style='color:#2ecc71'>ANEXA solicitação: {x.get('solicitacao')}</span>"
-        elif cat == "justificativa":
-            tag_dec = "→ <span style='color:#3498db'>GTO TEM JUSTIFICATIVA — só laudo+imgs (solicitação dispensada)</span>"
-        else:
-            tag_dec = "→ <span style='color:#e67e22'>REVISÃO humana</span>"
-        h.append(f"<div class='card {cat}'><b>GTO {x['gto']} — {x['paciente']}</b> {tag_dec}")
-        h.append(f"<div class='h'>exames GTO: {x.get('gto_exames')} &nbsp;|&nbsp; Gemini: "
-                 f"tipo={g.get('tipo')} legível={g.get('legivel')} batem={g.get('exames_batem')} "
-                 f"conf={g.get('confianca')}<br>lidos: {g.get('exames_lidos')}<br>"
-                 f"motivo: {g.get('motivo') or x.get('erro') or ''}</div>")
-        ocultos = 0
-        for c in x.get("candidatos", []):
-            if not c.get("arquivo"):
-                continue
-            is_chosen = c.get("idx") == x.get("solic_idx")
-            cdate = _fdate(c["nome"])
-            # esconde candidatos antigos (>90 dias da data do exame), exceto o escolhido
-            if (not is_chosen) and dexm and cdate and abs((dexm - cdate).days) > 90:
-                ocultos += 1
-                continue
-            chosen = "chosen" if is_chosen else ""
-            src = f"/admin/esteira/arquivo/{jid}/{x['gto']}/{c['arquivo']}?key={_ESTEIRA_KEY}"
-            tg = "embed" if str(c["arquivo"]).lower().endswith(".pdf") else "img"
-            dtxt = f" · {cdate.strftime('%d/%m/%Y')}" if cdate else ""
-            h.append(f"<span style='display:inline-block;width:47%;text-align:center'>"
-                     f"<{tg} class='{chosen}' src='{src}'>"
-                     f"<div class='h'>[{c['idx']}] {c['nome']}{dtxt} · "
-                     f"<a href='{src}' target='_blank' style='color:#3498db'>🔍 abrir</a></div></span>")
-        if ocultos:
-            h.append(f"<div class='h'>🕓 {ocultos} solicitação(ões) antiga(s) ocultada(s) "
-                     f"(fora da data do exame — quero só as atuais)</div>")
-        h.append("</div>")
-    h.append("<div id=lb onclick=\"this.style.display='none'\"><img id=lbi></div>")
-    h.append("<script>document.addEventListener('click',function(e){"
-             "if(e.target.tagName=='IMG'&&e.target.id!='lbi'){"
-             "document.getElementById('lbi').src=e.target.src;"
-             "document.getElementById('lb').style.display='block';}});</script>")
-    h.append("</body></html>")
-    return "".join(h)
-
-
-@app.route("/admin/esteira/descartar/<jid>")
-def _esteira_descartar(jid: str):
-    if request.args.get("key") != _ESTEIRA_KEY:
-        return "forbidden", 403
-    job = _esteira_jobs.get(jid)
-    base = (job or {}).get("review_dir") or f"/tmp/esteira_rev/{jid}"
-    import shutil
-    shutil.rmtree(base, ignore_errors=True)
-    if job:
-        job["resumo"] = None  # libera memória do resumo também
-    return "Arquivos descartados. ✓ (pode fechar a aba)"
-
-
-@app.route("/admin/esteira/arquivo/<jid>/<gto>/<path:fname>")
-def _esteira_arquivo(jid: str, gto: str, fname: str):
-    if request.args.get("key") != _ESTEIRA_KEY:
-        return "forbidden", 403
-    job = _esteira_jobs.get(jid)
-    if not job:
-        return "404", 404
-    base = job.get("review_dir") or f"/tmp/esteira_rev/{jid}"
-    path = os.path.realpath(os.path.join(base, str(gto), fname))
-    if not path.startswith(os.path.realpath(base)) or not os.path.exists(path):
-        return "404", 404
-    return send_file(path)
 
 
 if __name__ == "__main__":

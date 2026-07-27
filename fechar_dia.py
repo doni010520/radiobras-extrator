@@ -120,6 +120,13 @@ def fechar_dia(data: str, convenios: list, segmentos: list,
                         break
                     if tentativa == 0:
                         log("   (tabela vazia/atrasada — re-consultando o período...)")
+                # Esgotou as tentativas com linhas na tela, mas nenhuma do dia pedido:
+                # seguir usaria as linhas de OUTRO dia (filtro não aplicou / locale).
+                # Num fluxo que ANEXA, isso não pode virar "processa tudo".
+                if gtos and not [g for g in gtos if g.get("liberacao") == data]:
+                    raise RuntimeError(
+                        f"A consulta trouxe {len(gtos)} GTO(s), nenhuma com liberação "
+                        f"em {data} — filtro de período não aplicado. Nada processado.")
                 alvos = [g for g in gtos if STATUS_ALVO in g["status"].upper()]
                 if limite:
                     alvos = alvos[:limite]

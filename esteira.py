@@ -42,7 +42,8 @@ from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente
 from gto_utils import (is_gto_pdf, extrair_observacao, gto_e_desta_guia,
                        _BOILER_49)
-from solicitacao_utils import gto_exames, canon_exames, gto_dispensa_laudo
+from solicitacao_utils import (gto_exames, canon_exames, gto_dispensa_laudo,
+                               expande_documentacao)
 import json
 import re
 
@@ -56,7 +57,9 @@ except Exception:
 _GEM_PROMPT = ("É uma solicitação/requisição de exames odontológicos? Se sim, responda em "
                "JSON {solicitacao:true, tipo:'digitada'|'manuscrita', legivel:bool, exames:[...]}. "
                "Se não, {solicitacao:false}. Responda só o JSON.")
-_MAX_LEITURAS = 5  # teto de anexos lidos por paciente (mesmo no tier pago)
+# Modelo do Gemini. Estava hardcoded em 3 chamadas — trocar de modelo exigia
+# editar codigo e arriscar deixar uma para tras.
+_GEM_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def _mem_mb():
@@ -130,6 +133,20 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
     return _erro_de_grafia(tok, maior - comuns)
 
 
+def alvo_cobertura(gto_ex_desta, exames_portal, gto_ex_uniao):
+    """Conjunto de exames que a solicitação precisa COBRIR, por precedência:
+
+      1) a GTO DESTA guia (número conferido no PDF, ou lida por imagem);
+      2) os eventos DESTA ficha no portal (a operadora dizendo o que autorizou);
+      3) a união das GTOs achadas no prontuário — ÚLTIMO recurso.
+
+    (3) inclui GTOs de OUTRAS visitas do mesmo paciente. Usá-la como alvo cobra da
+    solicitação exames que esta guia nunca pediu, e reprova documentação correta.
+    Ela só existe como rede: sem identificar a guia, é mais seguro exigir demais
+    (pendência) do que de menos (anexar errado)."""
+    return set(gto_ex_desta or ()) or set(exames_portal or ()) or set(gto_ex_uniao or ())
+
+
 def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands):
     """NÍVEL 2 — o CÓDIGO escolhe a solicitação certa entre as leituras que o Gemini
     transcreveu (uma por anexo). Determinístico: tipo solicitação, legível, paciente
@@ -154,7 +171,10 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands):
         if not _nomes_compat(a.get("paciente_lido") or "", nome_gto):
             continue
         algum_pac = True
-        ex = canon_exames(" ".join(str(e) for e in (a.get("exames_lidos") or [])))
+        # expande SÓ o lado da solicitação: quem pede os componentes (panorâmica +
+        # telerradiografia + ...) está pedindo uma documentação. A recíproca não vale.
+        ex = expande_documentacao(
+            canon_exames(" ".join(str(e) for e in (a.get("exames_lidos") or []))))
         if not (gto_ex and gto_ex.issubset(ex)):
             continue
         score = (len(gto_ex & ex), -ai)
@@ -213,7 +233,7 @@ def _reler_exames_focado(gem, cands, leituras, nome_gto):
         try:
             fn2, mime2, blob2, _sv = cands[ai]
             r2 = gem.models.generate_content(
-                model="gemini-2.5-flash",
+                model=_GEM_MODEL,
                 contents=[types.Part.from_bytes(data=blob2, mime_type=mime2),
                           _RELEITURA_PROMPT])
             t2 = re.sub(r"^```json|^```|```$", "", (r2.text or "").strip(), flags=re.M).strip()
@@ -257,7 +277,7 @@ def _ler_gto_por_imagem(gem, blob, mime, gto):
     from google.genai import types
     try:
         r = gem.models.generate_content(
-            model="gemini-2.5-flash",
+            model=_GEM_MODEL,
             contents=[types.Part.from_bytes(data=blob, mime_type=mime), _GTO_IMG_PROMPT])
         txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
         d = json.loads(txt) or {}
@@ -285,32 +305,66 @@ def _exame_do_laudo(p):
     return canon_exames(m.group(1)) if m else set()
 
 
-def _filtrar_arquivos_da_gto(pasta, dec):
-    """Só sobem para a GTO os laudos cujos exames ESTÃO na guia. Exame PARTICULAR
-    feito no mesmo dia não vai para o convênio — regra que o fechar_dia.py:324-367
-    já aplicava e a esteira nunca portou (subia a pasta inteira com os.listdir).
+def _acc_do_laudo(p):
+    """Accession embutido no nome: LAUDO_<EXAME>_<acc>_TIPO.pdf -> '<acc>'.
+    É a chave FORTE (identidade do exame no PRORADIS), ao contrário do nome do
+    exame, que depende do _CANON reconhecer o termo."""
+    m = re.match(r"LAUDO_(.+?)_(\d+)_", os.path.basename(p))
+    return m.group(2) if m else None
 
-    Caso MISTO (há laudo de fora): as imagens ficam de fora também, porque
-    ENTREGA_*.jpg não diz a que exame pertence — atribuí-las seria chute.
-    Conservador: exame não identificado no nome do arquivo é MANTIDO, e GTO
-    ilegível (sem exames de referência) não filtra nada.
+
+def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None):
+    """Só sobem para a GTO os arquivos do CONVÊNIO. Exame PARTICULAR feito no mesmo
+    dia não vai para a operadora — regra do dono.
+
+    Duas fontes, nesta ordem:
+      1) PROCEDÊNCIA (determinística): `extras_acc` são os accessions que NÃO vieram
+         do relatório analítico — que já é consultado filtrado pelos convênios do
+         plano. Laudo com esse accession é de fora, ponto. Sem adivinhação.
+      2) Fallback (heurística antiga): exame do nome do arquivo fora dos exames da
+         guia. Vale quando a procedência não chegou até aqui.
+
+    Caso MISTO: as imagens ficam de fora, porque ENTREGA_*.jpg não diz a que exame
+    pertence e atribuí-las seria chute. Mas a SOLICITAÇÃO vai junto — sem ela a
+    guia era anexada só com o laudo, sem o documento que a própria decisão exigiu,
+    e ainda assim registrada como faturada.
+    Conservador: laudo não identificado é MANTIDO; GTO ilegível não filtra nada.
     Devolve (arquivos, excluidos, exames_fora)."""
     todos = sorted(os.listdir(pasta)) if pasta and os.path.isdir(pasta) else []
     cheio = [os.path.join(pasta, f) for f in todos]
-    # exames DESTA guia; sem identificar a GTO, cai na união (comportamento antigo)
-    alvo = set((dec or {}).get("gto_exames_desta") or []) or set((dec or {}).get("gto_exames") or [])
-    if not alvo:
-        return cheio, [], []          # GTO ilegível -> não filtra (como antes)
     laudos = [p for p in cheio if os.path.basename(p).upper().startswith("LAUDO_")]
-    dentro, fora = [], []
-    for lp in laudos:
-        cex = _exame_do_laudo(lp)
-        # exclui SÓ se o exame foi identificado E está fora da guia
-        (fora if (cex and not (cex & alvo)) else dentro).append(lp)
+    fora = []
+
+    # 1) procedência: accession que não veio do analítico do convênio
+    if extras_acc:
+        _ex = {str(a) for a in extras_acc}
+        fora = [lp for lp in laudos if (_acc_do_laudo(lp) or "") in _ex]
+
+    # 2) fallback pelo nome do exame (só se a procedência não resolveu)
+    if not fora:
+        # exames DESTA guia; sem identificar a GTO, cai na união (comportamento antigo)
+        alvo = (set((dec or {}).get("gto_exames_desta") or [])
+                or set((dec or {}).get("gto_exames") or []))
+        if not alvo:
+            return cheio, [], []      # GTO ilegível -> não filtra (como antes)
+        for lp in laudos:
+            cex = _exame_do_laudo(lp)
+            # exclui SÓ se o exame foi identificado E está fora da guia
+            if cex and not (cex & alvo):
+                fora.append(lp)
+
     if not fora:
         return cheio, [], []
+
+    # MISTO: laudos do convênio + solicitação escolhida. Fora: laudos de outro
+    # exame e as imagens (não atribuíveis).
+    dentro = [lp for lp in laudos if lp not in fora]
+    solic = [p for p in cheio
+             if os.path.basename(p).upper().startswith("SOLICITACAO_")]
     exames_fora = sorted({e for lp in fora for e in _exame_do_laudo(lp)})
-    return dentro, [os.path.basename(x) for x in fora], exames_fora
+    excluidos = sorted(os.path.basename(x) for x in cheio
+                       if x not in dentro and x not in solic)
+    return dentro + solic, excluidos, exames_fora
 
 
 def _build_by_norm(df):
@@ -396,6 +450,10 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
     return {"gto": g["gto"], "nome": pac["nome"], "status": status,
             "arquivos": nf, "imgs": res.get("imagens", {}).get("qtd", 0),
             "_pac": pac, "_pasta": pasta, "dt_dl": time.monotonic() - t0,
+            # accessions que NÃO vieram do analítico (podem ser exame particular).
+            # Vazio no fallback por nome (cod 'WL*'), onde não há analítico pra
+            # comparar — aí o filtro cai na heurística antiga, como sempre fez.
+            "extras_acc": res.get("accessions_extras") or [],
             # exames da guia lidos do PORTAL (fonte autoritativa) — usados quando o
             # PDF da GTO no prontuário vem sem a tabela de procedimentos
             "eventos_portal": g.get("eventos_portal") or []}
@@ -453,7 +511,7 @@ def _date_from_name(s):
         return None
 
 
-def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=None,
+def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
              eventos_portal=None):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
     manda TUDO pro Gemini escolher a solicitação certa + decidir. NÃO anexa.
@@ -612,19 +670,29 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
     contents.append(_DECISAO_PROMPT)
     for tent in range(3):
         try:
-            r = gem.models.generate_content(model="gemini-2.5-flash", contents=contents)
+            r = gem.models.generate_content(model=_GEM_MODEL, contents=contents)
             txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
             data = json.loads(txt)
             leituras = (data.get("anexos") if isinstance(data, dict) else data) or []
 
             # ── O CÓDIGO ESCOLHE a solicitação (o Gemini só LEU/transcreveu) ──────
-            idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], gto_ex, len(cands))
+            # ALVO DA COBERTURA — precedência explícita:
+            #   1) a GTO DESTA guia (nº conferido no PDF, ou lida por imagem);
+            #   2) os eventos DESTA ficha no portal (a operadora dizendo o que autorizou);
+            #   3) a união das GTOs do prontuário — ÚLTIMO recurso.
+            # Usar (3) como alvo é o bug que reprovava guia correta: com duas guias no
+            # prontuário (uma de panorâmica, outra de interproximal), a solicitação da
+            # panorâmica era cobrada de cobrir interproximal e virava pendência — e a
+            # mensagem, que já usava os exames DESTA guia, saía com as duas listas
+            # idênticas ("pede [panoramica] mas a GTO pede [panoramica]").
+            _alvo_ex = alvo_cobertura(gto_ex_desta, out.get("exames_portal"), gto_ex)
+            idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex, len(cands))
             # Falhou SÓ na cobertura de exames? Manuscrito costuma sair sub-lido na
             # 1ª passada (ex.: leu "periapical" e perdeu "panorâmica"). Releitura
             # dirigida do(s) candidato(s) e nova decisão determinística.
             if idx is None and _motivo == "solicitacao do paciente nao cobre os exames da GTO":
                 _reler_exames_focado(gem, cands, leituras, pac["nome"])
-                idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], gto_ex, len(cands))
+                idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex, len(cands))
             candidato_valido = idx is not None
             if candidato_valido:
                 dec = {"indice_solicitacao": idx, "paciente_lido": a.get("paciente_lido"),
@@ -645,9 +713,10 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None, data_exame=
                         break
                 if _motivo == "solicitacao do paciente nao cobre os exames da GTO":
                     _cn = sorted(canon_exames(" ".join(str(e) for e in _lidos)))
-                    # usa os exames DESTA guia; a união (gto_ex) inclui GTOs de outras
-                    # visitas e faria a mensagem cobrar pedido que esta guia não fez
-                    _pede = sorted(gto_ex_desta) or sorted(gto_ex)
+                    # MESMO conjunto usado no critério (_alvo_ex). Mensagem e regra
+                    # têm de ser a mesma coisa: quando divergiam, a pendência saía
+                    # com as duas listas idênticas e parecia um absurdo lógico.
+                    _pede = sorted(_alvo_ex)
                     _motivo = (f"Solicitação encontrada pede [{', '.join(_cn) or '?'}] "
                                f"mas a GTO pede [{', '.join(_pede)}] — conferir "
                                f"se o pedido cobre todos os exames")
@@ -879,7 +948,18 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             try:
                 abrir_consultar_gtos(pg); consultar_periodo(pg, data)
                 gtos = listar_gtos(pg)
-                do_dia = [g for g in gtos if g.get("liberacao") == data] or gtos
+                do_dia = [g for g in gtos if g.get("liberacao") == data]
+                # ANTES: `or gtos` — se nenhuma linha batesse com a data, processava
+                # TODAS as linhas da tela, que podem ser de outro dia (resquício da
+                # consulta anterior, filtro que não aplicou, locale de data). Trocar
+                # "não achei nada para este dia" por "então processa tudo" é o pior
+                # default possível num sistema que ANEXA. Falha explícito.
+                if gtos and not do_dia:
+                    raise RuntimeError(
+                        f"A consulta trouxe {len(gtos)} GTO(s), nenhuma com liberação "
+                        f"em {data} — o filtro de período não foi aplicado. Nada "
+                        f"processado (datas vistas: "
+                        f"{sorted({g.get('liberacao') for g in gtos})[:6]}).")
                 alvos = [g for g in do_dia if "REPASSE" in g["status"].upper()]
                 if not tok["v"] and alvos:   # fallback: abre 1 GTO p/ disparar a API
                     try:
@@ -1014,7 +1094,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 t0 = time.monotonic()
                 try:
                     dec = _decidir(gem, pg, ctx, item["_pac"], item.get("_pasta"),
-                                   review_dir=review_dir, gto=item["gto"], data_exame=data,
+                                   review_dir=review_dir, gto=item["gto"],
                                    eventos_portal=item.get("eventos_portal"))
                 except Exception as e:
                     dec = {"erro": str(e)[:100], "decisao": None, "anexos": 0,
@@ -1113,7 +1193,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     continue
                 pasta = item.get("_pasta")
                 arquivos, excluidos, exames_fora = _filtrar_arquivos_da_gto(
-                    pasta, item.get("decisao") or {})
+                    pasta, item.get("decisao") or {}, item.get("extras_acc"))
                 if excluidos:
                     item["laudos_excluidos"] = excluidos
                     item["exames_particulares"] = exames_fora
@@ -1231,6 +1311,16 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     token, alvos = setup.get("token"), setup.get("alvos", [])
     _t(f"PRORADIS by_norm={len(by_norm)} | OdontoPrev token={'ok' if token else 'FALHOU'} "
        f"| {len(alvos)} alvo(s)")
+    # Sem token, TODA chamada da descoberta volta 401 -> imgs=[] -> cnt=0 ->
+    # tem_laudo=False: cada GTO do dia é classificada como pendente e re-baixada do
+    # PRORADIS, sem os eventos da ficha. Não falhava — refazia trabalho em silêncio
+    # e decidia com menos informação. Aqui (fora das threads, onde o raise chega ao
+    # chamador) a execução para com motivo.
+    if alvos and not token:
+        raise RuntimeError(
+            "Token do OdontoPrev não foi capturado no login — a descoberta não "
+            "consegue ler os anexos das GTOs. Nada foi processado; tente de novo "
+            "em alguns minutos.")
     tmp = tempfile.mkdtemp(prefix="_esteira_")
     _limpar_temporarios_antigos()   # varre sobras antigas antes de gerar as novas
 
