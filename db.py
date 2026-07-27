@@ -239,7 +239,18 @@ def _seed_admin():
             return
     import os
     user = (os.environ.get("ADMIN_USER") or "admin").strip().lower()
-    senha = os.environ.get("ADMIN_PASSWORD") or "radiobras2026"
+    senha = os.environ.get("ADMIN_PASSWORD")
+    if not senha:
+        # O fallback fixo ("radiobras2026") estava num repositório PÚBLICO: qualquer
+        # banco novo/limpo nascia com admin de senha conhecida. Em produção, sem
+        # ADMIN_PASSWORD, não cria — melhor não ter admin do que ter um previsível.
+        if os.environ.get("RB_PRODUCAO") == "1" or os.environ.get("FLASK_ENV") == "production":
+            print("[db] ADMIN_PASSWORD não definida — admin inicial NÃO criado. "
+                  "Defina a variável e reinicie.", flush=True)
+            return
+        import secrets as _secrets
+        senha = _secrets.token_urlsafe(12)
+        print(f"[db] ADMIN_PASSWORD ausente (dev): senha gerada -> {senha}", flush=True)
     try:
         criar_usuario(user, senha, nome="Administrador", role="admin")
         print(f"[db] usuário admin inicial criado: {user}", flush=True)
@@ -441,10 +452,55 @@ class PortalCredencial(Base):
     atualizado_por = Column(String(60))
 
 
+# ── Cifra da senha do portal ──────────────────────────────────────────────────
+# A senha do convênio ficava em TEXTO PURO no banco: quem tivesse a DATABASE_URL
+# tinha, junto, o login das três unidades no OdontoPrev. Com PORTAL_KEY definida,
+# grava cifrada (prefixo 'enc:'). Sem ela, o comportamento é o de hoje — texto
+# puro — para não quebrar quem ainda não configurou; a leitura aceita os dois
+# formatos, então a migração acontece sozinha no próximo salvamento.
+_ENC_PREFIXO = "enc:"
+
+
+def _fernet():
+    k = os.environ.get("PORTAL_KEY")
+    if not k:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(k.encode() if isinstance(k, str) else k)
+    except Exception as e:
+        print(f"[db] PORTAL_KEY inválida ({str(e)[:60]}) — senha do portal segue "
+              f"em texto puro", flush=True)
+        return None
+
+
+def _cifrar(senha: str) -> str:
+    f = _fernet()
+    if not f or not senha:
+        return senha
+    return _ENC_PREFIXO + f.encrypt(senha.encode()).decode()
+
+
+def _decifrar(valor: str):
+    if not valor or not valor.startswith(_ENC_PREFIXO):
+        return valor                      # legado em texto puro
+    f = _fernet()
+    if not f:
+        print("[db] senha do portal está cifrada mas PORTAL_KEY não está definida",
+              flush=True)
+        return None
+    try:
+        return f.decrypt(valor[len(_ENC_PREFIXO):].encode()).decode()
+    except Exception as e:
+        print(f"[db] falha ao decifrar senha do portal: {str(e)[:60]}", flush=True)
+        return None
+
+
 def set_portal_senha(conta: str, senha: str, username: str = None):
     conta = (conta or "").strip()
     if not conta:
         raise ValueError("conta obrigatória")
+    senha = _cifrar(senha)
     with SessionLocal() as s:
         c = s.get(PortalCredencial, conta)
         if c:
@@ -460,7 +516,7 @@ def get_portal_senha(conta: str):
     try:
         with SessionLocal() as s:
             c = s.get(PortalCredencial, conta)
-            return c.senha if (c and c.senha) else None
+            return _decifrar(c.senha) if (c and c.senha) else None
     except Exception:
         return None
 

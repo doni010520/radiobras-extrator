@@ -170,3 +170,69 @@ def test_fallback_pelo_nome_do_exame_continua_valendo(tmp_path):
     base = sorted(os.path.basename(a) for a in arquivos)
     assert base == ["LAUDO_PANORAMICA_111_OFICIAL.pdf", "SOLICITACAO_pedido.pdf"]
     assert fora == ["tomografia"]
+
+
+# ── Trava de concorrência (item 2) ───────────────────────────────────────────
+# A versão anterior perguntava a `_esteira_jobs` se o dono da reserva estava vivo.
+# Só o /faturar/run registra a tag lá: para o cron ('cron-<conta>-<dia>') e para o
+# /fechar (job_id em `_jobs`), `job` era None e a reserva alheia era SOBRESCRITA —
+# o cenário real (cron às 5h + clique em Faturar) passava direto.
+
+def test_trava_bloqueia_segunda_execucao():
+    import app
+    app._esteira_ativas.clear()
+    assert app._esteira_reservar("24/07/2026", "388336", "jid-1") == "jid-1"
+    assert app._esteira_reservar("24/07/2026", "388336", "jid-2") is None
+
+
+def test_trava_bloqueia_tag_de_cron_nao_registrada_em_jobs():
+    """A regressão exata: tag do cron não existe em _esteira_jobs."""
+    import app
+    app._esteira_ativas.clear()
+    assert app._esteira_reservar("24/07/2026", "388336", "cron-388336-24/07/2026")
+    assert "cron-388336-24/07/2026" not in app._esteira_jobs      # nunca esteve lá
+    assert app._esteira_reservar("24/07/2026", "388336", "jid-web") is None
+
+
+def test_trava_nao_bloqueia_outra_unidade():
+    import app
+    app._esteira_ativas.clear()
+    assert app._esteira_reservar("24/07/2026", "388336", "a")
+    assert app._esteira_reservar("24/07/2026", "410923", "b") == "b"
+
+
+def test_trava_libera_e_expira():
+    import app
+    app._esteira_ativas.clear()
+    app._esteira_reservar("24/07/2026", "388336", "a")
+    app._esteira_liberar("24/07/2026", "388336", "outra")   # tag errada: não libera
+    assert app._esteira_reservar("24/07/2026", "388336", "b") is None
+    app._esteira_liberar("24/07/2026", "388336", "a")
+    assert app._esteira_reservar("24/07/2026", "388336", "c") == "c"
+    # reserva órfã (processo morto) não trava o dia pra sempre
+    assert app._esteira_reservar("24/07/2026", "388336", "d", ttl=0) == "d"
+
+
+def test_rotas_admin_esteira_nao_existem_mais():
+    import app
+    rotas = {str(r) for r in app.app.url_map.iter_rules()}
+    assert not [r for r in rotas if "admin/esteira" in r]
+
+
+# ── Cifra da senha do portal (item 7) ────────────────────────────────────────
+
+def test_senha_do_portal_cifra_e_decifra(monkeypatch):
+    from cryptography.fernet import Fernet
+    import db
+    monkeypatch.setenv("PORTAL_KEY", Fernet.generate_key().decode())
+    guardado = db._cifrar("senha-secreta")
+    assert guardado.startswith("enc:") and "senha-secreta" not in guardado
+    assert db._decifrar(guardado) == "senha-secreta"
+
+
+def test_senha_legado_em_texto_puro_continua_lendo(monkeypatch):
+    """Migração sem downtime: o que já está no banco em claro segue funcionando."""
+    import db
+    monkeypatch.delenv("PORTAL_KEY", raising=False)
+    assert db._decifrar("senha-antiga") == "senha-antiga"
+    assert db._cifrar("x") == "x"          # sem chave, comportamento de hoje

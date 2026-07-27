@@ -946,7 +946,18 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             try:
                 abrir_consultar_gtos(pg); consultar_periodo(pg, data)
                 gtos = listar_gtos(pg)
-                do_dia = [g for g in gtos if g.get("liberacao") == data] or gtos
+                do_dia = [g for g in gtos if g.get("liberacao") == data]
+                # ANTES: `or gtos` — se nenhuma linha batesse com a data, processava
+                # TODAS as linhas da tela, que podem ser de outro dia (resquício da
+                # consulta anterior, filtro que não aplicou, locale de data). Trocar
+                # "não achei nada para este dia" por "então processa tudo" é o pior
+                # default possível num sistema que ANEXA. Falha explícito.
+                if gtos and not do_dia:
+                    raise RuntimeError(
+                        f"A consulta trouxe {len(gtos)} GTO(s), nenhuma com liberação "
+                        f"em {data} — o filtro de período não foi aplicado. Nada "
+                        f"processado (datas vistas: "
+                        f"{sorted({g.get('liberacao') for g in gtos})[:6]}).")
                 alvos = [g for g in do_dia if "REPASSE" in g["status"].upper()]
                 if not tok["v"] and alvos:   # fallback: abre 1 GTO p/ disparar a API
                     try:
@@ -1274,6 +1285,16 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     token, alvos = setup.get("token"), setup.get("alvos", [])
     _t(f"PRORADIS by_norm={len(by_norm)} | OdontoPrev token={'ok' if token else 'FALHOU'} "
        f"| {len(alvos)} alvo(s)")
+    # Sem token, TODA chamada da descoberta volta 401 -> imgs=[] -> cnt=0 ->
+    # tem_laudo=False: cada GTO do dia é classificada como pendente e re-baixada do
+    # PRORADIS, sem os eventos da ficha. Não falhava — refazia trabalho em silêncio
+    # e decidia com menos informação. Aqui (fora das threads, onde o raise chega ao
+    # chamador) a execução para com motivo.
+    if alvos and not token:
+        raise RuntimeError(
+            "Token do OdontoPrev não foi capturado no login — a descoberta não "
+            "consegue ler os anexos das GTOs. Nada foi processado; tente de novo "
+            "em alguns minutos.")
     tmp = tempfile.mkdtemp(prefix="_esteira_")
     _limpar_temporarios_antigos()   # varre sobras antigas antes de gerar as novas
 
