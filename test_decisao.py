@@ -264,3 +264,19 @@ def test_documentacao_nao_abre_a_porta_pra_qualquer_exame(tmp_path):
         pasta, {"gto_exames_desta": ["documentacao"]}, extras_acc=None)
     assert [os.path.basename(a) for a in arquivos] == ["LAUDO_PANORAMICA_111_OFICIAL.pdf"]
     assert fora == ["tomografia"]
+
+
+def test_upload_de_lista_vazia_nao_e_sucesso():
+    """'Nada para enviar' != 'tudo anexado'. A lista vazia caía no return da
+    idempotência com ok=True e a guia era registrada como FATURADA sem ter subido
+    arquivo nenhum (caso JOEL, 20/07)."""
+    from extrator_odontoprev import upload_arquivos
+
+    class _GPFake:
+        def inner_text(self, _sel): return "total de anexos) : 0"
+        def query_selector(self, _sel): return None
+        def wait_for_timeout(self, _ms): pass
+        def query_selector_all(self, _sel): return []
+
+    r = upload_arquivos(_GPFake(), [])
+    assert r["ok"] is False and r["enviados"] == []
