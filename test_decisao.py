@@ -441,3 +441,19 @@ def test_motivo_diz_o_que_falta_e_nao_vaza_token_interno():
     assert idx is None
     assert motivo == "solicitacao do paciente nao cobre os exames da GTO"
     assert "documentacao_completa" in alvo          # existe internamente...
+
+
+def test_diag_enxerga_a_esteira_rodando():
+    """O /api/diag contava só `_jobs` e dizia '0 jobs ativos' com a esteira
+    faturando. É por ele que se decide se pode deployar — e deploy no meio de uma
+    execução mata o job."""
+    import app
+    app._esteira_jobs.clear(); app._esteira_ativas.clear()
+    with app.app.test_request_context():
+        app._esteira_jobs["j1"] = {"done": False, "dia": "22/07/2026",
+                                   "conta": "388336", "dry": True}
+        ativos = [k for k, j in app._esteira_jobs.items() if not j.get("done")]
+        assert ativos == ["j1"]
+        app._esteira_jobs["j1"]["done"] = True
+        assert not [k for k, j in app._esteira_jobs.items() if not j.get("done")]
+    app._esteira_jobs.clear()
