@@ -44,6 +44,11 @@ _CANON = [
     # Sem elas, uma GTO de documentacao vinha com exames VAZIOS -> "GTO ilegivel".
     # Exige "doc" seguido de orto/perio/diag para nao casar "documento"/"doc." solto.
     (r"documenta|\bdoc\.?\s*orto|\bdocorto|\bdoc\.?\s*perio|\bdoc\.?\s*diag", "documentacao"),
+    # SUBTIPO da documentação. "Doc Orto Compl" e "Doc Orto Contro" são
+    # procedimentos DIFERENTES e o canon colapsava os dois em 'documentacao'. A
+    # regra do dono ("sempre terá esses quatro exames") vale para a COMPLETA; ao
+    # aplicá-la ao CONTROLE eu reprovei guia legítima (HAMILTON 195268018, 22/07).
+    (r"\bdoc\.?\s*orto\s*compl|\bdocortocomp|documentacao\s*completa", "documentacao_completa"),
     (r"seios?\s*da\s*face", "seios_da_face"),
     # \btc\b com fronteira DOS DOIS LADOS: sem ela, "etc" virava "tomografia" e a
     # solicitacao passava a "cobrir" um exame que ninguem pediu.
@@ -159,6 +164,7 @@ def canon_exames(texto: str) -> set:
 # pedido. Antes eu exigia duas âncoras + 3 componentes quaisquer, o que era mais
 # frouxo: aceitaria como documentação um pedido sem modelos.
 # periapical/oclusal/carpal podem vir junto e não atrapalham — só não bastam.
+_DOC_ANCORAS = {"panoramica", "telerradiografia"}
 _DOC_ORTO = {"panoramica", "telerradiografia", "fotografia", "modelo"}
 _DOC_COMPONENTES = _DOC_ORTO | {"periapical", "oclusal", "carpal"}
 
@@ -185,7 +191,12 @@ def expande_documentacao(ex: set) -> set:
     ex = set(ex or ())
     if "documentacao" in ex:
         return ex
-    if _DOC_ORTO <= ex:                  # os QUATRO, conforme a regra do dono
+    if _DOC_ORTO <= ex:                  # os QUATRO -> é uma doc orto COMPLETA
+        return ex | {"documentacao", "documentacao_completa"}
+    # Subtipos que NÃO são a completa (Controle, Básica, Periodontal): a regra dos
+    # quatro não se aplica. Basta o que toda documentação ortodôntica tem —
+    # panorâmica e telerradiografia — mais um terceiro componente.
+    if _DOC_ANCORAS <= ex and len(ex & _DOC_COMPONENTES) >= 3:
         return ex | {"documentacao"}
     return ex
 
