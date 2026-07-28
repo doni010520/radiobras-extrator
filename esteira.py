@@ -579,6 +579,24 @@ Responda APENAS JSON (sem markdown):
 """
 
 
+def _box4(v):
+    """Caixa [ymin,xmin,ymax,xmax] válida, ou None.
+
+    O modelo às vezes devolve uma LISTA DE CAIXAS (ou mais de 4 números) e o
+    desempacotamento `ymin, xmin, ymax, xmax = box` estourava com 'too many values
+    to unpack'. A exceção era engolida como 'Erro ao editar imagem' e a guia virava
+    pendência — com a documentação correta e conf=alta. Caso ALANNA VITORIA DOS
+    PASSOS (195303194, 22/07). Aceita [a,b,c,d] ou [[a,b,c,d]]."""
+    if isinstance(v, (list, tuple)) and len(v) == 1 and isinstance(v[0], (list, tuple)):
+        v = v[0]
+    if not isinstance(v, (list, tuple)) or len(v) != 4:
+        return None
+    try:
+        return [float(x) for x in v]
+    except Exception:
+        return None
+
+
 def _parse_br_date(s):
     """'DD/MM/AAAA' (ou DD/MM/AA) -> date; None se não der."""
     try:
@@ -872,8 +890,9 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                                 font = ImageFont.load_default()
             
                         _editou = False   # a edição REALMENTE aconteceu?
-                        if tipo == 'atualizar' and dec.get("box_data"):
-                            ymin, xmin, ymax, xmax = dec["box_data"]
+                        _bd = _box4(dec.get("box_data"))
+                        if tipo == 'atualizar' and _bd:
+                            ymin, xmin, ymax, xmax = _bd
                             # Apaga data antiga com retângulo branco
                             draw.rectangle([int((xmin/1000)*largura), int((ymin/1000)*altura),
                                             int((xmax/1000)*largura), int((ymax/1000)*altura)], fill="white")
@@ -882,7 +901,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                             _editou = True
                         elif tipo == 'inserir':
                             # Prefere a área de assinatura informada pela IA; fallback: centro-inferior
-                            box_ass = dec.get("box_assinatura")
+                            box_ass = _box4(dec.get("box_assinatura"))
                             if box_ass:
                                 ymin_a, xmin_a, ymax_a, xmax_a = box_ass
                                 # Insere logo abaixo da área de assinatura, centralizado horizontalmente

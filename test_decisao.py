@@ -381,13 +381,51 @@ def test_doc_orto_exige_os_quatro_exames():
     fotos, panorâmica e modelos. Faltando um, não é documentação completa."""
     from solicitacao_utils import _DOC_ORTO
     assert _DOC_ORTO == {"panoramica", "telerradiografia", "fotografia", "modelo"}
-    assert "documentacao" in expande_documentacao(set(_DOC_ORTO))
+    assert "documentacao_completa" in expande_documentacao(set(_DOC_ORTO))
+    # Faltando qualquer um dos quatro, deixa de ser COMPLETA. Pode continuar
+    # servindo para um subtipo menor (Controle) — por isso o alvo é o token
+    # 'documentacao_completa', não o genérico.
     for faltando in _DOC_ORTO:
         parcial = set(_DOC_ORTO) - {faltando}
-        assert "documentacao" not in expande_documentacao(parcial), faltando
+        assert "documentacao_completa" not in expande_documentacao(parcial), faltando
 
 
 def test_extras_nao_atrapalham_a_doc_orto():
     from solicitacao_utils import _DOC_ORTO
     lido = set(_DOC_ORTO) | {"periapical", "oclusal"}
     assert "documentacao" in expande_documentacao(lido)
+
+
+def test_box_invalido_nao_derruba_a_guia():
+    """O modelo às vezes devolve uma lista de caixas; o desempacotamento estourava
+    e a guia virava pendência com a documentação correta (ALANNA, 22/07)."""
+    from esteira import _box4
+    assert _box4([10, 20, 30, 40]) == [10.0, 20.0, 30.0, 40.0]
+    assert _box4([[10, 20, 30, 40]]) == [10.0, 20.0, 30.0, 40.0]
+    assert _box4([10, 20, 30, 40, 50]) is None
+    assert _box4([[1, 2, 3, 4], [5, 6, 7, 8]]) is None
+    assert _box4(None) is None and _box4("x") is None
+
+
+# ── Subtipo da documentação (HAMILTON 195268018, 22/07) ─────────────────────
+# "Doc Orto Compl" e "Doc Orto Contro" são procedimentos DIFERENTES. A regra dos
+# quatro exames vale para a COMPLETA; aplicá-la ao CONTROLE reprovava guia legítima.
+
+def test_completa_e_controle_sao_procedimentos_diferentes():
+    assert "documentacao_completa" in canon_exames("Doc Orto Compl")
+    assert "documentacao_completa" not in canon_exames("Doc Orto Contro")
+    assert "documentacao" in canon_exames("Doc Orto Contro")
+
+
+def test_so_os_quatro_cobrem_a_doc_completa():
+    sem_modelo = expande_documentacao({"panoramica", "telerradiografia",
+                                       "fotografia", "periapical", "oclusal"})
+    assert not canon_exames("Doc Orto Compl") <= sem_modelo   # falta modelo
+    assert canon_exames("Doc Orto Contro") <= sem_modelo      # controle: cobre
+
+
+def test_doc_completa_com_os_quatro_cobre_tudo():
+    from solicitacao_utils import _DOC_ORTO
+    lido = expande_documentacao(set(_DOC_ORTO))
+    assert canon_exames("Doc Orto Compl") <= lido
+    assert canon_exames("Doc Orto Contro") <= lido
