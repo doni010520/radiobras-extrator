@@ -280,3 +280,97 @@ def test_upload_de_lista_vazia_nao_e_sucesso():
 
     r = upload_arquivos(_GPFake(), [])
     assert r["ok"] is False and r["enviados"] == []
+
+
+# ── Nome composto grudado x separado (caso VERALUCIA, 22/07 Camaçari) ────────
+# A guia traz "VERALUCIA" num token; o pedido do dentista traz "Vera Lucia" em
+# dois. Token a token nunca fecha: a distância de VERALUCIA para VERA é 3 e o teto
+# de erro de grafia é 2. Concatenar PRESERVA o nome, então é seguro.
+
+def test_nome_composto_grudado_casa_com_separado():
+    assert _nomes_compat("VERA LUCIA SOUSA DOS SANTOS", "VERALUCIA SOUSA DOS SANTOS")
+    assert _nomes_compat("VERALUCIA SOUSA DOS SANTOS", "VERA LUCIA SOUSA DOS SANTOS")
+    assert _nomes_compat("ANA MARIA DA SILVA COSTA", "ANAMARIA DA SILVA COSTA")
+
+
+def test_concatenacao_nao_deixa_passar_outra_pessoa():
+    """A porta aberta é só para a MESMA sequência de letras sem o espaço."""
+    assert not _nomes_compat("MARIA JOSE SILVA SANTOS", "MARIA HELENA SILVA SANTOS")
+    assert not _nomes_compat("ANA CLARA SOUZA LIMA", "ANA BEATRIZ SOUZA LIMA")
+    assert not _nomes_compat("PEDRO SILVA SANTOS", "JOAO SILVA SANTOS")
+
+
+# ── Vocabulário de exames (caso MIRLA, 22/07 Centro) ────────────────────────
+# GTO: "Doc Orto Compl". Pedido manuscrito: "Teleradigrafia lateral com tweed e
+# Usp / Fotos intra e extras bucais / Panorâmica em topo / Modelo fisicos".
+# 'Teleradigrafia' não casava `telerr` e 'Fotos' não casava `fotograf`: sem as duas
+# âncoras, a documentação era reprovada e a guia virava pendência.
+
+MIRLA = ("Teleradigrafia lateral com tweed e Usp. Fotos intra e extras bucais. "
+         "Panoramica em topo. Modelo fisicos")
+
+
+def test_caso_mirla_cobre_a_documentacao():
+    lido = expande_documentacao(canon_exames(MIRLA))
+    assert {"telerradiografia", "fotografia", "panoramica", "modelo"} <= lido
+    assert "documentacao" in lido
+
+
+def test_mirla_passa_no_escolher():
+    leituras = [_leitura(0, "MIRLA CHRISTINE TEIXEIRA DE OLIVEIRA",
+                         [MIRLA])]
+    idx, _a, motivo = _escolher_solicitacao(
+        leituras, "MIRLA CHRISTINE TEIXEIRA DE OLIVEIRA", {"documentacao"}, 1)
+    assert idx == 0 and motivo is None
+
+
+def test_grafia_errada_de_exame_e_tolerada():
+    assert "telerradiografia" in canon_exames("teleradigrafia")
+    assert "panoramica" in canon_exames("panoramicaa")
+
+
+def test_fuzzy_nao_inventa_exame():
+    """Reconhecer exame que não foi pedido faz a solicitação 'cobrir' o que ela não
+    cobre — e aí o sistema fatura errado. Palavra genérica não pode virar exame."""
+    for t in ["etc", "raio x", "radiografia", "documento", "consulta odontologica"]:
+        assert canon_exames(t) == set(), t
+
+
+def test_tomografia_e_fotografia_nao_se_confundem():
+    """Estão a 2 letras uma da outra. Com teto 2 colidiriam — exame caro virando
+    foto. O teto é 1 justamente por isto."""
+    assert canon_exames("tomografia") == {"tomografia"}
+    assert canon_exames("fotografia") == {"fotografia"}
+
+
+# ── Anexos que o Gemini não lê direto (casos ALESSANDRA e JANDIARA) ─────────
+# A solicitação estava em .tif — saída padrão de scanner. O código só aceitava
+# pdf/png/jpg/jpeg e descartava o resto SEM LOG: a guia virava "nenhum documento
+# com nome compatível", quando o documento existia e nunca tinha sido olhado.
+
+def test_tif_e_convertido_em_vez_de_descartado():
+    from esteira import preparar_anexo
+    from PIL import Image
+    import io as _io
+    buf = _io.BytesIO()
+    Image.new("RGB", (40, 30), "white").save(buf, format="TIFF")
+    mime, blob = preparar_anexo("SOLICITACAO.tif", buf.getvalue())
+    assert mime == "image/jpeg"
+    assert blob[:2] == b"\xff\xd8"          # virou JPEG de verdade
+
+
+def test_formatos_diretos_passam_intactos():
+    from esteira import preparar_anexo
+    mime, blob = preparar_anexo("pedido.pdf", b"%PDF-1.4 x")
+    assert mime == "application/pdf" and blob == b"%PDF-1.4 x"
+
+
+def test_formato_desconhecido_devolve_motivo():
+    """Não pode mais sumir em silêncio: quem descarta explica por quê."""
+    mime, motivo = preparar_anexo_seguro("video.mp4", b"\x00\x00")
+    assert mime is None and "mp4" in motivo
+
+
+def preparar_anexo_seguro(nome, blob):
+    from esteira import preparar_anexo
+    return preparar_anexo(nome, blob)

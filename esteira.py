@@ -60,6 +60,41 @@ _GEM_PROMPT = ("É uma solicitação/requisição de exames odontológicos? Se s
 # Modelo do Gemini. Estava hardcoded em 3 chamadas — trocar de modelo exigia
 # editar codigo e arriscar deixar uma para tras.
 _GEM_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# TEMPERATURA 0 — a leitura precisa ser REPRODUTÍVEL. No default (1.0) o mesmo
+# documento era transcrito diferente entre execuções: MARIA CLARA (195244399) foi
+# reprovada num run e aprovada no seguinte, com os MESMOS 6 arquivos. Guia que
+# fatura ou vira pendência por sorte é inaceitável num sistema determinístico.
+#
+# THINKING — o 2.5 Flash "pensa" por padrão e cobra isso na tarifa de SAÍDA, a mais
+# cara. Medido na própria conta: prompt "responda só: ok" gastou 6 de entrada,
+# 1 de saída e 16 de raciocínio. A tarefa aqui é TRANSCREVER o que está no papel
+# (o prompt diz "NÃO interprete, NÃO deduza"), então raciocínio é desperdício.
+# Ajustável por env sem deploy, caso a leitura piore.
+_GEM_THINKING = int(os.environ.get("GEMINI_THINKING_BUDGET", "0"))
+_gem_tokens = {"in": 0, "out": 0, "chamadas": 0}
+_gem_tokens_lock = threading.Lock()
+
+
+def _gem_cfg():
+    from google.genai import types
+    return types.GenerateContentConfig(
+        temperature=0,
+        thinking_config=types.ThinkingConfig(thinking_budget=_GEM_THINKING),
+    )
+
+
+def _contar_tokens(r):
+    """Acumula o consumo que a resposta JÁ traz e ninguém lia. Sem isto não havia
+    como responder 'quanto custou faturar este dia' — nem perceber o crédito
+    acabando antes de 137 guias falharem com 429 (28/07)."""
+    u = getattr(r, "usage_metadata", None)
+    if not u:
+        return
+    with _gem_tokens_lock:
+        _gem_tokens["in"] += getattr(u, "prompt_token_count", 0) or 0
+        _gem_tokens["out"] += (getattr(u, "candidates_token_count", 0) or 0) \
+            + (getattr(u, "thoughts_token_count", 0) or 0)
+        _gem_tokens["chamadas"] += 1
 
 
 def _mem_mb():
@@ -106,6 +141,23 @@ def _erro_de_grafia(tok: str, candidatos) -> bool:
     return any(_dist_edicao(tok, c, teto) <= teto for c in candidatos)
 
 
+def _casa_por_concatenacao(tok: str, outros: list) -> bool:
+    """`tok` é dois tokens ADJACENTES do outro lado escritos juntos?
+    'VERALUCIA' == 'VERA'+'LUCIA'. Caso VERALUCIA SOUSA DOS SANTOS (22/07 Camaçari):
+    a guia traz o nome composto grudado, o pedido do dentista traz separado, e a
+    comparação token a token nunca fecha — a distância de 'VERALUCIA' para 'VERA'
+    é 3, e o teto de erro de grafia é 2.
+
+    É seguro porque PRESERVA o nome: mesma sequência de letras, só sem o espaço.
+    Não abre porta para OUTRA pessoa — 'PEDRO' nunca vira 'JOAO' por concatenação.
+    Aceita 1 letra de diferença no todo (acento perdido, plural)."""
+    for i in range(len(outros) - 1):
+        junto = outros[i] + outros[i + 1]
+        if junto == tok or _dist_edicao(junto, tok, 1) <= 1:
+            return True
+    return False
+
+
 def _nomes_compat(lido: str, alvo: str) -> bool:
     """Casa o nome LIDO na solicitação com o nome-ALVO (da GTO) por TOKENS, não por
     substring (evita 'ANA' casar 'ANA PAULA'). Exige >=2 tokens significativos em
@@ -123,14 +175,21 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
     comuns = sa & sb
     if len(comuns) < 2:
         return False
-    menor, maior = (sa, sb) if len(sa) <= len(sb) else (sb, sa)
+    if len(sa) <= len(sb):
+        menor, maior, lista_maior = sa, sb, tb
+    else:
+        menor, maior, lista_maior = sb, sa, ta
     se_falta = menor - comuns
     if not se_falta:
         return True                      # menor totalmente contido no maior
     if len(se_falta) > 1:
         return False                     # 2+ tokens divergentes -> outra pessoa
     tok = next(iter(se_falta))
-    return _erro_de_grafia(tok, maior - comuns)
+    if _erro_de_grafia(tok, maior - comuns):
+        return True
+    # NOME COMPOSTO grudado num sistema e separado no outro (VERALUCIA / VERA LUCIA).
+    # Usa a lista ORDENADA: só concatena tokens que estão lado a lado no nome.
+    return _casa_por_concatenacao(tok, lista_maior)
 
 
 def alvo_cobertura(gto_ex_desta, exames_portal, gto_ex_uniao):
@@ -233,9 +292,10 @@ def _reler_exames_focado(gem, cands, leituras, nome_gto):
         try:
             fn2, mime2, blob2, _sv = cands[ai]
             r2 = gem.models.generate_content(
-                model=_GEM_MODEL,
+                model=_GEM_MODEL, config=_gem_cfg(),
                 contents=[types.Part.from_bytes(data=blob2, mime_type=mime2),
                           _RELEITURA_PROMPT])
+            _contar_tokens(r2)
             t2 = re.sub(r"^```json|^```|```$", "", (r2.text or "").strip(), flags=re.M).strip()
             ex2 = (json.loads(t2) or {}).get("exames") or []
             novos = sorted(set(_lidos1) | {str(e) for e in ex2})
@@ -277,8 +337,9 @@ def _ler_gto_por_imagem(gem, blob, mime, gto):
     from google.genai import types
     try:
         r = gem.models.generate_content(
-            model=_GEM_MODEL,
+            model=_GEM_MODEL, config=_gem_cfg(),
             contents=[types.Part.from_bytes(data=blob, mime_type=mime), _GTO_IMG_PROMPT])
+        _contar_tokens(r)
         txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
         d = json.loads(txt) or {}
     except Exception:
@@ -297,6 +358,36 @@ def _ler_gto_por_imagem(gem, blob, mime, gto):
     palavras = [w for w in re.findall(r"[A-Za-zÀ-ú]{3,}", obs) if not _BOILER_49.search(w)]
     justif = len(palavras) >= 2 and not _BOILER_49.search(obs[:40])
     return {"e_desta_guia": True, "exames": exames, "justificativa": justif}
+
+
+# Formatos que o Gemini aceita direto. O resto era DESCARTADO EM SILÊNCIO — sem
+# log, sem contagem — e a guia virava "nenhum documento com nome compatível", que é
+# mentira: o documento existia e nunca foi olhado. Casos ALESSANDRA FERREIRA SENA e
+# JANDIARA DA SILVA ALBINO (22/07): a solicitação estava em .tif, saída padrão de
+# scanner. Agora converte em vez de jogar fora.
+_MIME_DIRETO = {"pdf": "application/pdf", "png": "image/png",
+                "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
+_CONVERTER = {"tif", "tiff", "bmp", "gif"}
+
+
+def preparar_anexo(filename, blob):
+    """(mime, blob) pronto para o Gemini, ou (None, motivo) se não dá.
+    Converte o que o Pillow lê e o Gemini não aceita."""
+    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    if ext in _MIME_DIRETO:
+        return _MIME_DIRETO[ext], blob
+    if ext in _CONVERTER:
+        try:
+            img = Image.open(io.BytesIO(blob))
+            # TIFF multipágina: só a 1ª. O pedido do dentista cabe numa folha.
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=90)
+            return "image/jpeg", buf.getvalue()
+        except Exception as e:
+            return None, f"{ext} ilegível ({str(e)[:40]})"
+    return None, f"formato .{ext or '?'} não suportado"
 
 
 def _exame_do_laudo(p):
@@ -591,10 +682,14 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 except Exception:
                     pass
             continue
-        mime = {"pdf": "application/pdf", "png": "image/png",
-                "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext)
+        mime, blob2 = preparar_anexo(it["filename"], blob)
         if mime:
-            cands_raw.append((it["filename"], mime, blob))
+            if blob2 is not blob:
+                out.setdefault("convertidos", []).append(it["filename"])
+            cands_raw.append((it["filename"], mime, blob2))
+        else:
+            # blob2 traz o motivo. NÃO some mais em silêncio.
+            out.setdefault("descartados", []).append(f"{it['filename']}: {blob2}")
     # GTO ESCANEADA/FOTOGRAFADA: sem camada de texto, is_gto_pdf() não a reconhece,
     # a guia fica "ilegível" (vira pendência) e — pior — ela mesma entra como
     # candidata a SOLICITAÇÃO. Aqui o Gemini apenas TRANSCREVE a guia e o código
@@ -664,6 +759,12 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 saved = None
         cands.append((fn, mime, blob, saved))
     out["candidatos"] = [{"idx": i, "nome": c[0], "arquivo": c[3]} for i, c in enumerate(cands)]
+    # FUNIL: quantos anexos o prontuário tinha, quantos viraram candidatos, quantos
+    # foram descartados e por quê. Sem isto, "sem anexo candidato" e "nenhum nome
+    # compatível" eram indistinguíveis de "o arquivo foi jogado fora sem ser lido".
+    out["funil"] = {"prontuario": len(lista), "baixados": min(len(lista), 30),
+                    "candidatos": len(cands), "descartados": len(out.get("descartados") or []),
+                    "convertidos": len(out.get("convertidos") or [])}
     if not cands:
         out["decisao"] = {"anexar": False, "motivo": "sem anexo candidato a solicitação"}
         return out
@@ -674,7 +775,9 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
     contents.append(_DECISAO_PROMPT)
     for tent in range(3):
         try:
-            r = gem.models.generate_content(model=_GEM_MODEL, contents=contents)
+            r = gem.models.generate_content(model=_GEM_MODEL, contents=contents,
+                                            config=_gem_cfg())
+            _contar_tokens(r)
             txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
             data = json.loads(txt)
             leituras = (data.get("anexos") if isinstance(data, dict) else data) or []
@@ -889,6 +992,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     _segmentos = plano["segmentos"] if plano else SEGMENTOS
     _odo_user = conta if (conta and plano) else None   # None -> usa ODONTOPREV_USER padrão
     t_glob = time.monotonic()
+    with _gem_tokens_lock:               # consumo é POR EXECUÇÃO
+        _gem_tokens.update({"in": 0, "out": 0, "chamadas": 0})
 
     def _t(m):
         log(f"[{time.monotonic() - t_glob:6.0f}s] {m}")
@@ -1149,7 +1254,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     _extra += f" | MOTIVO: {str(_mot)[:110]}"
                 if dec.get("gto_exames_desta") or dec.get("gto_exames"):
                     _extra += f" | GTO pede: {dec.get('gto_exames_desta') or dec.get('gto_exames')}"
-                _t(f"[DEC{wid}] {item['gto']} {item['nome'][:22]} | laudo+img={len(dec.get('plano_laudo_imgs', []))} "
+                _fn = dec.get("funil") or {}
+                if dec.get("descartados"):
+                    _t(f"[DESCARTE] GTO {item['gto']} — anexo(s) NÃO lido(s): "
+                       + " | ".join(dec["descartados"][:6]))
+                if dec.get("convertidos"):
+                    _t(f"[CONV] GTO {item['gto']} — convertido(s) p/ leitura: "
+                       + ", ".join(dec["convertidos"][:6]))
+                # nome COMPLETO (era cortado em 22 caracteres, inutilizando o log
+                # para conferir paciente) + funil de anexos
+                _t(f"[DEC{wid}] {item['gto']} {item['nome']} "
+                   f"| anexos={_fn.get('prontuario', '?')}→cand={_fn.get('candidatos', '?')}"
+                   f"{' desc=' + str(_fn['descartados']) if _fn.get('descartados') else ''}"
+                   f" | laudo+img={len(dec.get('plano_laudo_imgs', []))} "
                    f"| {solic} | conf={d.get('confianca')} batem={d.get('exames_batem')}"
                    f"{_extra} ({item['dt_decisao']:.0f}s, mem={em:.0f}MB)")
             try:
@@ -1488,11 +1605,17 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         "pico_anexacao": ativos_an["pico"],
         "tempo_descoberta": round(t_desc), "tempo_ate_download": round(t_dl),
         "tempo_total": round(total), "decisoes": decisoes, "resultados": resultados,
+        "gemini_tokens": dict(_gem_tokens),
+        "gemini_chamadas_por_gto": (round(_gem_tokens["chamadas"] / len(baixados), 2)
+                                    if baixados else 0),
     }
     _t(f"RESUMO: {resumo['baixados']}/{resumo['pendentes']} baixados | "
        f"{resumo['solic_auto']} solic-auto / {resumo['justificativa']} c-justificativa / "
        f"{resumo['revisao']} revisão | anexados ok={resumo['anexado_ok']} dry={resumo['anexado_dry']} "
        f"falhou={resumo['anexado_falhou']} | TOTAL={resumo['tempo_total']}s")
+    _t(f"[GEMINI] {_gem_tokens['chamadas']} chamadas "
+       f"({resumo['gemini_chamadas_por_gto']}/GTO) | tokens in={_gem_tokens['in']:,} "
+       f"out={_gem_tokens['out']:,} | thinking_budget={_GEM_THINKING}")
     # Laudos e imagens do dia já foram anexados — apaga a pasta da execução.
     # (Só nomes de arquivo seguem no resumo; ninguém lê o conteúdo depois daqui.)
     try:
