@@ -485,3 +485,21 @@ def test_erro_temporario_nao_e_fatal():
     assert not _gem_fatal("timeout ao ler resposta")
     assert not _gem_fatal("Connection reset by peer")
     assert _gem_estado["fatal"] is None
+
+
+# ── Janela de datas (regra do dono, 28/07) ──────────────────────────────────
+# "se a data for próxima, nós podemos seguir". O exame nem sempre é no dia da
+# guia: DANIELLE tinha guia de 20/07 e exames em 22/07, e morria em SEM_MATCH.
+
+def test_janela_busca_do_dia_mais_proximo_para_o_mais_distante():
+    from esteira import _offsets_janela, _data_mais
+    assert _offsets_janela(2) == [1, -1, 2, -2]
+    assert [_data_mais("20/07/2026", o) for o in _offsets_janela(2)] == [
+        "21/07/2026", "19/07/2026", "22/07/2026", "18/07/2026"]
+
+
+def test_data_mais_atravessa_mes_e_rejeita_lixo():
+    from esteira import _data_mais
+    assert _data_mais("30/07/2026", 3) == "02/08/2026"
+    assert _data_mais("01/03/2026", -1) == "28/02/2026"
+    assert _data_mais("xx", 1) is None

@@ -412,6 +412,31 @@ def preparar_anexo(filename, blob):
     return None, f"formato .{ext or '?'} não suportado"
 
 
+# Janela de busca do exame, em dias, em torno da data da guia. 0 desliga (volta ao
+# comportamento antigo: só o dia exato). Regra do dono: "se a data for próxima,
+# podemos seguir". Sete dias cobre remarcação e retorno sem alcançar o mês seguinte.
+_JANELA_DIAS = int(os.environ.get("FATURAR_JANELA_DIAS", "7"))
+
+
+def _offsets_janela(n):
+    """Dias a tentar, do mais PRÓXIMO da guia para o mais distante: +1,-1,+2,-2..."""
+    out = []
+    for i in range(1, n + 1):
+        out.append(i)
+        out.append(-i)
+    return out
+
+
+def _data_mais(data, dias):
+    """'DD/MM/AAAA' + N dias -> 'DD/MM/AAAA'. None se a data não for válida."""
+    import datetime as _dt
+    try:
+        d = _dt.datetime.strptime(data, "%d/%m/%Y").date() + _dt.timedelta(days=dias)
+        return d.strftime("%d/%m/%Y")
+    except Exception:
+        return None
+
+
 def _exame_do_laudo(p):
     """Exame canônico embutido no nome do arquivo: LAUDO_<EXAME>_<acc>_TIPO.pdf"""
     m = re.match(r"LAUDO_(.+?)_\d+_", os.path.basename(p))
@@ -557,10 +582,47 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
             return {"gto": g["gto"], "nome": g["nome"], "status": "AMBIGUO",
                     "dt_dl": time.monotonic() - t0}
         accs = sorted({a for v in casam.values() for a in v}) if casam else []
+        # JANELA DE DATA — regra do dono (28/07): "se a data for próxima, podemos
+        # seguir". O exame nem sempre é feito no dia da liberação da guia: paciente
+        # remarca, volta depois, ou o exame é refeito. A busca olhava UM dia só
+        # (00:00 a 23:59 da data da guia) e a guia morria em SEM_MATCH. Caso
+        # DANIELLE GOMES DE JESUS PEREIRA — guia de 20/07, exames em 22/07.
+        #
+        # Guardas: o nome continua sendo validado do mesmo jeito (nada é afrouxado
+        # aqui); e se aparecer exame em MAIS DE UM dia da janela, não dá pra saber
+        # a qual guia cada um pertence — vira pendência, não chute.
+        _dias_janela = []
+        if not accs and _JANELA_DIAS:
+            _achados = {}
+            for _off in _offsets_janela(_JANELA_DIAS):
+                _d = _data_mais(data, _off)
+                if not _d:
+                    continue
+                try:
+                    _wl2 = listar_worklist_por_pacientes(pg, _d, [g["nome"]])
+                except Exception:
+                    continue
+                _c2 = _casam_por_paciente(_wl2, nn)
+                if _c2:
+                    if len(_c2) > 1:      # dois pacientes com nome compatível nesse dia
+                        return {"gto": g["gto"], "nome": g["nome"], "status": "AMBIGUO",
+                                "dt_dl": time.monotonic() - t0}
+                    _achados[_d] = (_wl2, sorted({a for v in _c2.values() for a in v}))
+            _dias_janela = sorted(_achados)
+            if len(_achados) == 1:
+                _d = _dias_janela[0]
+                wl, accs = _achados[_d][0], _achados[_d][1]
+                g["data_exame_real"] = _d
+            elif len(_achados) > 1:
+                return {"gto": g["gto"], "nome": g["nome"], "status": "AMBIGUO",
+                        "dias_com_exame": _dias_janela,
+                        "dt_dl": time.monotonic() - t0}
         if not accs:
-            return {"gto": g["gto"], "nome": g["nome"], "status": "SEM_MATCH", "dt_dl": time.monotonic() - t0}
+            return {"gto": g["gto"], "nome": g["nome"], "status": "SEM_MATCH",
+                    "janela": _JANELA_DIAS, "dt_dl": time.monotonic() - t0}
         pac = {"nome": g["nome"], "cod_pac": "WL" + accs[0], "accessions": accs}
-    res = _processar_paciente(pg, ctx, pac, wl, tmp, data)
+    _data_exame = g.get("data_exame_real") or data
+    res = _processar_paciente(pg, ctx, pac, wl, tmp, _data_exame)
     pasta = os.path.join(tmp, res["pasta"])
     nf = len(os.listdir(pasta)) if os.path.isdir(pasta) else 0
     status = "BAIXADO" if nf > 0 else "SEM_ARQUIVOS"
@@ -571,6 +633,9 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
             # Vazio no fallback por nome (cod 'WL*'), onde não há analítico pra
             # comparar — aí o filtro cai na heurística antiga, como sempre fez.
             "extras_acc": res.get("accessions_extras") or [],
+            # exame achado em dia diferente do da guia: fica REGISTRADO, para a
+            # operadora saber que a data não é a mesma
+            "data_exame_real": g.get("data_exame_real"),
             # exames da guia lidos do PORTAL (fonte autoritativa) — usados quando o
             # PDF da GTO no prontuário vem sem a tabela de procedimentos
             "eventos_portal": g.get("eventos_portal") or []}
@@ -1346,6 +1411,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     # esconde o token interno 'documentacao_completa'
                     _gp = [x for x in _gp if not str(x).startswith("documentacao_")]
                     _extra += f" | GTO pede: {_gp}"
+                if item.get("data_exame_real"):
+                    _t(f"[DATA] GTO {item['gto']} — exame encontrado em "
+                       f"{item['data_exame_real']}, guia é de {data}")
                 _fn = dec.get("funil") or {}
                 if dec.get("descartados"):
                     _t(f"[DESCARTE] GTO {item['gto']} — anexo(s) NÃO lido(s): "
@@ -1631,23 +1699,32 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             _mot_st = {
                 "SEM_MATCH": (
                     f"NÃO FATUROU porque o paciente da guia não foi encontrado no "
-                    f"PRORADIS no dia {data}. O sistema procurou pelo nome que está na "
-                    f"guia e não achou exame nenhum nesse dia. Pode ser: o exame foi "
-                    f"feito em outro dia, o nome está escrito diferente nos dois "
-                    f"sistemas, ou o exame não foi registrado. "
-                    f"O QUE FAZER: conferir com a unidade se o exame foi realizado e se "
-                    f"o nome no PRORADIS bate com o da guia."),
+                    f"PRORADIS. O sistema procurou pelo nome que está na guia em {data} "
+                    f"e também nos {_JANELA_DIAS} dias antes e depois, e não achou exame "
+                    f"nenhum. Como a janela de datas já foi varrida, a causa mais "
+                    f"provável é o NOME estar escrito diferente nos dois sistemas "
+                    f"(abreviação, nome de casada, erro de digitação) ou o exame não "
+                    f"ter sido registrado. "
+                    f"O QUE FAZER: procurar o paciente no PRORADIS pelo primeiro nome e "
+                    f"conferir se o cadastro bate com o da guia."),
                 "SEM_ARQUIVOS": (
                     f"NÃO FATUROU porque o exame existe no PRORADIS em {data}, mas não "
                     f"há laudo nem imagem para baixar. O exame foi registrado e ainda "
                     f"não tem entregável. "
                     f"O QUE FAZER: cobrar a emissão do laudo com o radiologista."),
                 "AMBIGUO": (
-                    "NÃO FATUROU porque há mais de um paciente com esse nome no PRORADIS "
-                    "no mesmo dia, e o sistema não tem como saber qual é o certo. Anexar "
-                    "o exame da pessoa errada é pior do que não anexar. "
-                    "O QUE FAZER: abrir os dois cadastros, identificar o paciente da guia "
-                    "e anexar manualmente."),
+                    (f"NÃO FATUROU porque este paciente tem exame em MAIS DE UM dia "
+                     f"próximo à guia ({', '.join(r.get('dias_com_exame') or [])}) e o "
+                     f"sistema não tem como saber qual exame pertence a esta guia — pode "
+                     f"haver outra guia para o outro dia. "
+                     f"O QUE FAZER: conferir qual data corresponde a esta guia e anexar "
+                     f"manualmente.")
+                    if r.get("dias_com_exame") else
+                    ("NÃO FATUROU porque há mais de um paciente com esse nome no PRORADIS "
+                     "no mesmo dia, e o sistema não tem como saber qual é o certo. Anexar "
+                     "o exame da pessoa errada é pior do que não anexar. "
+                     "O QUE FAZER: abrir os dois cadastros, identificar o paciente da guia "
+                     "e anexar manualmente.")),
                 "ERRO": (
                     "NÃO FATUROU por falha técnica nossa, não da clínica nem do "
                     "radiologista — o processamento desta guia foi interrompido. "
@@ -1698,6 +1775,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             cat = "revisao"
         decisoes.append({
             "gto": r["gto"], "paciente": r["nome"], "categoria": cat,
+            "data_exame_real": r.get("data_exame_real"),
             "anexado": r.get("anexado"),
             "anexar_erro": r.get("anexar_erro"),   # p/ o motivo da pendência ser o REAL
             "laudo_imgs": dec.get("plano_laudo_imgs", []),
