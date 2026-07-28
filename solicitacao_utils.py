@@ -154,9 +154,13 @@ def canon_exames(texto: str) -> set:
 # não tem telerradiografia, então NÃO passa por aqui e continua virando pendência
 # (comportamento de hoje, não regride). A correção estrutural é canonizar o
 # subtipo; esta função é o passo conservador.
-_DOC_ANCORAS = {"panoramica", "telerradiografia"}
-_DOC_COMPONENTES = {"panoramica", "telerradiografia", "fotografia",
-                    "modelo", "periapical", "oclusal", "carpal"}
+# COMPOSIÇÃO DA DOC ORTO COMPLETA — regra do dono (28/07): "doc orto completa
+# sempre terá esses exames". São estes quatro, e os quatro precisam estar no
+# pedido. Antes eu exigia duas âncoras + 3 componentes quaisquer, o que era mais
+# frouxo: aceitaria como documentação um pedido sem modelos.
+# periapical/oclusal/carpal podem vir junto e não atrapalham — só não bastam.
+_DOC_ORTO = {"panoramica", "telerradiografia", "fotografia", "modelo"}
+_DOC_COMPONENTES = _DOC_ORTO | {"periapical", "oclusal", "carpal"}
 
 
 def componentes_da_documentacao(ex: set) -> set:
@@ -181,7 +185,7 @@ def expande_documentacao(ex: set) -> set:
     ex = set(ex or ())
     if "documentacao" in ex:
         return ex
-    if _DOC_ANCORAS <= ex and len(ex & _DOC_COMPONENTES) >= 3:
+    if _DOC_ORTO <= ex:                  # os QUATRO, conforme a regra do dono
         return ex | {"documentacao"}
     return ex
 
