@@ -57,7 +57,7 @@ def test_a_uniao_reprovaria_a_mesma_solicitacao():
     idx, _a, motivo = _escolher_solicitacao(leituras, "MARIA DA SILVA SANTOS",
                                             {"panoramica", "interproximal"}, 1)
     assert idx is None
-    assert motivo == "solicitacao do paciente nao cobre os exames da GTO"
+    assert motivo == "NAO_COBRE"
 
 
 # ── Documentação x componentes (Bug 2) ───────────────────────────────────────
@@ -377,10 +377,13 @@ def preparar_anexo_seguro(nome, blob):
 
 
 def test_doc_orto_exige_os_quatro_exames():
-    """Regra do dono (28/07): doc orto completa SEMPRE tem telerradiografia,
-    fotos, panorâmica e modelos. Faltando um, não é documentação completa."""
-    from solicitacao_utils import _DOC_ORTO
-    assert _DOC_ORTO == {"panoramica", "telerradiografia", "fotografia", "modelo"}
+    """Regra do dono (28/07, corrigida): a Doc Orto COMPLETA é telerradiografia +
+    fotos + modelos. NÃO inclui panorâmica. A Doc Orto CONTROLE é fotos +
+    panorâmica, somente."""
+    from solicitacao_utils import _DOC_ORTO, _DOC_CONTROLE
+    assert _DOC_ORTO == {"telerradiografia", "fotografia", "modelo"}
+    assert _DOC_CONTROLE == {"fotografia", "panoramica"}
+    assert "panoramica" not in _DOC_ORTO
     assert "documentacao_completa" in expande_documentacao(set(_DOC_ORTO))
     # Faltando qualquer um dos quatro, deixa de ser COMPLETA. Pode continuar
     # servindo para um subtipo menor (Controle) — por isso o alvo é o token
@@ -421,14 +424,14 @@ def test_so_os_quatro_cobrem_a_doc_completa():
     sem_modelo = expande_documentacao({"panoramica", "telerradiografia",
                                        "fotografia", "periapical", "oclusal"})
     assert not canon_exames("Doc Orto Compl") <= sem_modelo   # falta modelo
-    assert canon_exames("Doc Orto Contro") <= sem_modelo      # controle: cobre
+    assert canon_exames("Doc Orto Contro") <= sem_modelo      # foto+panoramica: cobre
 
 
-def test_doc_completa_com_os_quatro_cobre_tudo():
-    from solicitacao_utils import _DOC_ORTO
-    lido = expande_documentacao(set(_DOC_ORTO))
-    assert canon_exames("Doc Orto Compl") <= lido
-    assert canon_exames("Doc Orto Contro") <= lido
+def test_doc_completa_nao_cobre_automaticamente_o_controle():
+    """São composições diferentes: a completa não tem panorâmica, o controle tem."""
+    from solicitacao_utils import _DOC_ORTO, _DOC_CONTROLE
+    assert canon_exames("Doc Orto Compl") <= expande_documentacao(set(_DOC_ORTO))
+    assert canon_exames("Doc Orto Contro") <= expande_documentacao(set(_DOC_CONTROLE))
 
 
 def test_motivo_diz_o_que_falta_e_nao_vaza_token_interno():
@@ -439,8 +442,10 @@ def test_motivo_diz_o_que_falta_e_nao_vaza_token_interno():
     alvo = canon_exames("Doc Orto Compl") | {"periapical"}
     idx, _a, motivo = _escolher_solicitacao(leituras, "ANDNA JAIRA NEVES", alvo, 1)
     assert idx is None
-    assert motivo == "solicitacao do paciente nao cobre os exames da GTO"
-    assert "documentacao_completa" in alvo          # existe internamente...
+    assert motivo == "NAO_COBRE"
+    from solicitacao_utils import lista_amigavel
+    # o token interno nunca aparece no texto que a operadora le
+    assert "documentacao_completa" not in lista_amigavel(alvo)
 
 
 def test_diag_enxerga_a_esteira_rodando():

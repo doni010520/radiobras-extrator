@@ -43,7 +43,8 @@ from extrair_anexos_dia import anexos_do_paciente
 from gto_utils import (is_gto_pdf, extrair_observacao, gto_e_desta_guia,
                        _BOILER_49)
 from solicitacao_utils import (gto_exames, canon_exames, gto_dispensa_laudo,
-                               expande_documentacao, componentes_da_documentacao)
+                               expande_documentacao, componentes_da_documentacao,
+                               lista_amigavel)
 import json
 import re
 
@@ -242,12 +243,12 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands):
     if melhor is not None:
         return melhor[1], melhor[2], None
     if not leituras:
-        return None, None, "Gemini nao leu nenhum anexo"
+        return None, None, "LEITURA_VAZIA"
     if not gto_ex:
-        return None, None, "GTO ilegivel (sem exames de referencia)"
+        return None, None, "GTO_ILEGIVEL"
     if not algum_pac:
-        return None, None, "nenhum anexo com paciente compativel com a GTO"
-    return None, None, "solicitacao do paciente nao cobre os exames da GTO"
+        return None, None, "PACIENTE_INCOMPATIVEL"
+    return None, None, "NAO_COBRE"
 
 
 # NÃO listar nomes de exame aqui. A versão anterior enumerava
@@ -784,7 +785,14 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     "candidatos": len(cands), "descartados": len(out.get("descartados") or []),
                     "convertidos": len(out.get("convertidos") or [])}
     if not cands:
-        out["decisao"] = {"anexar": False, "motivo": "sem anexo candidato a solicitação"}
+        out["decisao"] = {"anexar": False, "motivo": (
+            "NÃO FATUROU porque não há nenhum pedido do dentista anexado ao "
+            "prontuário deste paciente. O sistema abriu o prontuário e não "
+            f"encontrou nenhum documento que sirva como pedido"
+            + (f" ({len(out.get('descartados') or [])} anexo(s) não puderam ser "
+               f"lidos: {'; '.join(out.get('descartados') or [])[:160]})"
+               if out.get("descartados") else "")
+            + ". O QUE FAZER: pedir à clínica que anexe o pedido no prontuário.")}
         return out
     contents = []
     for i, (fn, mime, blob, saved) in enumerate(cands):
@@ -815,7 +823,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             # Falhou SÓ na cobertura de exames? Manuscrito costuma sair sub-lido na
             # 1ª passada (ex.: leu "periapical" e perdeu "panorâmica"). Releitura
             # dirigida do(s) candidato(s) e nova decisão determinística.
-            if idx is None and _motivo == "solicitacao do paciente nao cobre os exames da GTO":
+            if idx is None and _motivo == "NAO_COBRE":
                 _reler_exames_focado(gem, cands, leituras, pac["nome"])
                 idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex, len(cands))
             candidato_valido = idx is not None
@@ -836,7 +844,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                             and _nomes_compat(_a2.get("paciente_lido") or "", pac["nome"])):
                         _lidos = _a2.get("exames_lidos") or []
                         break
-                if _motivo == "solicitacao do paciente nao cobre os exames da GTO":
+                if _motivo == "NAO_COBRE":
                     _cn = sorted(canon_exames(" ".join(str(e) for e in _lidos)))
                     # MESMO conjunto usado no critério (_alvo_ex). Mensagem e regra
                     # têm de ser a mesma coisa: quando divergiam, a pendência saía
@@ -848,9 +856,33 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     _falta = sorted(set(_pede) - set(_cn))
                     # Diz O QUE FALTA, não só os dois conjuntos: é o que a operadora
                     # precisa para cobrar o exame certo do dentista.
-                    _motivo = (f"Falta no pedido do dentista: {', '.join(_falta) or '?'}"
-                               f" — a guia autoriza [{', '.join(_pede)}] e o pedido traz"
-                               f" [{', '.join(_cn) or 'nada legível'}]")
+                    _motivo = (
+                        f"NÃO FATUROU porque o pedido do dentista não cobre tudo que a "
+                        f"guia autoriza. FALTA no pedido: {lista_amigavel(_falta)}. "
+                        f"A guia autoriza {lista_amigavel(_pede)}; o pedido encontrado "
+                        f"no prontuário pede {lista_amigavel(_cn)}. "
+                        f"O QUE FAZER: pedir à clínica um pedido que inclua "
+                        f"{lista_amigavel(_falta)}.")
+                elif _motivo == "PACIENTE_INCOMPATIVEL":
+                    _motivo = (
+                        "NÃO FATUROU porque nenhum documento do prontuário está no nome "
+                        "deste paciente. O prontuário tem anexos, mas o nome lido em cada "
+                        "um não confere com o nome da guia — pode ser pedido em nome de "
+                        "outra pessoa (mãe, responsável) ou cadastro divergente. "
+                        "O QUE FAZER: conferir no prontuário se o pedido é mesmo deste "
+                        "paciente e, se for, corrigir o nome no cadastro.")
+                elif _motivo == "GTO_ILEGIVEL":
+                    _motivo = (
+                        "NÃO FATUROU porque o sistema não conseguiu ler quais exames a "
+                        "guia autoriza — nem no PDF da guia, nem na ficha do portal. "
+                        "Sem saber o que a guia pede, não dá para conferir o pedido. "
+                        "O QUE FAZER: abrir a guia no portal e conferir manualmente. "
+                        "(Falha nossa, não da clínica.)")
+                elif _motivo == "LEITURA_VAZIA":
+                    _motivo = (
+                        "NÃO FATUROU porque a leitura dos anexos do prontuário não "
+                        "retornou nada. Normalmente é falha temporária da leitura. "
+                        "O QUE FAZER: reprocessar o dia. (Falha nossa, não da clínica.)")
                 dec = {"indice_solicitacao": None, "exames_batem": False,
                        "exames_lidos": _lidos, "paciente_bate": False, "anexar": False,
                        "motivo": _motivo, "leituras": leituras}
@@ -1568,12 +1600,30 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         _st = r.get("status")
         if _st in ("SEM_MATCH", "SEM_ARQUIVOS", "AMBIGUO", "ERRO"):
             _mot_st = {
-                "SEM_MATCH": (f"Exame não encontrado no PRORADIS em {data} — verificar com a "
-                              f"unidade se o exame foi realizado/registrado no sistema"),
-                "SEM_ARQUIVOS": (f"Exame consta no PRORADIS em {data}, mas sem laudo/imagem "
-                                 f"disponível para baixar — laudo provavelmente não emitido"),
-                "AMBIGUO": "Mais de um paciente com esse nome no PRORADIS no dia — conferir manualmente",
-                "ERRO": f"Falha técnica ao processar — reprocessar o dia. Detalhe: {str(r.get('erro') or '')[:110]}",
+                "SEM_MATCH": (
+                    f"NÃO FATUROU porque o paciente da guia não foi encontrado no "
+                    f"PRORADIS no dia {data}. O sistema procurou pelo nome que está na "
+                    f"guia e não achou exame nenhum nesse dia. Pode ser: o exame foi "
+                    f"feito em outro dia, o nome está escrito diferente nos dois "
+                    f"sistemas, ou o exame não foi registrado. "
+                    f"O QUE FAZER: conferir com a unidade se o exame foi realizado e se "
+                    f"o nome no PRORADIS bate com o da guia."),
+                "SEM_ARQUIVOS": (
+                    f"NÃO FATUROU porque o exame existe no PRORADIS em {data}, mas não "
+                    f"há laudo nem imagem para baixar. O exame foi registrado e ainda "
+                    f"não tem entregável. "
+                    f"O QUE FAZER: cobrar a emissão do laudo com o radiologista."),
+                "AMBIGUO": (
+                    "NÃO FATUROU porque há mais de um paciente com esse nome no PRORADIS "
+                    "no mesmo dia, e o sistema não tem como saber qual é o certo. Anexar "
+                    "o exame da pessoa errada é pior do que não anexar. "
+                    "O QUE FAZER: abrir os dois cadastros, identificar o paciente da guia "
+                    "e anexar manualmente."),
+                "ERRO": (
+                    "NÃO FATUROU por falha técnica nossa, não da clínica nem do "
+                    "radiologista — o processamento desta guia foi interrompido. "
+                    f"O QUE FAZER: reprocessar o dia. Detalhe técnico: "
+                    f"{str(r.get('erro') or '')[:200]}"),
             }[_st]
             _cat_st = {"SEM_MATCH": "sem_exame", "SEM_ARQUIVOS": "sem_exame",
                        "AMBIGUO": "revisao", "ERRO": "erro"}[_st]
@@ -1601,6 +1651,18 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             cat = "auto"               # laudo ok (ou dispensado)
         elif dec.get("decisao") is None:
             cat = "erro"               # _decidir falhou (Gemini/anexos) — NÃO é culpa da clínica
+            _e = str(dec.get("erro") or "")
+            if "429" in _e or "RESOURCE_EXHAUSTED" in _e or "quota" in _e.lower():
+                dec["erro"] = ("NÃO FATUROU porque a leitura automática ficou "
+                               "indisponível: os créditos da API de leitura acabaram. "
+                               "Nenhuma guia é lida enquanto isso. O QUE FAZER: "
+                               "recarregar os créditos e reprocessar o dia. "
+                               "(Falha nossa — o documento do paciente pode estar "
+                               "perfeito.) Detalhe: " + _e[:120])
+            elif _e:
+                dec["erro"] = ("NÃO FATUROU por falha técnica na leitura dos documentos "
+                               "— não é problema do documento nem da clínica. "
+                               "O QUE FAZER: reprocessar o dia. Detalhe: " + _e[:160])
         elif d.get("indice_solicitacao") is None:
             cat = "sem_solicitacao"
         else:

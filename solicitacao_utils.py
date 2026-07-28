@@ -164,9 +164,46 @@ def canon_exames(texto: str) -> set:
 # pedido. Antes eu exigia duas âncoras + 3 componentes quaisquer, o que era mais
 # frouxo: aceitaria como documentação um pedido sem modelos.
 # periapical/oclusal/carpal podem vir junto e não atrapalham — só não bastam.
-_DOC_ANCORAS = {"panoramica", "telerradiografia"}
-_DOC_ORTO = {"panoramica", "telerradiografia", "fotografia", "modelo"}
-_DOC_COMPONENTES = _DOC_ORTO | {"periapical", "oclusal", "carpal"}
+# COMPOSIÇÃO, definida pelo dono (28/07):
+#   Doc Orto COMPLETA  = telerradiografia + fotografia + modelo. NÃO inclui
+#                        panorâmica — eu havia incluído por engano, lendo o pedido
+#                        da MIRLA (que traz panorâmica) como se fosse a definição
+#                        do procedimento.
+#   Doc Orto CONTROLE  = fotografia + panorâmica, somente.
+# Exame a mais no pedido não atrapalha; o que conta é cobrir o que a guia autoriza.
+_DOC_ORTO = {"telerradiografia", "fotografia", "modelo"}
+_DOC_CONTROLE = {"fotografia", "panoramica"}
+_DOC_COMPONENTES = _DOC_ORTO | _DOC_CONTROLE | {"periapical", "oclusal", "carpal"}
+
+
+def nome_amigavel(canon: str) -> str:
+    """Termo canônico -> como a operadora fala. 'telerradiografia' não é o que ela
+    procura no papel; 'telerradiografia (cefalométrica)' é."""
+    return {
+        "panoramica": "panorâmica",
+        "telerradiografia": "telerradiografia (cefalométrica)",
+        "periapical": "periapical",
+        "interproximal": "interproximal (bitewing)",
+        "fotografia": "fotografias intra e extrabucais",
+        "modelo": "modelos",
+        "oclusal": "oclusal",
+        "carpal": "carpal (idade óssea)",
+        "tomografia": "tomografia",
+        "atm": "ATM",
+        "seios_da_face": "seios da face",
+        "documentacao": "documentação ortodôntica",
+        "documentacao_completa": "documentação ortodôntica completa",
+    }.get(canon, canon)
+
+
+def lista_amigavel(exames) -> str:
+    vis = [nome_amigavel(e) for e in sorted(exames or [])
+           if not str(e).startswith("documentacao_")]
+    if not vis:
+        return "nenhum"
+    if len(vis) == 1:
+        return vis[0]
+    return ", ".join(vis[:-1]) + " e " + vis[-1]
 
 
 def componentes_da_documentacao(ex: set) -> set:
@@ -191,14 +228,12 @@ def expande_documentacao(ex: set) -> set:
     ex = set(ex or ())
     if "documentacao" in ex:
         return ex
-    if _DOC_ORTO <= ex:                  # os QUATRO -> é uma doc orto COMPLETA
-        return ex | {"documentacao", "documentacao_completa"}
-    # Subtipos que NÃO são a completa (Controle, Básica, Periodontal): a regra dos
-    # quatro não se aplica. Basta o que toda documentação ortodôntica tem —
-    # panorâmica e telerradiografia — mais um terceiro componente.
-    if _DOC_ANCORAS <= ex and len(ex & _DOC_COMPONENTES) >= 3:
-        return ex | {"documentacao"}
-    return ex
+    out = set(ex)
+    if _DOC_ORTO <= ex:                  # telerradiografia + fotografia + modelo
+        out |= {"documentacao", "documentacao_completa"}
+    if _DOC_CONTROLE <= ex:              # fotografia + panorâmica
+        out |= {"documentacao"}
+    return out
 
 
 def _tem(texto: str, marks: list) -> bool:
