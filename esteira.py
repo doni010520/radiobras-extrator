@@ -75,6 +75,27 @@ _GEM_THINKING = int(os.environ.get("GEMINI_THINKING_BUDGET", "0"))
 _gem_tokens = {"in": 0, "out": 0, "chamadas": 0}
 _gem_tokens_lock = threading.Lock()
 
+# Erro que NÃO adianta repetir: crédito/cota acabou, chave inválida, sem permissão.
+# Insistir nesses casos foi o que fez uma execução da usuária levar 20 MINUTOS em
+# 28/07 — cada GTO tentava 3x, e cada tentativa reenviava até 15 documentos ao
+# Gemini antes de levar o 429. 40 guias × 3 tentativas de upload = 20 minutos para
+# terminar em nada, com 40 pendências falsas no fim.
+_GEM_FATAL = re.compile(r"RESOURCE_EXHAUSTED|429|quota|prepayment|credit|"
+                        r"PERMISSION_DENIED|UNAUTHENTICATED|API[_ ]?key", re.I)
+_gem_estado = {"fatal": None}
+
+
+def _gem_fatal(e) -> bool:
+    """Marca a leitura como indisponível para o RESTO da execução. A partir daí
+    nenhuma GTO chama o Gemini — falha na hora, com motivo claro, em vez de
+    arrastar a execução inteira."""
+    if not _GEM_FATAL.search(str(e)):
+        return False
+    with _gem_tokens_lock:
+        if _gem_estado["fatal"] is None:
+            _gem_estado["fatal"] = str(e)[:200]
+    return True
+
 
 def _gem_cfg():
     from google.genai import types
@@ -794,6 +815,11 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                if out.get("descartados") else "")
             + ". O QUE FAZER: pedir à clínica que anexe o pedido no prontuário.")}
         return out
+    if _gem_estado["fatal"]:
+        # já sabemos que a leitura está fora do ar nesta execução: falha na hora
+        out["erro"] = ("leitura indisponível nesta execução: "
+                       + str(_gem_estado["fatal"])[:140])
+        return out
     contents = []
     for i, (fn, mime, blob, saved) in enumerate(cands):
         contents.append(f"[anexo {i}]")
@@ -984,7 +1010,9 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                         f.write(blob)
             break
         except Exception as e:
-            out["erro"] = f"gemini: {str(e)[:80]}"
+            out["erro"] = f"gemini: {str(e)[:120]}"
+            if _gem_fatal(e):
+                break            # crédito/cota/chave: repetir só faz perder tempo
             time.sleep(1.0 * (tent + 1))
     return out
 
@@ -1049,8 +1077,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     _segmentos = plano["segmentos"] if plano else SEGMENTOS
     _odo_user = conta if (conta and plano) else None   # None -> usa ODONTOPREV_USER padrão
     t_glob = time.monotonic()
-    with _gem_tokens_lock:               # consumo é POR EXECUÇÃO
+    with _gem_tokens_lock:               # consumo e estado são POR EXECUÇÃO
         _gem_tokens.update({"in": 0, "out": 0, "chamadas": 0})
+        _gem_estado["fatal"] = None
 
     def _t(m):
         log(f"[{time.monotonic() - t_glob:6.0f}s] {m}")
@@ -1706,6 +1735,10 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
        f"{resumo['solic_auto']} solic-auto / {resumo['justificativa']} c-justificativa / "
        f"{resumo['revisao']} revisão | anexados ok={resumo['anexado_ok']} dry={resumo['anexado_dry']} "
        f"falhou={resumo['anexado_falhou']} | TOTAL={resumo['tempo_total']}s")
+    if _gem_estado["fatal"]:
+        _t(f"[GEMINI] *** LEITURA INDISPONÍVEL a partir de certo ponto desta "
+           f"execução — as guias seguintes NÃO foram lidas. Motivo: "
+           f"{_gem_estado['fatal']}. Recarregue os créditos e reprocesse o dia. ***")
     _t(f"[GEMINI] {_gem_tokens['chamadas']} chamadas "
        f"({resumo['gemini_chamadas_por_gto']}/GTO) | tokens in={_gem_tokens['in']:,} "
        f"out={_gem_tokens['out']:,} | thinking_budget={_GEM_THINKING}")
