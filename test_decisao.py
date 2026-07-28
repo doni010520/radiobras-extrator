@@ -462,3 +462,26 @@ def test_diag_enxerga_a_esteira_rodando():
         app._esteira_jobs["j1"]["done"] = True
         assert not [k for k, j in app._esteira_jobs.items() if not j.get("done")]
     app._esteira_jobs.clear()
+
+
+# ── Falha fatal do Gemini nao pode arrastar a execucao (28/07) ───────────────
+# A usuaria relatou uma execucao de 20 MINUTOS. Causa: cada GTO tentava 3x e cada
+# tentativa reenviava ate 15 documentos antes de levar o 429 de credito esgotado.
+
+def test_erro_de_credito_e_reconhecido_como_fatal():
+    from esteira import _gem_fatal, _gem_estado
+    _gem_estado["fatal"] = None
+    assert _gem_fatal("429 RESOURCE_EXHAUSTED. Your prepayment credits ran out")
+    assert _gem_estado["fatal"]
+    _gem_estado["fatal"] = None
+    assert _gem_fatal("PERMISSION_DENIED: API key invalid")
+    _gem_estado["fatal"] = None
+
+
+def test_erro_temporario_nao_e_fatal():
+    """Timeout ou erro de rede DEVE continuar tentando — só crédito/chave para."""
+    from esteira import _gem_fatal, _gem_estado
+    _gem_estado["fatal"] = None
+    assert not _gem_fatal("timeout ao ler resposta")
+    assert not _gem_fatal("Connection reset by peer")
+    assert _gem_estado["fatal"] is None
