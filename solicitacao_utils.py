@@ -33,7 +33,11 @@ _CANON = [
     (r"panor", "panoramica"),
     (r"periap", "periapical"),
     (r"interprox|bite.?wing|bitewing", "interproximal"),
-    (r"telerr|cefalom|ricketts|\bceph\b|tele radio", "telerradiografia"),
+    # 'telerad' (um R só) e 'tele-radio': o dentista escreve à mão e abrevia.
+    # Caso MIRLA (22/07 Centro): "Teleradigrafia lateral com tweed e Usp" não casava
+    # com `telerr`, a telerradiografia sumia, e a documentação ortodôntica — que
+    # exige panorâmica E telerradiografia como âncoras — era reprovada inteira.
+    (r"telerr|telerad|tele.?radio|cefalom|ricketts|\bceph\b", "telerradiografia"),
     # "documenta..." + as ABREVIACOES DO PORTAL OdontoPrev, colhidas do catalogo
     # /v1/gto/eventos em 26/07: "Doc Orto Basica/Compl/Espec./Contro", "DocOrtoComp
     # II", "Doc Ortopédica", "Doc Periodontal", "Doc Perio BD", "Doc Diag Imp BD".
@@ -44,12 +48,84 @@ _CANON = [
     # \btc\b com fronteira DOS DOIS LADOS: sem ela, "etc" virava "tomografia" e a
     # solicitacao passava a "cobrir" um exame que ninguem pediu.
     (r"tomograf|\btc\b|cone beam|feixe c", "tomografia"),
-    (r"fotograf", "fotografia"),
+    # "Fotos intra e extras bucais" é como o dentista escreve — `fotograf` não pega.
+    # \bfotos?\b com fronteira dos dois lados para não casar "fotossensível".
+    (r"fotograf|\bfotos?\b", "fotografia"),
     (r"modelo", "modelo"),
     (r"carpal|\bmao\b|idade ossea", "carpal"),
     (r"\batm\b", "atm"),
     (r"oclus", "oclusal"),
 ]
+
+
+# ── Tolerância a erro de grafia ───────────────────────────────────────────────
+# Acrescentar um padrão ao _CANON a cada erro descoberto é corrida perdida: o
+# pedido é manuscrito e cada dentista escreve de um jeito. Aqui a comparação é por
+# DISTÂNCIA DE EDIÇÃO contra um vocabulário FECHADO — o mesmo mecanismo que o
+# código já usa para nome de paciente ("IONICE"/"JONICE").
+#
+# Guardas, porque reconhecer exame que não foi pedido faz uma solicitação "cobrir"
+# o que ela não cobre — e aí o sistema fatura errado:
+#   - só palavras LONGAS (>=8 letras): palavra curta colide fácil;
+#   - tolerância de UMA letra, sempre. Com 2, 'tomografia' e 'fotografia' passam a
+#     colidir — exame caro confundido com foto. Uma letra já resolve o caso real
+#     ('teleradigrafia' está a 1 de 'teleradiografia');
+#   - EMPATE entre exames diferentes = descarta. Na dúvida, não reconhece;
+#   - vocabulário fechado, nunca casamento livre.
+_VOCAB = {
+    "panoramica": "panoramica", "panoramicas": "panoramica",
+    "periapical": "periapical", "periapicais": "periapical",
+    "interproximal": "interproximal", "interproximais": "interproximal",
+    "telerradiografia": "telerradiografia", "teleradiografia": "telerradiografia",
+    "telerradiografias": "telerradiografia", "cefalometrica": "telerradiografia",
+    "documentacao": "documentacao", "documentacoes": "documentacao",
+    "tomografia": "tomografia", "tomografias": "tomografia",
+    "fotografia": "fotografia", "fotografias": "fotografia",
+    "radiografia": None,      # genérico demais: existe no vocabulário só para
+                              # ABSORVER a palavra e impedir que ela seja casada
+                              # por engano com 'telerradiografia' (distância 5).
+}
+
+
+def dist_edicao(a: str, b: str, teto: int = 2) -> int:
+    """Levenshtein com corte em `teto` — só interessa saber se é erro de grafia."""
+    if a == b:
+        return 0
+    if abs(len(a) - len(b)) > teto:
+        return teto + 1
+    ant = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        atual = [i]
+        for j, cb in enumerate(b, 1):
+            atual.append(min(ant[j] + 1, atual[j - 1] + 1, ant[j - 1] + (ca != cb)))
+        if min(atual) > teto:
+            return teto + 1
+        ant = atual
+    return ant[-1]
+
+
+_FUZZY_TETO = 1
+
+
+def _fuzzy_exames(n: str) -> set:
+    """Exames reconhecidos por aproximação de grafia. `n` já normalizado."""
+    out = set()
+    for tok in re.findall(r"[a-z]{8,}", n):
+        cand = {}                      # canon -> menor distância encontrada
+        for palavra, canon in _VOCAB.items():
+            d = dist_edicao(tok, palavra, _FUZZY_TETO)
+            if d <= _FUZZY_TETO and d < cand.get(canon, _FUZZY_TETO + 1):
+                cand[canon] = d
+        if not cand:
+            continue
+        melhor_d = min(cand.values())
+        vencedores = [c for c, d in cand.items() if d == melhor_d]
+        # empate entre exames DIFERENTES -> não dá pra saber qual é; descarta.
+        # (None no vocabulário é palavra-isca, tipo 'radiografia': absorve o token
+        #  e impede que ele seja atribuído a um exame por aproximação.)
+        if len(vencedores) == 1 and vencedores[0] is not None:
+            out.add(vencedores[0])
+    return out
 
 
 def canon_exames(texto: str) -> set:
@@ -58,6 +134,7 @@ def canon_exames(texto: str) -> set:
     for pat, canon in _CANON:
         if re.search(pat, n):
             out.add(canon)
+    out |= _fuzzy_exames(n)
     return out
 
 
