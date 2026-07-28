@@ -841,10 +841,16 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     # MESMO conjunto usado no critério (_alvo_ex). Mensagem e regra
                     # têm de ser a mesma coisa: quando divergiam, a pendência saía
                     # com as duas listas idênticas e parecia um absurdo lógico.
-                    _pede = sorted(_alvo_ex)
-                    _motivo = (f"Solicitação encontrada pede [{', '.join(_cn) or '?'}] "
-                               f"mas a GTO pede [{', '.join(_pede)}] — conferir "
-                               f"se o pedido cobre todos os exames")
+                    # 'documentacao_completa' é token INTERNO (distingue a completa
+                    # do controle). Vazava para a mensagem da operadora, que via
+                    # "GTO pede ['documentacao', 'documentacao_completa']" — ruído.
+                    _pede = sorted(x for x in _alvo_ex if not str(x).startswith("documentacao_"))
+                    _falta = sorted(set(_pede) - set(_cn))
+                    # Diz O QUE FALTA, não só os dois conjuntos: é o que a operadora
+                    # precisa para cobrar o exame certo do dentista.
+                    _motivo = (f"Falta no pedido do dentista: {', '.join(_falta) or '?'}"
+                               f" — a guia autoriza [{', '.join(_pede)}] e o pedido traz"
+                               f" [{', '.join(_cn) or 'nada legível'}]")
                 dec = {"indice_solicitacao": None, "exames_batem": False,
                        "exames_lidos": _lidos, "paciente_bate": False, "anexar": False,
                        "motivo": _motivo, "leituras": leituras}
@@ -1270,9 +1276,15 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 if _falta:
                     _extra += f" | FALTA: {'+'.join(_falta)}"
                 if _mot:
-                    _extra += f" | MOTIVO: {str(_mot)[:110]}"
-                if dec.get("gto_exames_desta") or dec.get("gto_exames"):
-                    _extra += f" | GTO pede: {dec.get('gto_exames_desta') or dec.get('gto_exames')}"
+                    # NÃO truncar: o motivo é a justificativa que a operadora leva
+                    # ao dentista. Cortado em 110 caracteres, saía pela metade
+                    # ("...mas a GTO pede [do") e virava ilegível.
+                    _extra += f" | MOTIVO: {_mot}"
+                _gp = dec.get("gto_exames_desta") or dec.get("gto_exames")
+                if _gp:
+                    # esconde o token interno 'documentacao_completa'
+                    _gp = [x for x in _gp if not str(x).startswith("documentacao_")]
+                    _extra += f" | GTO pede: {_gp}"
                 _fn = dec.get("funil") or {}
                 if dec.get("descartados"):
                     _t(f"[DESCARTE] GTO {item['gto']} — anexo(s) NÃO lido(s): "

@@ -429,3 +429,15 @@ def test_doc_completa_com_os_quatro_cobre_tudo():
     lido = expande_documentacao(set(_DOC_ORTO))
     assert canon_exames("Doc Orto Compl") <= lido
     assert canon_exames("Doc Orto Contro") <= lido
+
+
+def test_motivo_diz_o_que_falta_e_nao_vaza_token_interno():
+    """A operadora precisa saber QUAL exame falta no pedido — e 'documentacao_completa'
+    é token interno, nao pode aparecer na mensagem."""
+    leituras = [_leitura(0, "ANDNA JAIRA NEVES", ["panoramica", "telerradiografia",
+                                                 "fotografias", "periapicais", "oclusal"])]
+    alvo = canon_exames("Doc Orto Compl") | {"periapical"}
+    idx, _a, motivo = _escolher_solicitacao(leituras, "ANDNA JAIRA NEVES", alvo, 1)
+    assert idx is None
+    assert motivo == "solicitacao do paciente nao cobre os exames da GTO"
+    assert "documentacao_completa" in alvo          # existe internamente...
