@@ -1543,7 +1543,9 @@ def faturar_run():
     review_dir = f"/tmp/esteira_rev/{jid}"
     job = {"log": [], "done": False, "resumo": None, "error": None,
            "review_dir": review_dir, "execucao_id": None, "t0": _time.monotonic(),
-           "dia": data}
+           # conta e dry ficam no job para o /api/diag conseguir dizer O QUE está
+           # rodando, não só que há algo rodando
+           "dia": data, "conta": plano, "dry": dry}
     _purgar_jobs(_esteira_jobs)
     _esteira_jobs[jid] = job
     gkey = os.environ.get("GEMINI_API_KEY")
@@ -2180,9 +2182,24 @@ def api_diag():
         "odontoprev": bool(os.environ.get("ODONTOPREV_USER") and os.environ.get("ODONTOPREV_PASSWORD")),
     }
     # jobs em memória + últimas execuções (com erro resumido)
+    # ATENÇÃO: contava só `_jobs` (fluxo antigo). As execuções de /faturar vivem em
+    # `_esteira_jobs` e ficavam de fora — o diagnóstico dizia "0 jobs ativos" com a
+    # esteira faturando. Como é por ele que se decide se pode deployar, e deploy no
+    # meio de uma execução MATA o job, a resposta errada aqui custa um faturamento.
     with _jobs_lock:
-        diag["jobs_ativos"] = sum(1 for j in _jobs.values()
-                                  if j.get("status") in ("running", "queued"))
+        _antigos = sum(1 for j in _jobs.values()
+                       if j.get("status") in ("running", "queued"))
+    _esteira_ativa = [{"job": k, "dia": (j.get("data") or j.get("dia")),
+                       "conta": j.get("plano") or j.get("conta"),
+                       "dry": j.get("dry")}
+                      for k, j in list(_esteira_jobs.items()) if not j.get("done")]
+    diag["jobs_ativos"] = _antigos + len(_esteira_ativa)
+    diag["esteira_ativa"] = _esteira_ativa
+    diag["pode_deployar"] = (diag["jobs_ativos"] == 0)
+    with _esteira_ativas_lock:
+        diag["travas"] = [{"dia": d, "conta": c,
+                           "ha_segundos": round(time.monotonic() - v["t"])}
+                          for (d, c), v in _esteira_ativas.items()]
     try:
         diag["runs"] = [{
             "id": r["id"], "plano": r["plano"], "dia": r["dia"], "status": r["status"],
