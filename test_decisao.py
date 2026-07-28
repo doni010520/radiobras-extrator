@@ -374,3 +374,20 @@ def test_formato_desconhecido_devolve_motivo():
 def preparar_anexo_seguro(nome, blob):
     from esteira import preparar_anexo
     return preparar_anexo(nome, blob)
+
+
+def test_doc_orto_exige_os_quatro_exames():
+    """Regra do dono (28/07): doc orto completa SEMPRE tem telerradiografia,
+    fotos, panorâmica e modelos. Faltando um, não é documentação completa."""
+    from solicitacao_utils import _DOC_ORTO
+    assert _DOC_ORTO == {"panoramica", "telerradiografia", "fotografia", "modelo"}
+    assert "documentacao" in expande_documentacao(set(_DOC_ORTO))
+    for faltando in _DOC_ORTO:
+        parcial = set(_DOC_ORTO) - {faltando}
+        assert "documentacao" not in expande_documentacao(parcial), faltando
+
+
+def test_extras_nao_atrapalham_a_doc_orto():
+    from solicitacao_utils import _DOC_ORTO
+    lido = set(_DOC_ORTO) | {"periapical", "oclusal"}
+    assert "documentacao" in expande_documentacao(lido)
