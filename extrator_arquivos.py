@@ -590,7 +590,14 @@ def baixar_imagens(
         seen_hashes.add(h)
         n += 1
         salvos += 1
-        fname = f"ENTREGA_{n}.jpg"
+        # NOME DERIVADO DO CONTEUDO. Antes era um contador posicional
+        # (ENTREGA_1, _2, ...): se a ordem de captura ou a filtragem mudasse
+        # entre execucoes, a MESMA foto virava ENTREGA_2 e a idempotencia do
+        # upload — que compara NOME — nao a reconhecia, e ela era anexada de
+        # novo. Casos CLAUDIA REGINA e VANESSA SILVA BATISTA (12 anexos, com
+        # imagens repetidas). Com o hash do conteudo no nome, a mesma imagem
+        # gera sempre o mesmo nome, entao rodar o dia 300 vezes anexa uma vez.
+        fname = f"ENTREGA_{hashlib.sha1(body).hexdigest()[:10]}.jpg"
         with open(os.path.join(out_dir, fname), "wb") as f:
             f.write(body)
         arquivos.append(fname)

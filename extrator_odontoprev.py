@@ -340,6 +340,31 @@ def _anexos_count(page) -> int:
     return int(m.group(1)) if m else -1
 
 
+def _chave_anexo(nome: str) -> tuple:
+    """Identidade de um anexo, independente de variacoes do nome.
+
+      LAUDO_<exame>_<acc>_<TIPO>.pdf -> ("laudo", acc, TIPO)   (ignora o rotulo do
+          exame, que ja mudou uma vez e faria o mesmo laudo subir de novo)
+      ENTREGA_<hash>.jpg             -> ("img", hash)          (nome vem do conteudo)
+      ENTREGA_<numero>.jpg           -> ("img_legado", numero) (anexos antigos)
+      SOLICITACAO_*                  -> ("solic", nome)        (nome ja e estavel)
+    """
+    b = os.path.basename((nome or "").strip())
+    u = b.upper()
+    m = re.match(r"LAUDO_.+?_(\d+)_([A-Z]+)", u)
+    if m:
+        return ("laudo", m.group(1), m.group(2))
+    m = re.match(r"ENTREGA_([0-9A-F]{6,})\.", u)
+    if m:
+        return ("img", m.group(1).lower())
+    m = re.match(r"ENTREGA_(\d+)\.", u)
+    if m:
+        return ("img_legado", m.group(1))
+    if u.startswith("SOLICITACAO_"):
+        return ("solic", u)
+    return ("outro", u)
+
+
 def _anexos_nomes(page) -> set:
     """Conjunto de nomes de arquivo (.pdf/.jpg/.png) atualmente anexados na GTO.
     Usado para verificação por NOME (robusta) e idempotência (não reanexar)."""
@@ -466,12 +491,29 @@ def upload_arquivos(gp, arquivos: list) -> dict:
                 "enviados": [], "ok": False,
                 "erro": "nenhum arquivo para anexar"}
 
-    # Idempotência: só enviar os que ainda não estão anexados (por nome-base).
-    por_base = {}
+    # IDEMPOTENCIA POR IDENTIDADE, nao por nome exato. Comparar o nome inteiro era
+    # fragil: "ENTREGA_1.jpg" tem numero POSICIONAL (muda se a ordem de captura
+    # mudar) e "LAUDO_<exame>_..." carrega um rotulo que ja mudou (LAUDO_ATM_ ->
+    # LAUDO_INTERPROXIMAL_ apos a correcao do rotulo). Qualquer um dos dois fazia a
+    # MESMA coisa ser anexada de novo — casos CLAUDIA REGINA e VANESSA SILVA
+    # BATISTA, que chegaram a 12 anexos com imagens repetidas.
+    # Requisito do dono: rodar o mesmo dia 300 vezes deve anexar UMA vez.
+    chaves_portal = {_chave_anexo(n) for n in nomes_antes}
+    _tem_img_legado = any(k[0] == "img_legado" for k in chaves_portal)
+    por_base, ja, faltam = {}, [], []
     for a in arquivos:
-        por_base.setdefault(os.path.basename(a), a)
-    ja = [b for b in por_base if b in nomes_antes]
-    faltam = [a for b, a in por_base.items() if b not in nomes_antes]
+        b = os.path.basename(a)
+        if b in por_base:
+            continue
+        por_base[b] = a
+        k = _chave_anexo(b)
+        # Imagem legada no portal ("ENTREGA_<numero>"): o nome nao diz o conteudo,
+        # entao nao da para saber se a nossa ja esta la. Nao reenvia — repetir e
+        # pior do que faltar, e a guia ja tem imagem.
+        if k in chaves_portal or (k[0] == "img" and _tem_img_legado):
+            ja.append(b)
+        else:
+            faltam.append(a)
     if not faltam:
         return {"anexos_antes": antes, "anexos_depois": antes,
                 "ja_anexados": ja, "enviados": [], "ok": True}

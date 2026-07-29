@@ -83,6 +83,7 @@ _gem_tokens_lock = threading.Lock()
 _GEM_FATAL = re.compile(r"RESOURCE_EXHAUSTED|429|quota|prepayment|credit|"
                         r"PERMISSION_DENIED|UNAUTHENTICATED|API[_ ]?key", re.I)
 _gem_estado = {"fatal": None}
+_campos_anexo = {"visto": False}
 
 
 def _gem_fatal(e) -> bool:
@@ -1155,6 +1156,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     with _gem_tokens_lock:               # consumo e estado são POR EXECUÇÃO
         _gem_tokens.update({"in": 0, "out": 0, "chamadas": 0})
         _gem_estado["fatal"] = None
+        _campos_anexo["visto"] = False
 
     def _t(m):
         log(f"[{time.monotonic() - t_glob:6.0f}s] {m}")
@@ -1260,6 +1262,17 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 imgs = r.json() if r.status_code == 200 else []
                 nomes = {str(i.get("nomeArquivo", "")) for i in imgs}
                 cnt = len(imgs)
+                # DIAGNOSTICO: que campos o portal devolve por anexo? Se houver id
+                # ou URL do arquivo, da para comparar o CONTEUDO do que ja esta na
+                # guia em vez do nome — que e o certo, e o que o dono cobrou. Sem
+                # isso a idempotencia depende de o nosso nome ser estavel.
+                if imgs and isinstance(imgs[0], dict) and not _campos_anexo["visto"]:
+                    _campos_anexo["visto"] = True
+                    _t(f"[API] campos por anexo em /v1/gto/imagens: "
+                       f"{sorted(imgs[0].keys())}")
+                    _amostra = {k: (str(v)[:60] if v is not None else None)
+                                for k, v in imgs[0].items()}
+                    _t(f"[API] amostra: {_amostra}")
             except Exception:
                 nomes, cnt = set(), -1
             # Um GTO só é "completo" se JÁ tiver um LAUDO entre os anexos. Antes o
