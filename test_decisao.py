@@ -548,3 +548,40 @@ def test_interproximal_esta_no_vocabulario_de_fallback():
     from extrator_arquivos import EXAME_KEYWORDS
     for kw in ("INTERPROXIMAL", "OCLUSAL", "MODELO", "TOMOGRAFIA"):
         assert kw in EXAME_KEYWORDS, kw
+
+
+# ── Trava de duplicidade no UNICO ponto de escrita (regra do dono, 29/07) ───
+# O OdontoPrev nao permite remover anexo: duplicar e dano PERMANENTE. Toda guia
+# nasce com 1 anexo (a propria GTO); com 2 ou mais, nada mais deve ser enviado.
+# A guarda fica em upload_arquivos porque os TRES caminhos que anexam passam por
+# ela (esteira, fechar_dia, ciclo_completo).
+
+class _GP:
+    def __init__(self, n, nomes=()): self._n, self._nomes = n, set(nomes)
+    def inner_text(self, _s): return f"total de anexos) : {self._n}"
+    def query_selector(self, _s): return None
+    def query_selector_all(self, _s): return []
+    def wait_for_timeout(self, _ms): pass
+
+
+def test_guia_com_dois_anexos_nao_recebe_mais_nada(tmp_path):
+    from extrator_odontoprev import upload_arquivos
+    f = tmp_path / "LAUDO_PANORAMICA_1_OFICIAL.pdf"; f.write_bytes(b"x")
+    r = upload_arquivos(_GP(2), [str(f)])
+    assert r["ok"] is False and r["enviados"] == []
+    assert "ja tem 2 anexos" in r["erro"]
+
+
+def test_guia_com_muitos_anexos_tambem_e_bloqueada(tmp_path):
+    from extrator_odontoprev import upload_arquivos
+    f = tmp_path / "ENTREGA_abc123.jpg"; f.write_bytes(b"x")
+    r = upload_arquivos(_GP(12), [str(f)])
+    assert r["ok"] is False and r["enviados"] == []
+
+
+def test_contagem_ilegivel_nao_arrisca(tmp_path):
+    """Na duvida sobre quantos anexos ja existem, nao envia."""
+    from extrator_odontoprev import upload_arquivos
+    f = tmp_path / "ENTREGA_abc123.jpg"; f.write_bytes(b"x")
+    r = upload_arquivos(_GP(-1), [str(f)])
+    assert r["ok"] is False and "LER" in r["erro"]
