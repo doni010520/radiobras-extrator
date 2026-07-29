@@ -572,7 +572,11 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
             g = x.get("gemini") or {}
             faturado = x.get("anexado") == "OK"
             cat = x.get("categoria")
-            if faturado:
+            if cat == "ja_anexada":
+                # Faturada, mas NAO por nos. O relatorio tem de dizer isso: antes
+                # aparecia como "auto"/faturada, igual a uma guia que o robo anexou.
+                motivo = (x.get("gemini") or {}).get("motivo") or ""
+            elif faturado:
                 motivo = ""
             elif x.get("anexar_erro"):
                 # A documentação estava OK — quem falhou foi a ANEXAÇÃO. Antes esse
