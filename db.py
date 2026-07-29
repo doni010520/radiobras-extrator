@@ -136,6 +136,13 @@ class Execucao(Base):
     nao_faturadas = Column(Integer, default=0)
     m_download = Column(Integer, default=0)
     k_leitura = Column(Integer, default=0)
+    # LOG TECNICO COMPLETO da execucao. Antes vivia SO em memoria (dict _esteira_jobs)
+    # e sumia no restart do container: quando a operadora relatava um problema, nao
+    # havia mais como saber o que tinha acontecido. Caso LOARA (29/07).
+    log = Column(Text)
+    gemini_chamadas = Column(Integer, default=0)
+    gemini_tokens_in = Column(Integer, default=0)
+    gemini_tokens_out = Column(Integer, default=0)
     itens = relationship("ExecucaoItem", back_populates="execucao",
                          cascade="all, delete-orphan")
 
@@ -153,6 +160,13 @@ class ExecucaoItem(Base):
     exames_gto = Column(Text)
     exames_lidos = Column(Text)
     n_arquivos = Column(Integer, default=0)
+    # EVIDENCIA por guia — o que o sistema realmente viu e fez. Sem isso, uma
+    # pendencia so podia ser investigada com o log em memoria, que nao sobrevive.
+    arquivos_plano = Column(Text)      # o que iria/foi anexado
+    excluidos = Column(Text)           # o que foi retirado do plano, e implicitamente por que
+    funil = Column(String(120))        # anexos do prontuario -> candidatos -> descartados
+    paciente_lido = Column(String(160))  # o nome que a IA leu no documento
+    data_exame_real = Column(String(10))  # se o exame veio de outro dia
     execucao = relationship("Execucao", back_populates="itens")
 
 
@@ -532,8 +546,9 @@ def listar_portal_status() -> dict:
         return {}
 
 
-def salvar_execucao(resumo: dict) -> int:
-    """Persiste uma execução (resumo do rodar_esteira) + seus itens + backlog."""
+def salvar_execucao(resumo: dict, log_linhas=None) -> int:
+    """Persiste uma execução (resumo do rodar_esteira) + seus itens + backlog.
+    log_linhas: log técnico completo, para o histórico sobreviver ao restart."""
     with SessionLocal() as s:
         baix = resumo.get("baixados", 0)
         itens_info = []
@@ -548,6 +563,10 @@ def salvar_execucao(resumo: dict) -> int:
             nao_faturadas=int(baix - resumo.get("anexado_ok", 0)),
             m_download=int(resumo.get("m_download", 0) or 0),
             k_leitura=int(resumo.get("k_leitura", 0) or 0),
+            log=(chr(10).join(str(l) for l in log_linhas) if log_linhas else None),
+            gemini_chamadas=int((resumo.get("gemini_tokens") or {}).get("chamadas", 0) or 0),
+            gemini_tokens_in=int((resumo.get("gemini_tokens") or {}).get("in", 0) or 0),
+            gemini_tokens_out=int((resumo.get("gemini_tokens") or {}).get("out", 0) or 0),
         )
         for x in resumo.get("decisoes", []):
             g = x.get("gemini") or {}
@@ -576,6 +595,14 @@ def salvar_execucao(resumo: dict) -> int:
                 exames_gto=", ".join(x.get("gto_exames") or []),
                 exames_lidos=", ".join(g.get("exames_lidos") or []),
                 n_arquivos=len(x.get("laudo_imgs") or []) + (1 if x.get("solicitacao") else 0),
+                arquivos_plano=", ".join(x.get("arquivos_anexados")
+                                         or x.get("laudo_imgs") or [])[:4000] or None,
+                excluidos=", ".join(x.get("laudos_excluidos") or [])[:2000] or None,
+                funil=(lambda f: (f"prontuario={f.get('prontuario')} cand={f.get('candidatos')} "
+                                  f"descartados={f.get('descartados')} conv={f.get('convertidos')}")
+                       if f else None)(x.get("funil")),
+                paciente_lido=(g.get("paciente_lido") or None),
+                data_exame_real=x.get("data_exame_real"),
             ))
             itens_info.append((str(x.get("gto")), x.get("paciente"), cat, motivo, faturado))
         s.add(ex)
@@ -745,6 +772,15 @@ def _ensure_columns():
         "ALTER TABLE anexacao_gtos ADD COLUMN IF NOT EXISTS liberacao VARCHAR(10)",
         "ALTER TABLE cron_state ADD COLUMN IF NOT EXISTS resumo_fat_last_at TIMESTAMPTZ",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS conta VARCHAR(20)",
+        "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS log TEXT",
+        "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS gemini_chamadas INTEGER DEFAULT 0",
+        "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS gemini_tokens_in INTEGER DEFAULT 0",
+        "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS gemini_tokens_out INTEGER DEFAULT 0",
+        "ALTER TABLE execucao_itens ADD COLUMN IF NOT EXISTS arquivos_plano TEXT",
+        "ALTER TABLE execucao_itens ADD COLUMN IF NOT EXISTS excluidos TEXT",
+        "ALTER TABLE execucao_itens ADD COLUMN IF NOT EXISTS funil VARCHAR(120)",
+        "ALTER TABLE execucao_itens ADD COLUMN IF NOT EXISTS paciente_lido VARCHAR(160)",
+        "ALTER TABLE execucao_itens ADD COLUMN IF NOT EXISTS data_exame_real VARCHAR(10)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uix_pendencias ON pendencias (conta, dia, gto)",
     ]
     for a in alters:
