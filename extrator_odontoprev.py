@@ -491,6 +491,32 @@ def upload_arquivos(gp, arquivos: list) -> dict:
                 "enviados": [], "ok": False,
                 "erro": "nenhum arquivo para anexar"}
 
+    # ── TRAVA DE DUPLICIDADE (regra do dono, 29/07) ──────────────────────────
+    # O OdontoPrev NAO PERMITE REMOVER anexo. Cada arquivo repetido e dano
+    # PERMANENTE na guia — casos CLAUDIA REGINA e VANESSA SILVA BATISTA, que
+    # chegaram a 12 anexos com imagens visivelmente duplicadas.
+    #
+    # Regra: toda guia nasce com 1 anexo, a propria GTO. Se ja tem 2 ou mais,
+    # alguem ja anexou (nos ou um humano) e NAO ha o que acrescentar.
+    #
+    # Esta guarda fica AQUI, e nao em quem chama, porque upload_arquivos e o UNICO
+    # ponto de escrita do sistema: os tres caminhos que anexam (esteira.py:1602,
+    # fechar_dia.py:478, ciclo_completo.py:185) passam por ela. Protegido aqui,
+    # esta protegido em todos — inclusive em caminho novo que alguem escreva depois.
+    if antes is None or antes < 0:
+        return {"anexos_antes": antes, "anexos_depois": antes, "ja_anexados": [],
+                "enviados": [], "ok": False,
+                "erro": ("nao foi possivel LER quantos anexos a guia ja tem — "
+                         "nada enviado, para nao arriscar duplicar (o portal nao "
+                         "permite remover anexo)")}
+    if antes >= 2:
+        return {"anexos_antes": antes, "anexos_depois": antes,
+                "ja_anexados": sorted(nomes_antes), "enviados": [], "ok": False,
+                "erro": (f"a guia ja tem {antes} anexos — nada enviado. Toda guia "
+                         f"nasce com 1 (a propria GTO); com 2 ou mais, a "
+                         f"documentacao ja foi anexada. O portal nao permite "
+                         f"remover anexo, entao duplicar seria irreversivel")}
+
     # IDEMPOTENCIA POR IDENTIDADE, nao por nome exato. Comparar o nome inteiro era
     # fragil: "ENTREGA_1.jpg" tem numero POSICIONAL (muda se a ordem de captura
     # mudar) e "LAUDO_<exame>_..." carrega um rotulo que ja mudou (LAUDO_ATM_ ->

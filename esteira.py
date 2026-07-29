@@ -1280,17 +1280,28 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             # mas SEM laudo (ex.: JOAO PEDRO — 4 anexos, 0 laudo) era marcado como
             # completo e sumia do radar. Agora, sem laudo, ele ENTRA na fila (baixa o
             # laudo real do PRORADIS e anexa; se não houver, vira pendência sem_laudo).
-            tem_laudo = any("LAUDO" in str(n).upper() for n in nomes)
-            if tem_laudo and (cnt >= 2 or (cnt >= 0 and _ja_anexado_por_nos(nomes))):
-                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos (c/ laudo) -> completa, pula "
+            # REGRA DO DONO (29/07): toda guia nasce com 1 anexo — a propria GTO.
+            # Se ja tem 2 ou mais, alguem (nos ou um humano) ja anexou. NAO ha o que
+            # acrescentar, e tentar e perigoso: o OdontoPrev NAO PERMITE REMOVER
+            # anexo. Cada duplicata e dano PERMANENTE na guia. Casos CLAUDIA REGINA
+            # e VANESSA SILVA BATISTA, que chegaram a 12 anexos com imagens repetidas.
+            # Na duvida (cnt == -1, falha na consulta) tambem NAO segue.
+            if cnt < 0:
+                _t(f"[DESC] GTO {g['gto']}: nao consegui LER os anexos -> pula "
+                   f"(nao arrisco duplicar; reprocesse o dia)")
+                with _lock:
+                    resultados.append({"gto": g["gto"], "nome": g["nome"],
+                                       "status": "JA_ANEXADO",
+                                       "anexos_no_portal": []})
+                return
+            if cnt >= 2:
+                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos -> ja tem documentacao, pula "
                    f"| anexos: {sorted(nomes)}")
                 with _lock:
                     resultados.append({"gto": g["gto"], "nome": g["nome"],
                                        "status": "JA_ANEXADO",
                                        "anexos_no_portal": sorted(nomes)})
                 return
-            if cnt >= 2 and not tem_laudo:
-                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos mas SEM laudo -> fila (falta laudo)")
             g["nome_norm"] = normaliza_nome(g["nome"])
             # EXAMES DA GUIA direto do portal (fonte autoritativa). O PDF da GTO no
             # prontuário às vezes vem SEM a tabela de procedimentos — só os rótulos
@@ -1554,6 +1565,32 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                                    f"{item['nome']!r} — upload cancelado")
                             _t(f"[ANEX{wid}] GTO {item['gto']} CANCELADO: popup mostra "
                                f"{_pop!r}, esperado {item['nome']!r}")
+                            try:
+                                gp.close()
+                            except Exception:
+                                pass
+                            with _lock:
+                                ativos_an["n"] -= 1
+                                resultados.append(item)
+                            continue
+                        # ULTIMA TRAVA antes da escrita IRREVERSIVEL. O OdontoPrev
+                        # nao permite remover anexo: duplicar e dano permanente. A
+                        # contagem da descoberta pode estar velha (outra execucao, ou
+                        # alguem anexando a mao no meio) — reconfere na guia ABERTA.
+                        try:
+                            _n_agora = _anexos_count(gp)
+                        except Exception:
+                            _n_agora = -1
+                        if _n_agora is None or _n_agora < 0 or _n_agora >= 2:
+                            item["anexado"] = "ERRO"
+                            item["anexar_erro"] = (
+                                f"guia ja tem {_n_agora} anexo(s) — nada foi enviado "
+                                f"(o portal nao permite remover anexo, entao duplicar "
+                                f"seria dano permanente)" if _n_agora >= 2 else
+                                "nao consegui ler quantos anexos a guia ja tem — nada "
+                                "foi enviado, por seguranca")
+                            _t(f"[ANEX{wid}] GTO {item['gto']} BLOQUEADO: "
+                               f"{_n_agora} anexo(s) na guia")
                             try:
                                 gp.close()
                             except Exception:
