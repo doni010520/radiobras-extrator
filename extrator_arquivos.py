@@ -49,9 +49,15 @@ LOGO_GREEN_MIN_FRAC = 0.0005
 # distintas (mesmo paciente) diferem por >5 bits -> tolerancia 4 e segura.
 PHASH_DUP_MAX_HAMMING = 4
 
+# Fallback quando o campo do exame (.wrap-exam) nao pode ser lido. INTERPROXIMAL,
+# OCLUSAL e MODELO faltavam — nenhum exame desses era rotulado corretamente. Termos
+# LONGOS primeiro: 'ATM' e 'MAO' sao curtos e, sem fronteira de palavra, casavam
+# dentro de qualquer atributo do HTML (foi assim que um laudo de INTERPROXIMAL
+# virou LAUDO_ATM_ no caso LOARA, 21/07).
 EXAME_KEYWORDS = [
-    "PANORAMICA", "TELERRADIOGRAFIA", "DOCUMENTACAO", "CEFALOMETR",
-    "PERIAPICAL", "FOTOGRAFIA", "SEIOS", "ATM", "MAO", "CARPAL",
+    "TELERRADIOGRAFIA", "INTERPROXIMAL", "DOCUMENTACAO", "CEFALOMETR",
+    "PANORAMICA", "PERIAPICAL", "FOTOGRAFIA", "TOMOGRAFIA", "OCLUSAL",
+    "MODELO", "CARPAL", "SEIOS", "ATM", "MAO",
 ]
 
 _BAD_RE = re.compile(
@@ -394,12 +400,30 @@ def extrair_tokens(row_html: str) -> dict:
     )
     doc = {"study_id": doc_m.group(1), "schedule_id": doc_m.group(2)} if doc_m else None
 
+    # EXAME: ler o CAMPO do exame (span .wrap-exam), nao varrer o HTML cru.
+    # A versao anterior procurava a primeira palavra-chave em qualquer lugar da
+    # linha, por SUBSTRING e sem fronteira de palavra — e 'ATM' (tres letras) casa
+    # dentro de qualquer atributo, id ou classe que contenha essas letras. Pior:
+    # INTERPROXIMAL nem estava na lista, entao NENHUM interproximal era rotulado
+    # certo. Caso LOARA (acc 40335114, 21/07): laudo de INTERPROXIMAL gravado como
+    # LAUDO_ATM_, e depois descartado pelo filtro de exame particular como se fosse
+    # exame de fora da guia.
     exame = ""
-    h_upper = h.upper()
-    for kw in EXAME_KEYWORDS:
-        if kw in h_upper:
-            exame = kw
-            break
+    try:
+        el = BeautifulSoup(h, "lxml").select_one(".wrap-exam")
+        if el:
+            exame = re.sub(r"\s+", " ", el.get_text(strip=True)).upper()
+    except Exception:
+        exame = ""
+    if not exame:
+        # fallback sobre o TEXTO da linha (nao o HTML) e com FRONTEIRA de
+        # palavra. Sem isso, "ATM" e "MAO" casavam dentro de atributos como
+        # data-formatMsg, classes e ids, roubando o rotulo do exame de verdade.
+        h_upper = BeautifulSoup(h, "lxml").get_text(" ", strip=True).upper()
+        for kw in EXAME_KEYWORDS:
+            if re.search(r"\b" + re.escape(kw), h_upper):
+                exame = kw
+                break
 
     return {"pan": pan, "ceph": ceph, "doc": doc, "exame": exame}
 
