@@ -801,7 +801,7 @@ def _faturar_cron_body():
             # pendência do dia era resolvida, o cron pulava a gravação e ela NUNCA
             # fechava — o alerta de SLA seguia cobrando guia já faturada.
             if resumo:
-                db.salvar_execucao(resumo)
+                db.salvar_execucao(resumo, (_j or {}).get('log'))
             nfat += (resumo or {}).get("anexado_ok", 0) or 0
             ndias += 1
             app.logger.info("Cron faturar %s %s: fat=%s pend=%s", conta, dia,
@@ -1559,9 +1559,13 @@ def faturar_run():
                                           gemini_key=gkey, review_dir=review_dir,
                                           k_attach=3, dry_run=dry, conta=(plano or None),
                                           senha_portal=senha_portal)
-            if not dry and job["resumo"]:
+            # GRAVA SEMPRE, inclusive DRY. Antes a simulação não deixava rastro:
+            # quando a operadora relatava um problema, não havia execução nem log
+            # para consultar. O que continua valendo só para execução REAL é a
+            # criação de pendência (dentro de salvar_execucao).
+            if job["resumo"]:
                 try:
-                    job["execucao_id"] = db.salvar_execucao(job["resumo"])
+                    job["execucao_id"] = db.salvar_execucao(job["resumo"], job["log"])
                 except Exception as e:
                     job["log"].append(f"(falha ao salvar: {str(e)[:80]})")
             # 'resultados' carrega o objeto inteiro de cada GTO (inclusive as

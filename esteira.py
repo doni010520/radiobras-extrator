@@ -1481,6 +1481,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     _t(f"[ANEX{wid}] GTO {item['gto']} EXAMES MISTOS — não anexados "
                        f"(fora da guia): {exames_fora} | {excluidos}")
                 nomes = [os.path.basename(a) for a in arquivos]
+                item["arquivos_anexados"] = nomes
                 # GUARDA FINAL — o filtro acima pode remover TODOS os laudos (exame
                 # particular, ou canon que não reconheceu o exame). Se sobrou guia sem
                 # laudo, NÃO anexa: o gate lá atrás autorizou porque havia laudo na
@@ -1779,6 +1780,11 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             "anexado": r.get("anexado"),
             "anexar_erro": r.get("anexar_erro"),   # p/ o motivo da pendência ser o REAL
             "laudo_imgs": dec.get("plano_laudo_imgs", []),
+            # EVIDENCIA durável: o que foi anexado de fato, o que foi retirado do
+            # plano e o funil de anexos do prontuário.
+            "arquivos_anexados": r.get("arquivos_anexados") or [],
+            "laudos_excluidos": r.get("laudos_excluidos") or [],
+            "funil": dec.get("funil") or {},
             "solicitacao": dec.get("plano_solicitacao"),
             "anexar_solic": bool(dec.get("plano_solicitacao")),
             "justificativa": dec.get("justificativa"),
