@@ -291,7 +291,13 @@ async function carregarListas(eid){
   try{
     const r=await fetch('/relatorios/execucao/'+eid+'.json');
     const d=await r.json();
-    const fat=d.faturadas_itens||[], nao=d.nao_faturadas_itens||[];
+    const todas=d.faturadas_itens||[], nao=d.nao_faturadas_itens||[];
+    // "ja_anexada" NAO foi faturada por nos: a guia ja tinha documentacao quando o
+    // robo chegou, e ele nao enviou nada (o portal nao permite remover anexo, entao
+    // duplicar seria irreversivel). Misturar as duas fazia o relatorio dizer
+    // "faturada, laudo + imagens" para uma guia em que ninguem encostou.
+    const fat=todas.filter(i=>i.categoria!=='ja_anexada');
+    const ja=todas.filter(i=>i.categoria==='ja_anexada');
     // contagens reais (fonte de verdade = relatório), reconciliando com pendentes
     $('okFat').textContent=fat.length;
     $('okNao').textContent=nao.length;
@@ -308,6 +314,16 @@ async function carregarListas(eid){
         html+='<tr class="fat"><td>'+i.gto+'</td><td>'+esc(i.paciente)+'</td>'+
               '<td class="mut">'+esc(i.exames_gto||'')+'</td>'+
               '<td class="mut">laudo + imagens'+(i.solicitacao?' + solicitação':'')+'</td>'+
+              '<td><a href="'+ODONTO+'" target="_blank" title="Abrir OdontoPrev e conferir a GTO '+i.gto+'"><svg class="rb-ico"><use href="#i-external"/></svg> OdontoPrev</a></td></tr>';
+      });
+      html+='</table>';
+    }
+    if(ja.length){
+      html+='<h3><svg class="rb-ico" style="color:var(--rb-muted)"><use href="#i-check-circle"/></svg> Já tinham documentação ('+ja.length+') — o robô não anexou nada</h3><table class="lt">'+
+            '<tr><th>GTO</th><th>Paciente</th><th>O que aconteceu</th><th>Conferir</th></tr>';
+      ja.forEach(i=>{
+        html+='<tr><td>'+i.gto+'</td><td>'+esc(i.paciente)+'</td>'+
+              '<td class="mut">'+esc(i.motivo||'A guia já tinha 2 ou mais anexos quando o robô chegou.')+'</td>'+
               '<td><a href="'+ODONTO+'" target="_blank" title="Abrir OdontoPrev e conferir a GTO '+i.gto+'"><svg class="rb-ico"><use href="#i-external"/></svg> OdontoPrev</a></td></tr>';
       });
       html+='</table>';

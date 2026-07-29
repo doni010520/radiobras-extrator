@@ -1291,8 +1291,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                    f"(nao arrisco duplicar; reprocesse o dia)")
                 with _lock:
                     resultados.append({"gto": g["gto"], "nome": g["nome"],
-                                       "status": "JA_ANEXADO",
-                                       "anexos_no_portal": []})
+                                       "status": "NAO_VERIFICADA"})
                 return
             if cnt >= 2:
                 _t(f"[DESC] GTO {g['gto']}: {cnt} anexos -> ja tem documentacao, pula "
@@ -1743,17 +1742,45 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     # painel das decisões (pro dry-run que você revisa)
     decisoes = []
     _outros_res = [r for r in resultados
-                   if r["status"] in ("SEM_MATCH", "AMBIGUO", "SEM_ARQUIVOS", "JA_ANEXADO", "ERRO")]
+                   if r["status"] in ("SEM_MATCH", "AMBIGUO", "SEM_ARQUIVOS",
+                                      "JA_ANEXADO", "NAO_VERIFICADA", "ERRO")]
 
     for r in baixados + _outros_res:
         if r.get("status") == "JA_ANEXADO":
+            _an = r.get("anexos_no_portal") or []
             decisoes.append({
-                "gto": r["gto"], "paciente": r["nome"], "categoria": "auto",
+                "gto": r["gto"], "paciente": r["nome"],
+                # categoria PROPRIA: antes vinha como "auto"/anexado OK, igual a uma
+                # guia que NOS faturamos. O relatorio dizia "faturada" para uma guia
+                # em que o robo nao encostou, e a operadora nao tinha como saber a
+                # diferenca. Nada pode ser silencioso.
+                "categoria": "ja_anexada",
                 "anexado": "OK", "laudo_imgs": [], "solicitacao": None,
-                "anexar_solic": False, "justificativa": True, "gto_exames": [],
+                "anexar_solic": False, "justificativa": None, "gto_exames": [],
                 "candidatos": [], "solic_idx": None,
-                "gemini": {"motivo": "GTO com anexos completos no OdontoPrev"}, "erro": None,
-                "arquivos_anexados": r.get("anexos_no_portal") or [],
+                "gemini": {"motivo": (
+                    f"NAO FOI PRECISO FATURAR: a guia ja tinha {len(_an) or 2} anexo(s) "
+                    f"quando o robo chegou. Toda guia nasce com 1 (a propria GTO), "
+                    f"entao a documentacao ja havia sido anexada — por outra execucao "
+                    f"ou a mao. O robo NAO enviou nada: o portal nao permite remover "
+                    f"anexo, e duplicar seria irreversivel."
+                    + (f" Anexos na guia: {', '.join(_an)}." if _an else ""))},
+                "erro": None, "arquivos_anexados": _an,
+            })
+            continue
+        if r.get("status") == "NAO_VERIFICADA":
+            decisoes.append({
+                "gto": r["gto"], "paciente": r["nome"], "categoria": "erro",
+                "anexado": None, "laudo_imgs": [], "solicitacao": None,
+                "anexar_solic": False, "justificativa": None, "gto_exames": [],
+                "candidatos": [], "solic_idx": None,
+                "gemini": {"motivo": (
+                    "NAO FOI PROCESSADA porque o sistema nao conseguiu consultar "
+                    "quantos anexos a guia ja tem. Sem essa informacao nao da para "
+                    "anexar com seguranca — o portal nao permite remover anexo, e "
+                    "duplicar seria irreversivel. O QUE FAZER: reprocessar o dia. "
+                    "(Falha nossa, nao da clinica.)")},
+                "erro": "nao foi possivel ler os anexos da guia",
             })
             continue
 
