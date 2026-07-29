@@ -451,7 +451,7 @@ def _acc_do_laudo(p):
     return m.group(2) if m else None
 
 
-def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None):
+def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None, convenio_acc=None):
     """Só sobem para a GTO os arquivos do CONVÊNIO. Exame PARTICULAR feito no mesmo
     dia não vai para a operadora — regra do dono.
 
@@ -478,7 +478,14 @@ def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None):
         _ex = {str(a) for a in extras_acc}
         fora = [lp for lp in laudos if (_acc_do_laudo(lp) or "") in _ex]
 
-    # 2) fallback pelo nome do exame (só se a procedência não resolveu)
+    # 2) fallback pelo nome do exame — SÓ para laudo de procedência DESCONHECIDA.
+    # O accession que veio do analítico já é, por construção, exame do convênio
+    # (o relatório é consultado filtrado pelos convênios do plano). O rótulo do
+    # exame no NOME DO ARQUIVO é chave fraca e às vezes diverge: LOARA (195215189,
+    # 21/07) teve o laudo do accession 40335114 — interproximal no analítico e na
+    # worklist — baixado como LAUDO_ATM_. O filtro leu "ATM", não achou na guia,
+    # excluiu o laudo certo e a guia nem foi anexada. Prova forte vence rótulo.
+    _conv = {str(a) for a in (convenio_acc or [])}
     if not fora:
         # exames DESTA guia; sem identificar a GTO, cai na união (comportamento antigo)
         alvo = (set((dec or {}).get("gto_exames_desta") or [])
@@ -490,6 +497,8 @@ def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None):
         # "exame particular" e a guia subia sem laudo.
         alvo = componentes_da_documentacao(alvo)
         for lp in laudos:
+            if _conv and (_acc_do_laudo(lp) or "") in _conv:
+                continue          # veio do analítico do convênio: nunca é "de fora"
             cex = _exame_do_laudo(lp)
             # exclui SÓ se o exame foi identificado E está fora da guia
             if cex and not (cex & alvo):
@@ -633,6 +642,7 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
             # Vazio no fallback por nome (cod 'WL*'), onde não há analítico pra
             # comparar — aí o filtro cai na heurística antiga, como sempre fez.
             "extras_acc": res.get("accessions_extras") or [],
+            "convenio_acc": res.get("accessions_convenio") or [],
             # exame achado em dia diferente do da guia: fica REGISTRADO, para a
             # operadora saber que a data não é a mesma
             "data_exame_real": g.get("data_exame_real"),
@@ -1259,9 +1269,12 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             # laudo real do PRORADIS e anexa; se não houver, vira pendência sem_laudo).
             tem_laudo = any("LAUDO" in str(n).upper() for n in nomes)
             if tem_laudo and (cnt >= 2 or (cnt >= 0 and _ja_anexado_por_nos(nomes))):
-                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos (c/ laudo) -> completa, pula")
+                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos (c/ laudo) -> completa, pula "
+                   f"| anexos: {sorted(nomes)}")
                 with _lock:
-                    resultados.append({"gto": g["gto"], "nome": g["nome"], "status": "JA_ANEXADO"})
+                    resultados.append({"gto": g["gto"], "nome": g["nome"],
+                                       "status": "JA_ANEXADO",
+                                       "anexos_no_portal": sorted(nomes)})
                 return
             if cnt >= 2 and not tem_laudo:
                 _t(f"[DESC] GTO {g['gto']}: {cnt} anexos mas SEM laudo -> fila (falta laudo)")
@@ -1474,7 +1487,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     continue
                 pasta = item.get("_pasta")
                 arquivos, excluidos, exames_fora = _filtrar_arquivos_da_gto(
-                    pasta, item.get("decisao") or {}, item.get("extras_acc"))
+                    pasta, item.get("decisao") or {}, item.get("extras_acc"),
+                    item.get("convenio_acc"))
                 if excluidos:
                     item["laudos_excluidos"] = excluidos
                     item["exames_particulares"] = exames_fora
@@ -1688,7 +1702,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 "anexado": "OK", "laudo_imgs": [], "solicitacao": None,
                 "anexar_solic": False, "justificativa": True, "gto_exames": [],
                 "candidatos": [], "solic_idx": None,
-                "gemini": {"motivo": "GTO com anexos completos no OdontoPrev"}, "erro": None
+                "gemini": {"motivo": "GTO com anexos completos no OdontoPrev"}, "erro": None,
+                "arquivos_anexados": r.get("anexos_no_portal") or [],
             })
             continue
 

@@ -503,3 +503,24 @@ def test_data_mais_atravessa_mes_e_rejeita_lixo():
     assert _data_mais("30/07/2026", 3) == "02/08/2026"
     assert _data_mais("01/03/2026", -1) == "28/02/2026"
     assert _data_mais("xx", 1) is None
+
+
+def test_laudo_do_analitico_nunca_e_tratado_como_exame_de_fora(tmp_path):
+    """LOARA (195215189, 21/07): guia pede interproximal; o laudo do accession
+    40335114 — interproximal no analítico e na worklist — foi baixado como
+    LAUDO_ATM_. O filtro leu 'ATM', não achou na guia e excluiu o laudo CERTO.
+    O accession vindo do analítico é prova de que o exame é do convênio."""
+    pasta = _pasta(tmp_path, ["LAUDO_ATM_40335114_OFICIAL.pdf", "ENTREGA_1.jpg"])
+    arquivos, excluidos, _f = _filtrar_arquivos_da_gto(
+        pasta, {"gto_exames_desta": ["interproximal"]},
+        extras_acc=None, convenio_acc=["40335114"])
+    assert sorted(os.path.basename(a) for a in arquivos) == [
+        "ENTREGA_1.jpg", "LAUDO_ATM_40335114_OFICIAL.pdf"]
+    assert excluidos == []
+
+
+def test_sem_procedencia_a_heuristica_antiga_continua_valendo(tmp_path):
+    pasta = _pasta(tmp_path, ["LAUDO_ATM_40335114_OFICIAL.pdf", "ENTREGA_1.jpg"])
+    arquivos, excluidos, fora = _filtrar_arquivos_da_gto(
+        pasta, {"gto_exames_desta": ["interproximal"]}, extras_acc=None, convenio_acc=None)
+    assert fora == ["atm"] and excluidos
