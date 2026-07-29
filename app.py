@@ -808,6 +808,10 @@ def _faturar_cron_body():
                             (resumo or {}).get("anexado_ok"), (resumo or {}).get("pendentes"))
         except Exception as e:
             app.logger.error("Cron faturar %s %s FALHOU: %s", conta, dia, str(e)[:120])
+            try:
+                db.salvar_execucao_falha(dia, conta, False, str(e), (_j or {}).get("log"))
+            except Exception:
+                pass
         finally:
             _esteira_liberar(dia, conta, _tag)
     db.cron_marcar_faturar(target)
@@ -1577,6 +1581,15 @@ def faturar_run():
         except Exception as e:
             job["error"] = str(e)
             job["log"].append(f"ERRO: {str(e)[:140]}")
+            # REGISTRA A FALHA. Antes a execucao que dava erro sumia: nao virava
+            # faturamento, nem pendencia, nem historico. A operadora dizia "eu
+            # rodei esse dia" e nao havia como confirmar nem descobrir por que
+            # nada aconteceu (caso 21/07 Camacari).
+            try:
+                job["execucao_id"] = db.salvar_execucao_falha(
+                    data, plano, dry, str(e), job["log"])
+            except Exception as e2:
+                job["log"].append(f"(falha ao registrar o erro: {str(e2)[:80]})")
         finally:
             job["done"] = True
             _esteira_liberar(data, plano, jid)

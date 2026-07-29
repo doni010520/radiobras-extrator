@@ -140,6 +140,11 @@ class Execucao(Base):
     # e sumia no restart do container: quando a operadora relatava um problema, nao
     # havia mais como saber o que tinha acontecido. Caso LOARA (29/07).
     log = Column(Text)
+    # Execucao que FALHOU tambem fica registrada. Antes, erro em rodar_esteira
+    # (login bloqueado, PRORADIS sem laudo do dia, token nao capturado) fazia a
+    # execucao desaparecer: nao virava faturamento, nao virava pendencia, nao
+    # virava nada. A operadora dizia "eu rodei" e nao havia como confirmar.
+    erro = Column(Text)
     gemini_chamadas = Column(Integer, default=0)
     gemini_tokens_in = Column(Integer, default=0)
     gemini_tokens_out = Column(Integer, default=0)
@@ -546,6 +551,21 @@ def listar_portal_status() -> dict:
         return {}
 
 
+def salvar_execucao_falha(dia: str, conta: str, dry_run: bool, erro: str,
+                          log_linhas=None) -> int:
+    """Registra uma execucao que NAO chegou ao fim. Sem isto, erro em
+    rodar_esteira apagava a execucao inteira do historico — a operadora relatava
+    "rodei o dia" e nao havia nada para conferir. Nao cria pendencia (nada foi
+    decidido); serve para o dia/unidade nao ficar invisivel."""
+    with SessionLocal() as s:
+        ex = Execucao(dia=dia, conta=conta, dry_run=bool(dry_run),
+                      erro=(erro or "")[:4000],
+                      log=(chr(10).join(str(l) for l in log_linhas) if log_linhas else None))
+        s.add(ex)
+        s.commit()
+        return ex.id
+
+
 def salvar_execucao(resumo: dict, log_linhas=None) -> int:
     """Persiste uma execução (resumo do rodar_esteira) + seus itens + backlog.
     log_linhas: log técnico completo, para o histórico sobreviver ao restart."""
@@ -723,7 +743,7 @@ def listar_execucoes(limit: int = 100) -> list:
         rows = s.query(Execucao).order_by(Execucao.criado_em.desc()).limit(limit).all()
         return [{
             "id": e.id, "dia": e.dia, "conta": e.conta, "criado_em": e.criado_em,
-            "dry_run": e.dry_run,
+            "dry_run": e.dry_run, "erro": e.erro,
             "tempo_total": e.tempo_total, "tempo_descoberta": e.tempo_descoberta,
             "tempo_download": e.tempo_download, "pendentes": e.pendentes,
             "faturadas": e.faturadas, "nao_faturadas": e.nao_faturadas,
@@ -744,7 +764,7 @@ def get_execucao(eid: int) -> dict | None:
         } for it in e.itens]
         return {
             "id": e.id, "dia": e.dia, "conta": e.conta, "criado_em": e.criado_em,
-            "dry_run": e.dry_run,
+            "dry_run": e.dry_run, "erro": e.erro,
             "tempo_total": e.tempo_total, "tempo_descoberta": e.tempo_descoberta,
             "tempo_download": e.tempo_download, "pendentes": e.pendentes,
             "faturadas": e.faturadas, "nao_faturadas": e.nao_faturadas,
@@ -777,6 +797,7 @@ def _ensure_columns():
         "ALTER TABLE cron_state ADD COLUMN IF NOT EXISTS resumo_fat_last_at TIMESTAMPTZ",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS conta VARCHAR(20)",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS log TEXT",
+        "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS erro TEXT",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS gemini_chamadas INTEGER DEFAULT 0",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS gemini_tokens_in INTEGER DEFAULT 0",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS gemini_tokens_out INTEGER DEFAULT 0",
