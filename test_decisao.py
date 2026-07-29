@@ -524,3 +524,27 @@ def test_sem_procedencia_a_heuristica_antiga_continua_valendo(tmp_path):
     arquivos, excluidos, fora = _filtrar_arquivos_da_gto(
         pasta, {"gto_exames_desta": ["interproximal"]}, extras_acc=None, convenio_acc=None)
     assert fora == ["atm"] and excluidos
+
+
+# ── Rotulo do exame no nome do laudo (caso LOARA, 21/07) ────────────────────
+# O laudo do accession 40335114 — INTERPROXIMAL no analitico e na worklist — foi
+# baixado como LAUDO_ATM_. Causa: o rotulo vinha de uma varredura por SUBSTRING no
+# HTML cru da linha, sem fronteira de palavra, e INTERPROXIMAL nem estava na lista.
+
+def test_exame_vem_do_campo_e_nao_do_html_cru():
+    from extrator_arquivos import extrair_tokens
+    h = ('<tr data-formatMsg="x" id="datmod">'
+         '<td><span class="wrap-exam">INTERPROXIMAL</span></td></tr>')
+    assert extrair_tokens(h)["exame"] == "INTERPROXIMAL"
+
+
+def test_atm_nao_e_capturado_dentro_de_atributo():
+    from extrator_arquivos import extrair_tokens
+    h = '<tr class="formatMsg" id="datmod"><td>PANORAMICA</td></tr>'
+    assert extrair_tokens(h)["exame"] == "PANORAMICA"
+
+
+def test_interproximal_esta_no_vocabulario_de_fallback():
+    from extrator_arquivos import EXAME_KEYWORDS
+    for kw in ("INTERPROXIMAL", "OCLUSAL", "MODELO", "TOMOGRAFIA"):
+        assert kw in EXAME_KEYWORDS, kw
