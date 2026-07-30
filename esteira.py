@@ -1070,10 +1070,18 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     # do controle). Vazava para a mensagem da operadora, que via
                     # "GTO pede ['documentacao', 'documentacao_completa']" — ruído.
                     _pede = sorted(x for x in _alvo_ex if not str(x).startswith("documentacao_"))
-                    _falta = sorted(x for x in (_det.get("falta")
-                                                 if _det.get("falta") is not None
-                                                 else (set(_pede) - set(_cn)))
+                    _falta_bruto = (_det.get("falta") if _det.get("falta") is not None
+                                    else (set(_pede) - set(_cn)))
+                    _falta = sorted(x for x in _falta_bruto
                                     if not str(x).startswith("documentacao_"))
+                    # O que falta pode ser SO um token interno (documentacao_completa).
+                    # Escondia-lo do texto deixava a mensagem dizendo "FALTA: nenhum"
+                    # numa guia reprovada — e "peca a clinica um pedido que inclua
+                    # nenhum". Caso LAIS ZAA GUIA SANTOS (24/07 Centro). Quando for
+                    # esse o caso, explica o que realmente falta em portugues.
+                    if not _falta and _falta_bruto:
+                        _falta = ["a especificacao de que a documentacao e COMPLETA "
+                                  "(telerradiografia, fotografias e modelos)"]
                     # Diz O QUE FALTA, não só os dois conjuntos: é o que a operadora
                     # precisa para cobrar o exame certo do dentista.
                     _motivo = (

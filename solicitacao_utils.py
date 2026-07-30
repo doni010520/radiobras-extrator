@@ -48,7 +48,13 @@ _CANON = [
     # procedimentos DIFERENTES e o canon colapsava os dois em 'documentacao'. A
     # regra do dono ("sempre terá esses quatro exames") vale para a COMPLETA; ao
     # aplicá-la ao CONTROLE eu reprovei guia legítima (HAMILTON 195268018, 22/07).
-    (r"\bdoc\.?\s*orto\s*compl|\bdocortocomp|documentacao\s*completa", "documentacao_completa"),
+    # Aceita a forma ABREVIADA do portal ("Doc Orto Compl") E a forma POR EXTENSO
+    # que o dentista escreve ("documentacao ortodontica completa"). O padrao antigo
+    # exigia "documentacao" COLADO em "completa"; com a palavra "ortodontica" no
+    # meio ele nao casava, e o pedido da LAIS ZAA GUIA SANTOS — que diz literalmente
+    # "DOCUMENTACAO ORTODONTICA COMPLETA" — era reprovado (24/07 Centro).
+    (r"\bdoc\.?\s*orto\s*compl|\bdocortocomp"
+     r"|documenta\w*(\s+\w+){0,2}\s+complet", "documentacao_completa"),
     (r"seios?\s*da\s*face", "seios_da_face"),
     # \btc\b com fronteira DOS DOIS LADOS: sem ela, "etc" virava "tomografia" e a
     # solicitacao passava a "cobrir" um exame que ninguem pediu.

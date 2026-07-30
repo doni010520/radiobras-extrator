@@ -728,3 +728,28 @@ def test_registra_quantas_outras_solicitacoes_existiam():
                            _sol(2, ["panoramica"])],
                           "ANA LIMA COSTA", {"panoramica"}, 3, "", det)
     assert det["outras"] == 2
+
+
+def test_documentacao_completa_por_extenso_e_reconhecida():
+    """LAIS ZAA GUIA SANTOS (24/07 Centro): o pedido diz literalmente
+    'DOCUMENTAÇÃO ORTODÔNTICA COMPLETA' e era reprovado, porque o padrão exigia
+    'documentacao' colado em 'completa' — a palavra 'ortodôntica' no meio quebrava."""
+    for t in ("DOCUMENTAÇÃO ORTODÔNTICA COMPLETA", "Documentação Ortodôntica Completa",
+              "Doc Orto Compl", "documentacao completa"):
+        assert "documentacao_completa" in canon_exames(t), t
+
+
+def test_subtipos_que_NAO_sao_a_completa():
+    for t in ("Doc Orto Contro", "Documentação Ortodôntica Básica",
+              "documentacao periodontal"):
+        assert "documentacao_completa" not in canon_exames(t), t
+
+
+def test_caso_lais_passa():
+    ped = ("1. Rx Panorâmico em topo, 2. Telerradiografia Rickets, "
+           "3. Fotografia extra-bucal, 4. Fotografia intra-bucal, "
+           "DOCUMENTAÇÃO ORTODÔNTICA COMPLETA, Oclusão Frontal")
+    leituras = [_leitura(0, "LAIS ZAA GUIA SANTOS", [ped])]
+    idx, _a, motivo = _escolher_solicitacao(
+        leituras, "LAIS ZAA GUIA SANTOS", canon_exames("Doc Orto Compl"), 1)
+    assert idx == 0 and motivo is None
