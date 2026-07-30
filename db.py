@@ -11,7 +11,7 @@ Tabelas:
 """
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 
 from sqlalchemy import (
     Boolean, Column, DateTime, ForeignKey, Integer, String, Text, create_engine, func,
@@ -781,6 +781,97 @@ def pendencias_do_dia(dia: str, contas: list = None) -> dict:
         "total_guias": d.get("resumo", {}).get("total", 0),
         "por_responsavel": por_quem,
         "por_unidade": d.get("por_unidade") or [],
+    }
+
+
+
+def _dias_do_intervalo(dia_ini: str, dia_fim: str = None, teto: int = 62) -> list:
+    """['24/07/2026', '25/07/2026', ...] entre as duas datas, inclusive.
+
+    Teto de 62 dias porque cada dia e uma consulta ao banco — um intervalo aberto
+    por engano (2020 ate hoje) travaria a tela sem dizer por que."""
+    def _p(x):
+        d, m, a = str(x or "").split("/")
+        return date(int(a), int(m), int(d))
+    try:
+        ini = _p(dia_ini)
+    except Exception:
+        return []
+    try:
+        fim = _p(dia_fim) if dia_fim else ini
+    except Exception:
+        fim = ini
+    if fim < ini:
+        ini, fim = fim, ini
+    n = min((fim - ini).days, teto - 1)
+    return [(ini + timedelta(days=i)).strftime("%d/%m/%Y") for i in range(n + 1)]
+
+
+def pendencias_do_periodo(dia_ini: str, dia_fim: str = None, contas: list = None) -> dict:
+    """Pendencias de UM DIA ou de um INTERVALO, agrupadas por quem precisa agir.
+
+    O dono pediu o intervalo (30/07) porque a pergunta real e "o que esta parado
+    nesta semana?", nao "o que esta parado na terca". Uma pendencia sozinha num dia
+    nao vira tarefa de ninguem; sete espalhadas pela semana viram.
+
+    Tambem devolve `unidades_fora`: unidades que TEM execucao no periodo mas ficaram
+    de fora do filtro. Sem isso a tela dizia "0 pendencias" mostrando so uma unidade,
+    enquanto outra tinha 6 — o numero era verdadeiro e a leitura, falsa. Caso real:
+    25/07, Centro 20/0 na tela, Tancredo com 6 pendencias invisiveis."""
+    dias = _dias_do_intervalo(dia_ini, dia_fim)
+    if not dias:
+        return {"dia": "", "dias": [], "grupos": [], "total": 0, "fila_tecnica": [],
+                "total_fila": 0, "faturadas": 0, "total_guias": 0,
+                "por_responsavel": {}, "por_unidade": [], "contas": contas or [],
+                "unidades_fora": [], "dias_sem_execucao": []}
+    juntos, fila_j = {}, {}
+    total_guias = faturadas = 0
+    fora, sem_exec, uni = set(), [], {}
+    for dia in dias:
+        d = pendencias_do_dia(dia, contas)
+        total_guias += d.get("total_guias") or 0
+        faturadas += d.get("faturadas") or 0
+        todas_do_dia = (relatorio_dia(dia, None).get("contas")) or []
+        if not todas_do_dia:
+            sem_exec.append(dia)
+        if contas:
+            fora |= {c for c in todas_do_dia if c not in contas}
+        for u in d.get("por_unidade") or []:
+            a = uni.setdefault(u["unidade"], {"unidade": u["unidade"], "total": 0,
+                                              "faturadas": 0, "pendentes": 0})
+            a["total"] += u.get("total") or 0
+            a["faturadas"] += u.get("faturadas") or 0
+            a["pendentes"] += u.get("pendentes") or 0
+        for origem, destino in ((d.get("grupos") or [], juntos),
+                                (d.get("fila_tecnica") or [], fila_j)):
+            for g in origem:
+                alvo = destino.setdefault(g["chave"], {**g, "itens": []})
+                for i in g["itens"]:
+                    destino[g["chave"]]["itens"].append({**i, "dia": dia})
+    def _fecha(dic):
+        _ordem = {"Radiologista": 0, "Clínica": 1, "Cadastro": 2, "Conferência": 3}
+        lst = sorted(dic.values(),
+                     key=lambda g: (_ordem.get(g["responsavel"], 9), -len(g["itens"])))
+        for g in lst:
+            g["total"] = len(g["itens"])
+            g["itens"].sort(key=lambda x: (x.get("dia") or "", x.get("unidade") or "",
+                                           x.get("paciente") or ""))
+        return lst
+    lista, fila = _fecha(juntos), _fecha(fila_j)
+    por_quem = {}
+    for g in lista:
+        por_quem[g["responsavel"]] = por_quem.get(g["responsavel"], 0) + g["total"]
+    return {
+        "dia": dias[0], "dia_fim": dias[-1], "dias": dias,
+        "periodo": len(dias) > 1,
+        "contas": contas or [],
+        "grupos": lista, "total": sum(g["total"] for g in lista),
+        "fila_tecnica": fila, "total_fila": sum(g["total"] for g in fila),
+        "faturadas": faturadas, "total_guias": total_guias,
+        "por_responsavel": por_quem,
+        "por_unidade": sorted(uni.values(), key=lambda x: x["unidade"]),
+        "unidades_fora": sorted(fora),
+        "dias_sem_execucao": sem_exec,
     }
 
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pendências do dia {{ d.dia or '' }}</title>
+<title>Pendências {{ d.dia or '' }}{% if d.periodo %} a {{ d.dia_fim }}{% endif %}</title>
 {% include '_head.html' %}
 <style>
   :root{
@@ -68,6 +68,9 @@
   .nota{background:var(--surface2);border-left:3px solid var(--sub);padding:11px 14px;
     border-radius:0 8px 8px 0;font-size:13px;color:var(--sub);margin:0 16px 14px}
   .nota b{color:var(--txt)}
+  .alerta{background:#fdf1de;border:1px solid var(--warn);color:#5a3a00;
+    border-radius:10px;padding:12px 15px;margin:0 0 16px;font-size:13.5px}
+  .alerta b{color:var(--warn)}
   .vazio{background:var(--card);border:1px dashed var(--linha);border-radius:12px;padding:30px;
     text-align:center;color:var(--sub)}
   .tudo-ok{background:#e6f4ec;border:1px solid var(--verde);color:var(--verde);
@@ -78,16 +81,23 @@
 <body>
 {% include '_topnav.html' %}
 <div class="wrap">
-  <h1>Pendências do dia</h1>
+  <h1>Pendências</h1>
   <div class="meta">
-    {% if d.dia %}O que ainda não faturou em <strong>{{ d.dia }}</strong>, agrupado por quem precisa agir
-    {% else %}Escolha a data e as unidades{% endif %}
+    {% if d.dia %}O que ainda não faturou
+      {% if d.periodo %}de <strong>{{ d.dia }}</strong> a <strong>{{ d.dia_fim }}</strong>
+        ({{ d.dias|length }} dias){% else %}em <strong>{{ d.dia }}</strong>{% endif %},
+      agrupado por quem precisa agir
+    {% else %}Escolha o período e as unidades{% endif %}
   </div>
 
   <form class="filtros" method="get" action="/relatorios/pendencias">
     <div class="campo">
-      <label for="data">Data</label>
+      <label for="data">De</label>
       <input type="date" id="data" name="data" value="{{ data_iso or '' }}" required>
+    </div>
+    <div class="campo">
+      <label for="data_fim">Até <span style="font-weight:400">(opcional)</span></label>
+      <input type="date" id="data_fim" name="data_fim" value="{{ fim_iso or '' }}">
     </div>
     <div class="campo">
       <label>Unidades</label>
@@ -107,7 +117,7 @@
 
   {% if d.dia %}
     <div class="cards">
-      <div class="card"><div class="n">{{ d.total_guias }}</div><div class="l">guias no dia</div></div>
+      <div class="card"><div class="n">{{ d.total_guias }}</div><div class="l">guias no período</div></div>
       <div class="card ok"><div class="n">{{ d.faturadas }}</div><div class="l">faturadas</div></div>
       <div class="card pend"><div class="n">{{ d.total }}</div><div class="l">precisam de alguém</div></div>
       {% if d.total_fila %}
@@ -115,8 +125,24 @@
       {% endif %}
     </div>
 
+    {% if d.unidades_fora %}
+      <div class="alerta">
+        <b>Atenção:</b> {{ d.unidades_fora|length }} unidade(s) com execução neste período
+        ficaram <b>de fora do filtro</b> —
+        {% for c in d.unidades_fora %}{{ planos[c].label if c in planos else c }}{% if not loop.last %}, {% endif %}{% endfor %}.
+        Os números acima não são o total do período. Marque todas as unidades para ver tudo.
+      </div>
+    {% endif %}
+    {% if d.dias_sem_execucao %}
+      <div class="alerta">
+        <b>{{ d.dias_sem_execucao|length }} dia(s) sem execução nenhuma:</b>
+        {{ d.dias_sem_execucao|join(', ') }}.
+        Não há pendência porque <b>ninguém faturou esses dias ainda</b> — não porque está tudo certo.
+      </div>
+    {% endif %}
+
     {% if not d.grupos and not d.fila_tecnica %}
-      <div class="tudo-ok">Nenhuma pendência neste dia — tudo que podia faturar, faturou.</div>
+      <div class="tudo-ok">Nenhuma pendência {% if d.periodo %}neste período{% else %}neste dia{% endif %} — tudo que podia faturar, faturou.</div>
     {% endif %}
 
     {% for g in d.grupos %}
@@ -130,9 +156,11 @@
         </header>
         <div class="acao"><b>O que fazer:</b> {{ g.acao }}</div>
         <table>
-          <tr><th>Paciente</th><th>GTO</th><th>Unidade</th><th>Exames da guia</th></tr>
+          <tr>{% if d.periodo %}<th>Dia</th>{% endif %}<th>Paciente</th><th>GTO</th>
+            <th>Unidade</th><th>Exames da guia</th></tr>
           {% for i in g.itens %}
           <tr>
+            {% if d.periodo %}<td class="mono">{{ i.dia }}</td>{% endif %}
             <td><strong>{{ i.paciente or '—' }}</strong>
               {% if g.chave in ('pedido_nao_cobre',) and i.motivo %}
                 <div class="motivo">{{ i.motivo }}</div>
@@ -166,9 +194,11 @@
             </h2>
           </header>
           <table>
-            <tr><th>Paciente</th><th>GTO</th><th>Unidade</th><th>Exames da guia</th></tr>
+            <tr>{% if d.periodo %}<th>Dia</th>{% endif %}<th>Paciente</th><th>GTO</th>
+              <th>Unidade</th><th>Exames da guia</th></tr>
             {% for i in g.itens %}
             <tr>
+              {% if d.periodo %}<td class="mono">{{ i.dia }}</td>{% endif %}
               <td>{{ i.paciente or '—' }}</td>
               <td class="mono">{{ i.gto }}</td>
               <td>{{ i.unidade }}</td>

@@ -2024,6 +2024,23 @@ def relatorios_dia():
                            data_iso=data_iso, qs=qs, pdf=False)
 
 
+def _rel_pend_params():
+    """Como _rel_dia_params, mas com data FINAL opcional (intervalo)."""
+    from config import PLANOS
+    dia, contas, data_iso, _qs = _rel_dia_params()
+    fim_iso = (request.args.get("data_fim") or "").strip()
+    dia_fim = ""
+    if fim_iso:
+        try:
+            y, m, d = fim_iso.split("-")
+            dia_fim = f"{d}/{m}/{y}"
+        except Exception:
+            dia_fim = ""
+    qs = "&".join(["data=" + data_iso] + (["data_fim=" + fim_iso] if fim_iso else [])
+                  + ["conta=" + c for c in (contas or [])])
+    return dia, dia_fim, contas, data_iso, fim_iso, qs
+
+
 @app.route("/relatorios/pendencias")
 def relatorios_pendencias():
     """As pendências de um dia, agrupadas por QUEM precisa agir.
@@ -2032,25 +2049,28 @@ def relatorios_pendencias():
     pergunta seguinte, que é a que gera trabalho: "em qual delas eu mexo?".
     Numa lista de 10 nomes, 7 costumam se resolver sozinhas quando o laudo sair."""
     from config import PLANOS
-    dia, contas, data_iso, qs = _rel_dia_params()
-    d = db.pendencias_do_dia(dia, contas) if dia else {
-        "dia": "", "grupos": [], "total": 0, "faturadas": 0, "total_guias": 0,
-        "por_responsavel": {}, "por_unidade": [], "contas": contas or []}
+    dia, dia_fim, contas, data_iso, fim_iso, qs = _rel_pend_params()
+    d = db.pendencias_do_periodo(dia, dia_fim, contas) if dia else {
+        "dia": "", "dias": [], "periodo": False, "grupos": [], "total": 0,
+        "fila_tecnica": [], "total_fila": 0, "faturadas": 0, "total_guias": 0,
+        "por_responsavel": {}, "por_unidade": [], "contas": contas or [],
+        "unidades_fora": [], "dias_sem_execucao": []}
     return render_template("relatorio_pendencias.html", d=d, planos=PLANOS,
-                           data_iso=data_iso, qs=qs)
+                           data_iso=data_iso, fim_iso=fim_iso, qs=qs)
 
 
 @app.route("/relatorios/pendencias.xlsx")
 def relatorios_pendencias_xlsx():
-    dia, contas, _iso, _qs = _rel_dia_params()
+    dia, dia_fim, contas, _iso, _fim, _qs = _rel_pend_params()
     if not dia:
         return ("Informe a data.", 400)
-    d = db.pendencias_do_dia(dia, contas)
+    d = db.pendencias_do_periodo(dia, dia_fim, contas)
     import pandas as pd
     linhas = []
-    for g in d["grupos"]:
+    for g in d["grupos"] + d["fila_tecnica"]:
         for i in g["itens"]:
             linhas.append({"Quem resolve": g["responsavel"], "Situação": g["titulo"],
+                           "Dia": i.get("dia") or d["dia"],
                            "Paciente": i["paciente"] or "—", "GTO": i["gto"],
                            "Unidade": i["unidade"],
                            "Exames (GTO)": i["exames_gto"] or "—",
@@ -2079,7 +2099,9 @@ def relatorios_pendencias_xlsx():
                 largura = max((len(str(c.value)) for c in col if c.value), default=10)
                 ws.column_dimensions[col[0].column_letter].width = min(max(largura + 3, 12), 70)
     bio.seek(0)
-    nome = f"pendencias_{dia.replace('/', '-')}.xlsx"
+    _suf = dia.replace("/", "-") + (f"_a_{dia_fim.replace('/', '-')}"
+                                    if dia_fim and dia_fim != dia else "")
+    nome = f"pendencias_{_suf}.xlsx"
     return send_file(bio, as_attachment=True, download_name=nome,
                      mimetype="application/vnd.openxmlformats-officedocument."
                               "spreadsheetml.sheet")

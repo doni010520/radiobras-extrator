@@ -984,3 +984,23 @@ def test_inicial_nao_vira_carta_branca():
     assert not _nomes_compat("PEDRO SILVA SANTOS", "JOAO SILVA SANTOS")
     assert not _nomes_compat("MARIA J. SANTOS", "MARIA ANTONIA SANTOS")
     assert not _nomes_compat("JOSE C. SILVA", "JOSE CARLOS PEREIRA")
+
+
+# ── Pendências por período ───────────────────────────────────────────────────
+
+def test_intervalo_de_dias():
+    """O dono pediu intervalo (30/07): a pergunta real e 'o que esta parado nesta
+    semana?'. Uma pendencia sozinha num dia nao vira tarefa; sete espalhadas viram."""
+    from db import _dias_do_intervalo
+    assert _dias_do_intervalo("24/07/2026", "26/07/2026") == \
+        ["24/07/2026", "25/07/2026", "26/07/2026"]
+    assert _dias_do_intervalo("25/07/2026") == ["25/07/2026"]      # sem fim = 1 dia
+    assert _dias_do_intervalo("26/07/2026", "24/07/2026")[0] == "24/07/2026"  # invertido
+    assert _dias_do_intervalo("lixo", "26/07/2026") == []
+
+
+def test_intervalo_tem_teto():
+    """Intervalo aberto por engano (2020 ate hoje) travaria a tela sem dizer por que:
+    cada dia e uma consulta ao banco."""
+    from db import _dias_do_intervalo
+    assert len(_dias_do_intervalo("01/01/2020", "31/12/2026")) == 62
