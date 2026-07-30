@@ -585,3 +585,69 @@ def test_contagem_ilegivel_nao_arrisca(tmp_path):
     f = tmp_path / "ENTREGA_abc123.jpg"; f.write_bytes(b"x")
     r = upload_arquivos(_GP(-1), [str(f)])
     assert r["ok"] is False and "LER" in r["erro"]
+
+
+# ── Nome ilegivel != nome de OUTRA pessoa (casos TAINA e THAILAN, 21/07) ────
+# O pedido do dentista e manuscrito. Quando o nome sai ilegivel, isso e AUSENCIA
+# de evidencia — nao evidencia contraria. Antes os dois casos eram tratados igual
+# e a guia ia para revisao humana do mesmo jeito.
+
+def _leitura2(idx, paciente, exames, dentista="", cro=""):
+    return {"idx": idx, "tipo": "solicitacao", "legivel": True,
+            "paciente_lido": paciente, "exames_lidos": exames,
+            "dentista_lido": dentista, "cro_lido": cro}
+
+
+def test_nome_ilegivel_passa_com_o_carimbo_do_dentista():
+    """Carimbo e IMPRESSO: le muito melhor que letra de dentista. Se bate com o
+    campo 17 da GTO, e sinal suficiente para o documento ser deste paciente."""
+    leituras = [_leitura2(0, "", ["panoramica"], dentista="VIRGINIA GABRIELA OLIVEIRA ALMEIDA")]
+    idx, _a, _m = _escolher_solicitacao(
+        leituras, "TAINA SALLES DE OLIVEIRA", {"panoramica"}, 1,
+        "VIRGINIA GABRIELA OLIVEIRA ALMEIDA")
+    assert idx == 0
+
+
+def test_nome_ilegivel_passa_com_o_cro():
+    leituras = [_leitura2(0, "B???o", ["panoramica"], cro="12345")]
+    idx, _a, _m = _escolher_solicitacao(
+        leituras, "BRUNO CONCEICAO DE JESUS", {"panoramica"}, 1, "DANIEL JORGE CRO 12345")
+    assert idx == 0
+
+
+def test_nome_ilegivel_SEM_segundo_sinal_continua_indo_para_revisao():
+    leituras = [_leitura2(0, "", ["panoramica"])]
+    idx, _a, motivo = _escolher_solicitacao(
+        leituras, "TAINA SALLES DE OLIVEIRA", {"panoramica"}, 1, "VIRGINIA GABRIELA")
+    assert idx is None and motivo == "PACIENTE_INCOMPATIVEL"
+
+
+def test_nome_de_OUTRA_pessoa_e_rejeitado_mesmo_com_o_dentista_certo():
+    """A guarda que impede anexar o pedido do IRMAO. TAINA e THAILAN SALLES sao da
+    mesma familia: se o documento tem o nome do outro, o carimbo igual NAO salva."""
+    leituras = [_leitura2(0, "THAILAN CABRAL SALLES DE ALMEIDA", ["panoramica"],
+                          dentista="VIRGINIA GABRIELA OLIVEIRA ALMEIDA", cro="12345")]
+    idx, _a, _m = _escolher_solicitacao(
+        leituras, "TAINA SALLES DE OLIVEIRA", {"panoramica"}, 1,
+        "VIRGINIA GABRIELA OLIVEIRA ALMEIDA CRO 12345")
+    assert idx is None
+
+
+def test_mensagem_de_cobertura_usa_o_MESMO_candidato_da_decisao():
+    """6 guias (23-24/07) saíram com "FALTA no pedido: nenhum" numa guia reprovada
+    por falta de cobertura — absurdo lógico. A mensagem recalculava por fora e
+    pegava outro candidato. Agora a função devolve o que ELA avaliou."""
+    leituras = [
+        # candidato 0: nome compatível, mas ILEGÍVEL — a decisão o ignora
+        {"idx": 0, "tipo": "solicitacao", "legivel": False,
+         "paciente_lido": "ANA LIMA COSTA", "exames_lidos": ["panoramica", "periapical"]},
+        # candidato 1: o que a decisão avalia de verdade — falta periapical
+        {"idx": 1, "tipo": "solicitacao", "legivel": True,
+         "paciente_lido": "ANA LIMA COSTA", "exames_lidos": ["panoramica"]},
+    ]
+    det = {}
+    idx, _a, motivo = _escolher_solicitacao(
+        leituras, "ANA LIMA COSTA", {"panoramica", "periapical"}, 2, "", det)
+    assert idx is None and motivo == "NAO_COBRE"
+    assert det["falta"] == {"periapical"}      # nunca "nenhum"
+    assert det["idx"] == 1

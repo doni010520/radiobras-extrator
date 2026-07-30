@@ -334,10 +334,28 @@ def listar_gtos(page) -> list:
     return gtos
 
 
-def _anexos_count(page) -> int:
-    body = re.sub(r"\s+", " ", page.inner_text("body"))
-    m = re.search(r"total de anexos\)\s*:\s*(\d+)", body, re.I)
-    return int(m.group(1)) if m else -1
+def _anexos_count(page, tentativas: int = 6) -> int:
+    """Quantos anexos a guia ja tem. -1 se nao conseguiu ler.
+
+    LE COM RETRY. A secao de anexos e renderizada pelo Vue e as vezes ainda nao
+    esta no DOM na primeira leitura. Uma leitura unica devolvia -1, e a trava de
+    duplicidade (correta) recusava o envio: TAMIRES DE SOUZA, ANDRE LUIS SILVA
+    CONCEICAO e MARCOS FERREIRA CAMPOS (23/07) tinham documentacao OK e ficaram
+    sem faturar por causa disso. Insistir e barato; recusar por engano nao e."""
+    for i in range(max(1, tentativas)):
+        try:
+            body = re.sub(r"\s+", " ", page.inner_text("body"))
+            m = re.search(r"total de anexos\)\s*:\s*(\d+)", body, re.I)
+            if m:
+                return int(m.group(1))
+        except Exception:
+            pass
+        if i < tentativas - 1:
+            try:
+                page.wait_for_timeout(700)
+            except Exception:
+                break
+    return -1
 
 
 def _chave_anexo(nome: str) -> tuple:
