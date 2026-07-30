@@ -273,6 +273,19 @@ def gto_solicitante(gto_path: str) -> str:
     return re.sub(r"\s+", " ", " ".join(nome)).strip()
 
 
+def gto_texto(gto_path: str) -> str:
+    """Texto corrido da 1a pagina da GTO. Usado para conferir o CRO do dentista
+    que assina a solicitacao contra o profissional solicitante da guia (campos
+    18/19 do TISS: Conselho Profissional e Numero no Conselho)."""
+    try:
+        doc = fitz.open(gto_path)
+        t = doc[0].get_text() or ""
+        doc.close()
+        return re.sub(r"\s+", " ", t)
+    except Exception:
+        return ""
+
+
 def gto_exames(gto_path: str) -> set:
     """Exames autorizados/realizados na GTO (a partir das descrições de procedimento)."""
     doc = fitz.open(gto_path)
