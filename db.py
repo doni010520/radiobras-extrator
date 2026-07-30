@@ -69,7 +69,7 @@ class RunItem(Base):
     id = Column(Integer, primary_key=True)
     run_id = Column(Integer, ForeignKey("runs.id", ondelete="CASCADE"), index=True)
     gto = Column(String(30))
-    paciente = Column(String(200))
+    paciente = Column(Text)
     status = Column(String(30))            # ENVIADO | ERRO_UPLOAD | SEM_MATCH | ...
     justificativa = Column(String(30))     # PREENCHIDA | VAZIA | ...
     enviados = Column(Integer, default=0)
@@ -161,7 +161,7 @@ class ExecucaoItem(Base):
     categoria = Column(String(20))          # auto | justificativa | sem_solicitacao | revisao
     faturado = Column(Boolean, default=False)
     motivo = Column(Text)                   # por que NÃO faturou (quando aplicável)
-    solicitacao = Column(String(250))       # arquivo anexado (quando AUTO)
+    solicitacao = Column(Text)       # arquivo anexado (quando AUTO)
     exames_gto = Column(Text)
     exames_lidos = Column(Text)
     n_arquivos = Column(Integer, default=0)
@@ -169,8 +169,13 @@ class ExecucaoItem(Base):
     # pendencia so podia ser investigada com o log em memoria, que nao sobrevive.
     arquivos_plano = Column(Text)      # o que iria/foi anexado
     excluidos = Column(Text)           # o que foi retirado do plano, e implicitamente por que
-    funil = Column(String(120))        # anexos do prontuario -> candidatos -> descartados
-    paciente_lido = Column(String(160))  # o nome que a IA leu no documento
+    funil = Column(Text)        # anexos do prontuario -> candidatos -> descartados
+    # TEXT, nao String(160). Quando a guia trava no nome, aqui vai o que a IA leu em
+    # CADA anexo — texto que passa facil de 160 caracteres. O Postgres recusava a
+    # linha e, com ela, a EXECUCAO INTEIRA deixava de ser gravada: a operadora via
+    # o resultado na tela, sem botao de relatorio e sem motivos, e nada ficava no
+    # historico. Aconteceu duas vezes com 24/07 Centro em 30/07.
+    paciente_lido = Column(Text)         # o nome que a IA leu no documento
     data_exame_real = Column(String(10))  # se o exame veio de outro dia
     execucao = relationship("Execucao", back_populates="itens")
 
@@ -633,7 +638,21 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
             ))
             itens_info.append((str(x.get("gto")), x.get("paciente"), cat, motivo, faturado))
         s.add(ex)
-        s.commit()
+        try:
+            s.commit()
+        except Exception as e:
+            # NUNCA perder a execucao inteira por causa de um campo. Regrava sem os
+            # textos longos, para que o historico e os motivos existam de qualquer jeito.
+            s.rollback()
+            print(f"[db] regravando execucao sem campos longos: {str(e)[:120]}", flush=True)
+            for it in ex.itens:
+                it.paciente_lido = (it.paciente_lido or "")[:150] or None
+                it.arquivos_plano = (it.arquivos_plano or "")[:150] or None
+                it.excluidos = (it.excluidos or "")[:150] or None
+                it.funil = (it.funil or "")[:110] or None
+                it.motivo = (it.motivo or "")[:900] or None
+            s.add(ex)
+            s.commit()
         # backlog de revisão humana — só em execução REAL (dry_run não gera pendência)
         if not bool(resumo.get("dry_run", True)):
             try:
@@ -808,6 +827,11 @@ def _ensure_columns():
         "ALTER TABLE execucao_itens ADD COLUMN IF NOT EXISTS excluidos TEXT",
         "ALTER TABLE execucao_itens ADD COLUMN IF NOT EXISTS funil VARCHAR(120)",
         "ALTER TABLE execucao_itens ADD COLUMN IF NOT EXISTS paciente_lido VARCHAR(160)",
+        # texto longo: limite de tamanho fazia a execucao INTEIRA falhar ao gravar
+        "ALTER TABLE execucao_itens ALTER COLUMN paciente_lido TYPE TEXT",
+        "ALTER TABLE execucao_itens ALTER COLUMN funil TYPE TEXT",
+        "ALTER TABLE execucao_itens ALTER COLUMN solicitacao TYPE TEXT",
+        "ALTER TABLE execucao_itens ALTER COLUMN paciente TYPE TEXT",
         "ALTER TABLE execucao_itens ADD COLUMN IF NOT EXISTS data_exame_real VARCHAR(10)",
         "CREATE UNIQUE INDEX IF NOT EXISTS uix_pendencias ON pendencias (conta, dia, gto)",
     ]
