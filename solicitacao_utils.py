@@ -177,9 +177,25 @@ def canon_exames(texto: str) -> set:
 #                        do procedimento.
 #   Doc Orto CONTROLE  = fotografia + panorâmica, somente.
 # Exame a mais no pedido não atrapalha; o que conta é cobrir o que a guia autoriza.
-_DOC_ORTO = {"telerradiografia", "fotografia", "modelo"}
+# REVISADO pelo dono em 30/07, com os pedidos reais na mao: "um pedido que lista
+# telerradiografia, fotografias e panoramica, sem escrever 'modelos', E uma
+# documentacao completa — SIM".
+#
+# Entao o que identifica uma DOC ORTO COMPLETA no pedido e:
+#     telerradiografia + fotografia   (as duas ANCORAS, obrigatorias)
+#   + pelo menos UM entre {modelo, panoramica}
+#
+# Casos reais que passam a ser reconhecidos: LAIS ZAA GUIA SANTOS, ANDNA JAIRA e
+# VANESSA SANTOS DE SOUSA — as tres listam telerradiografia, fotos e panoramica e
+# nao escrevem "modelos". MIRLA (que traz modelos) continua passando.
+#
+# A telerradiografia continua sendo o que separa a COMPLETA do CONTROLE: o
+# controle e fotografia + panoramica, sem telerradiografia, e nao vira completa.
+_DOC_ORTO_ANCORAS = {"telerradiografia", "fotografia"}
+_DOC_ORTO_TERCEIRO = {"modelo", "panoramica"}
 _DOC_CONTROLE = {"fotografia", "panoramica"}
-_DOC_COMPONENTES = _DOC_ORTO | _DOC_CONTROLE | {"periapical", "oclusal", "carpal"}
+_DOC_COMPONENTES = (_DOC_ORTO_ANCORAS | _DOC_ORTO_TERCEIRO | _DOC_CONTROLE
+                    | {"periapical", "oclusal", "carpal"})
 
 
 def nome_amigavel(canon: str) -> str:
@@ -235,7 +251,7 @@ def expande_documentacao(ex: set) -> set:
     if "documentacao" in ex:
         return ex
     out = set(ex)
-    if _DOC_ORTO <= ex:                  # telerradiografia + fotografia + modelo
+    if _DOC_ORTO_ANCORAS <= ex and (ex & _DOC_ORTO_TERCEIRO):
         out |= {"documentacao", "documentacao_completa"}
     if _DOC_CONTROLE <= ex:              # fotografia + panorâmica
         out |= {"documentacao"}
