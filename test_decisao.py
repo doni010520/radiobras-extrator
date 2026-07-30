@@ -611,7 +611,8 @@ def test_nome_ilegivel_passa_com_o_carimbo_do_dentista():
 def test_nome_ilegivel_passa_com_o_cro():
     leituras = [_leitura2(0, "B???o", ["panoramica"], cro="12345")]
     idx, _a, _m = _escolher_solicitacao(
-        leituras, "BRUNO CONCEICAO DE JESUS", {"panoramica"}, 1, "DANIEL JORGE CRO 12345")
+        leituras, "BRUNO CONCEICAO DE JESUS", {"panoramica"}, 1, "DANIEL JORGE",
+        None, "17 - Nome do Profissional Solicitante DANIEL JORGE 19 - Numero 12345")
     assert idx == 0
 
 
@@ -651,3 +652,34 @@ def test_mensagem_de_cobertura_usa_o_MESMO_candidato_da_decisao():
     assert idx is None and motivo == "NAO_COBRE"
     assert det["falta"] == {"periapical"}      # nunca "nenhum"
     assert det["idx"] == 1
+
+
+def test_caso_josete_lixo_da_IA_cai_no_cro():
+    """JOSETE DIAS DE SANTANA (24/07 Tancredo): a IA leu 'Foxtel Ques de sontora'.
+    Tres palavras, zero em comum com o nome da guia — nao e parente, e leitura
+    falhada. O CRO (20489) foi lido perfeitamente e decide."""
+    leituras = [_leitura2(0, "Foxtel Ques de sontora", ["panoramica"],
+                          dentista="Fabielie C. Do chyelta", cro="20489")]
+    idx, _a, _m = _escolher_solicitacao(
+        leituras, "JOSETE DIAS DE SANTANA", {"panoramica"}, 1, "FABIELLE C DO CARMO",
+        None, "18 - Conselho CRO 19 - Numero no Conselho 20489 UF BA")
+    assert idx == 0
+
+
+def test_cro_de_outro_dentista_nao_passa():
+    leituras = [_leitura2(0, "xxx yyy zzz", ["panoramica"], cro="99999")]
+    idx, _a, _m = _escolher_solicitacao(
+        leituras, "JOSETE DIAS DE SANTANA", {"panoramica"}, 1, "FABIELLE",
+        None, "19 - Numero no Conselho 20489")
+    assert idx is None
+
+
+def test_irma_com_o_mesmo_dentista_continua_rejeitada():
+    """TAINA x THAILAN SALLES: mesma familia, mesmo dentista. O sobrenome em comum
+    identifica parente — e parente NAO cai no segundo sinal."""
+    leituras = [_leitura2(0, "THAILAN CABRAL SALLES DE ALMEIDA", ["panoramica"],
+                          dentista="FABIELLE", cro="20489")]
+    idx, _a, _m = _escolher_solicitacao(
+        leituras, "TAINA SALLES DE OLIVEIRA", {"panoramica"}, 1, "FABIELLE",
+        None, "19 - Numero no Conselho 20489")
+    assert idx is None

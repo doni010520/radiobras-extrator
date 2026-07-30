@@ -43,6 +43,7 @@ from extrair_anexos_dia import anexos_do_paciente
 from gto_utils import (is_gto_pdf, extrair_observacao, gto_e_desta_guia,
                        _BOILER_49)
 from solicitacao_utils import (gto_exames, canon_exames, gto_dispensa_laudo,
+                               gto_solicitante, gto_texto,
                                expande_documentacao, componentes_da_documentacao,
                                lista_amigavel)
 import json
@@ -229,27 +230,49 @@ def alvo_cobertura(gto_ex_desta, exames_portal, gto_ex_uniao):
     return set(gto_ex_desta or ()) or set(exames_portal or ()) or set(gto_ex_uniao or ())
 
 
-def _nome_ausente(lido: str) -> bool:
-    """O documento nao traz nome LEGIVEL? Ausencia de evidencia — diferente de
-    evidencia CONTRARIA. O pedido do dentista e manuscrito: as vezes o nome sai
-    ilegivel, ou nem esta escrito. Antes os dois casos eram tratados igual e a guia
-    ia para revisao humana do mesmo jeito."""
+def _nome_ausente(lido: str, alvo: str = "") -> bool:
+    """A leitura do nome FALHOU? Isso e ausencia de evidencia — diferente de
+    evidencia CONTRARIA (o nome de outra pessoa).
+
+    Letra de dentista ilegivel NAO volta vazia: volta como LIXO. Caso JOSETE DIAS
+    DE SANTANA (24/07 Tancredo): a IA leu 'Foxtel Ques de sontora' — tres palavras,
+    entao a versao anterior (que so olhava se o nome estava vazio) tratou como nome
+    de OUTRA PESSOA e rejeitou.
+
+    O que separa lixo de parente e o SOBRENOME: irmao, pai e mae compartilham pelo
+    menos um. Leitura falhada nao compartilha nenhum.
+        >=2 tokens em comum -> mesma pessoa   (aceita antes de chegar aqui)
+        exatamente 1        -> PARENTE        -> continua rejeitando
+        zero                -> leitura falhou -> cai no segundo sinal (CRO/carimbo)
+    """
     toks = [t for t in normaliza_nome(lido or "").split()
             if t not in _STOP_NOME and len(t) > 1]
-    return len(toks) < 2
+    if len(toks) < 2:
+        return True                      # vazio ou quase: nao ha nome
+    if not alvo:
+        return False
+    alvo_t = {t for t in normaliza_nome(alvo).split()
+              if t not in _STOP_NOME and len(t) > 1}
+    # zero em comum -> nao e parente; e leitura falhada
+    return not (set(toks) & alvo_t)
 
 
-def _dentista_confere(a: dict, dentista_gto: str) -> str:
+def _dentista_confere(a: dict, dentista_gto: str, gto_txt: str = "") -> str:
     """Segundo sinal quando o nome do paciente nao foi lido: o CARIMBO do dentista.
     Carimbo e IMPRESSO — le muito melhor que letra de medico. Compara com o campo 17
     da GTO ('Nome do Profissional Solicitante').
     Devolve "cro", "nome" ou "" (nao confere)."""
+    if not (dentista_gto or gto_txt):
+        return ""
+    # CRO: e numero, e numero o OCR le bem — no caso JOSETE a IA errou o nome
+    # inteiro e acertou o CRO (20489). Procura no TEXTO da guia (campos 18/19 do
+    # TISS: Conselho Profissional e Numero no Conselho), nao so no campo 17.
+    # Exige >=4 digitos e fronteira de palavra para nao casar dentro de outro numero.
+    cro_g = re.sub(r"\D", "", str(a.get("cro_lido") or ""))
+    if cro_g and len(cro_g) >= 4 and re.search(r"\b" + cro_g + r"\b", gto_txt or ""):
+        return "cro"
     if not dentista_gto:
         return ""
-    cro_g = re.sub(r"\D", "", str(a.get("cro_lido") or ""))
-    cro_d = re.sub(r"\D", "", str(dentista_gto))
-    if cro_g and len(cro_g) >= 3 and cro_g in cro_d:
-        return "cro"
     lidos = {t for t in normaliza_nome(a.get("dentista_lido") or "").split()
              if t not in _STOP_NOME and len(t) > 2}
     alvo = {t for t in normaliza_nome(dentista_gto).split()
@@ -258,7 +281,7 @@ def _dentista_confere(a: dict, dentista_gto: str) -> str:
 
 
 def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
-                          detalhe=None):
+                          detalhe=None, gto_txt=""):
     """NÍVEL 2 — o CÓDIGO escolhe a solicitação certa entre as leituras que o Gemini
     transcreveu (uma por anexo). Determinístico: tipo solicitação, legível, paciente
     compatível (tokens) e exames que COBREM os da GTO. Desempate: mais exames em
@@ -282,11 +305,11 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         _lido = a.get("paciente_lido") or ""
         if _nomes_compat(_lido, nome_gto):
             a["_via"] = "nome"
-        elif _nome_ausente(_lido):
+        elif _nome_ausente(_lido, nome_gto):
             # NOME NAO LIDO — nao e prova contra. Aceita se houver OUTRO sinal: o
             # carimbo do dentista bate com o campo 17 da GTO. O carimbo e impresso,
             # entao le bem; e o documento ja veio do prontuario DESTE paciente.
-            _via = _dentista_confere(a, dentista_gto)
+            _via = _dentista_confere(a, dentista_gto, gto_txt)
             if not _via:
                 continue
             a["_via"] = "dentista_" + _via
@@ -854,6 +877,13 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                         justif_ok = True
                 except Exception:
                     pass
+                try:
+                    # nome e TEXTO da guia: usados como 2o sinal quando a leitura do
+                    # nome do paciente falha (carimbo do dentista / CRO)
+                    out["dentista_gto"] = gto_solicitante(path) or out.get("dentista_gto")
+                    out["gto_texto"] = gto_texto(path) or out.get("gto_texto")
+                except Exception:
+                    pass
             continue
         mime, blob2 = preparar_anexo(it["filename"], blob)
         if mime:
@@ -981,7 +1011,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             _det = {}
             idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
                                                     len(cands), out.get("dentista_gto") or "",
-                                                    _det)
+                                                    _det, out.get("gto_texto") or "")
             # Falhou SÓ na cobertura de exames? Manuscrito costuma sair sub-lido na
             # 1ª passada (ex.: leu "periapical" e perdeu "panorâmica"). Releitura
             # dirigida do(s) candidato(s) e nova decisão determinística.
@@ -990,7 +1020,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 _det = {}
             idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
                                                     len(cands), out.get("dentista_gto") or "",
-                                                    _det)
+                                                    _det, out.get("gto_texto") or "")
             candidato_valido = idx is not None
             if candidato_valido:
                 dec = {"indice_solicitacao": idx, "paciente_lido": a.get("paciente_lido"),
