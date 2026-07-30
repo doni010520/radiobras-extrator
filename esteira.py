@@ -211,6 +211,16 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
     tok = next(iter(se_falta))
     if _erro_de_grafia(tok, maior - comuns):
         return True
+    # INICIAL ABREVIADA — "Isabela Benini M. Tavares" e a mesma pessoa que
+    # "ISABELA BENINI MEDINA TAVARES". O dentista abrevia o nome do meio; a guarda
+    # contra o irmao (PEDRO SILVA SANTOS x JOAO SILVA SANTOS) lia esse "M." como
+    # token divergente e reprovava a guia por "outra pessoa".
+    # Seguro porque so relaxa DEPOIS de 2+ tokens baterem exatamente: no caso do
+    # irmao os comuns sao 1 e a funcao ja rejeitou la em cima.
+    # Caso ISABELA BENINI MEDINA TAVARES, GTO 195416813, 25/07.
+    _ini = re.sub(r"[^A-Za-z]", "", tok).upper()
+    if len(_ini) == 1 and any(str(f).upper().startswith(_ini) for f in (maior - comuns)):
+        return True
     # NOME COMPOSTO grudado num sistema e separado no outro (VERALUCIA / VERA LUCIA).
     # Usa a lista ORDENADA: só concatena tokens que estão lado a lado no nome.
     return _casa_por_concatenacao(tok, lista_maior)
@@ -278,6 +288,13 @@ def _dentista_confere(a: dict, dentista_gto: str, gto_txt: str = "") -> str:
     alvo = {t for t in normaliza_nome(dentista_gto).split()
             if t not in _STOP_NOME and len(t) > 2}
     return "nome" if len(lidos & alvo) >= 2 else ""
+
+
+# Distancia maxima, em dias, para considerar que dois pedidos do prontuario sao do
+# MESMO episodio de tratamento e portanto podem ser pareados com guias diferentes.
+# Curta de proposito: os casos que o dono reprovou (MATHEUS, JAQUELINE, VANESSA)
+# tinham pedido de 2023 para exame de 2026 — ~1000 dias, longe demais para passar.
+_JANELA_PAREAMENTO_DIAS = int(os.environ.get("SOLIC_PAREAMENTO_DIAS", "30"))
 
 
 def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
@@ -376,6 +393,30 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
                         detalhe["somadas"] = len(grupo)
                     return recente["idx"], recente["a"], None
                 recente = {**recente, "ex": uniao}   # a mensagem fala do CONJUNTO
+        # PAREAMENTO — o paciente pode ter MAIS DE UMA GUIA no mesmo episodio, e cada
+        # uma tem o SEU pedido. Caso OZIEL FERRAZ SANTANA, 25/07: guia 195420152
+        # (documentacao ortodontica) e guia 195420167 (periapical), com os dois pedidos
+        # no mesmo prontuario. "A mais recente vence" entregava o pedido da doc orto
+        # para as DUAS, e a guia de periapical virava pendencia com o proprio pedido
+        # dela a um anexo de distancia.
+        #
+        # A recencia continua mandando — so entra aqui quem cobre a guia E esta dentro
+        # da mesma janela do pedido mais recente. Isso preserva a regra do dono (nada
+        # de pedido de 2023 para exame de 2026: la a distancia passava de 1000 dias) e
+        # exige data LIDA nos dois. Sem data nao da para afirmar que e o mesmo
+        # episodio, e no escuro a guia vai para uma pessoa, como sempre.
+        if gto_ex and recente.get("data"):
+            _pareado = next(
+                (c for c in cands_ok[1:]
+                 if c["cobre"] and c["data"]
+                 and abs((c["data"] - recente["data"]).days) <= _JANELA_PAREAMENTO_DIAS),
+                None)
+            if _pareado:
+                if isinstance(detalhe, dict):
+                    detalhe["escolhida_idx"] = _pareado["idx"]
+                    detalhe["idxs"] = [_pareado["idx"]]
+                    detalhe["pareado"] = True
+                return _pareado["idx"], _pareado["a"], None
         # A mais recente NAO cobre. NAO cai para uma anterior: se existe pedido novo,
         # e ele que vale. A guia vira pendencia dizendo o que falta NELE.
         if isinstance(detalhe, dict):
