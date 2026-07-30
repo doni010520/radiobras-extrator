@@ -229,7 +229,36 @@ def alvo_cobertura(gto_ex_desta, exames_portal, gto_ex_uniao):
     return set(gto_ex_desta or ()) or set(exames_portal or ()) or set(gto_ex_uniao or ())
 
 
-def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands):
+def _nome_ausente(lido: str) -> bool:
+    """O documento nao traz nome LEGIVEL? Ausencia de evidencia — diferente de
+    evidencia CONTRARIA. O pedido do dentista e manuscrito: as vezes o nome sai
+    ilegivel, ou nem esta escrito. Antes os dois casos eram tratados igual e a guia
+    ia para revisao humana do mesmo jeito."""
+    toks = [t for t in normaliza_nome(lido or "").split()
+            if t not in _STOP_NOME and len(t) > 1]
+    return len(toks) < 2
+
+
+def _dentista_confere(a: dict, dentista_gto: str) -> str:
+    """Segundo sinal quando o nome do paciente nao foi lido: o CARIMBO do dentista.
+    Carimbo e IMPRESSO — le muito melhor que letra de medico. Compara com o campo 17
+    da GTO ('Nome do Profissional Solicitante').
+    Devolve "cro", "nome" ou "" (nao confere)."""
+    if not dentista_gto:
+        return ""
+    cro_g = re.sub(r"\D", "", str(a.get("cro_lido") or ""))
+    cro_d = re.sub(r"\D", "", str(dentista_gto))
+    if cro_g and len(cro_g) >= 3 and cro_g in cro_d:
+        return "cro"
+    lidos = {t for t in normaliza_nome(a.get("dentista_lido") or "").split()
+             if t not in _STOP_NOME and len(t) > 2}
+    alvo = {t for t in normaliza_nome(dentista_gto).split()
+            if t not in _STOP_NOME and len(t) > 2}
+    return "nome" if len(lidos & alvo) >= 2 else ""
+
+
+def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
+                          detalhe=None):
     """NÍVEL 2 — o CÓDIGO escolhe a solicitação certa entre as leituras que o Gemini
     transcreveu (uma por anexo). Determinístico: tipo solicitação, legível, paciente
     compatível (tokens) e exames que COBREM os da GTO. Desempate: mais exames em
@@ -250,13 +279,37 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands):
             continue
         if not bool(a.get("legivel", True)):
             continue
-        if not _nomes_compat(a.get("paciente_lido") or "", nome_gto):
+        _lido = a.get("paciente_lido") or ""
+        if _nomes_compat(_lido, nome_gto):
+            a["_via"] = "nome"
+        elif _nome_ausente(_lido):
+            # NOME NAO LIDO — nao e prova contra. Aceita se houver OUTRO sinal: o
+            # carimbo do dentista bate com o campo 17 da GTO. O carimbo e impresso,
+            # entao le bem; e o documento ja veio do prontuario DESTE paciente.
+            _via = _dentista_confere(a, dentista_gto)
+            if not _via:
+                continue
+            a["_via"] = "dentista_" + _via
+        else:
+            # nome LEGIVEL e de OUTRA pessoa -> rejeita. E a guarda que impede
+            # anexar o pedido do irmao (casos SALLES, pai x filho).
             continue
         algum_pac = True
         # expande SÓ o lado da solicitação: quem pede os componentes (panorâmica +
         # telerradiografia + ...) está pedindo uma documentação. A recíproca não vale.
         ex = expande_documentacao(
             canon_exames(" ".join(str(e) for e in (a.get("exames_lidos") or []))))
+        # QUASE-ACERTO: candidato que passou em tipo/legivel/paciente mas falhou na
+        # cobertura. A mensagem PRECISA descrever ESTE, com o MESMO conjunto que a
+        # decisao usou (ja expandido). Antes ela recalculava por fora, pegando o
+        # primeiro candidato com nome compativel e SEM expandir documentacao — e
+        # entao dizia "FALTA no pedido: nenhum" numa guia reprovada por falta de
+        # cobertura. Absurdo logico, 6 casos em 23-24/07.
+        if isinstance(detalhe, dict):
+            _falta_aqui = gto_ex - ex
+            _ant = detalhe.get("falta")
+            if _ant is None or len(_falta_aqui) < len(_ant):
+                detalhe.update({"idx": ai, "lidos": sorted(ex), "falta": _falta_aqui})
         if not (gto_ex and gto_ex.issubset(ex)):
             continue
         score = (len(gto_ex & ex), -ai)
@@ -664,7 +717,10 @@ Para CADA anexo, retorne um objeto com:
   "laudo" (resultado/relatório de exame) | "documento" (RG/CNH/identidade) |
   "nota_fiscal" | "raio_x" (imagem de radiografia) | "outro"
 - "legivel": true/false
-- "paciente_lido": nome do paciente escrito no anexo (string; "" se não houver)
+- "paciente_lido": nome do paciente escrito no anexo (string; "" se não houver ou
+  se estiver ilegível — NÃO invente, NÃO complete)
+- "dentista_lido": nome do dentista que assina/carimba o pedido ("" se não houver)
+- "cro_lido": número do CRO no carimbo, só dígitos ("" se não houver)
 - "exames_lidos": lista com TODOS os exames pedidos/citados no anexo, ex.:
   ["panoramica","periapical","interproximal","telerradiografia","documentacao"]
 - "data_solicitacao": data escrita no anexo, "DD/MM/AAAA" ou null
@@ -673,6 +729,7 @@ Para CADA anexo, retorne um objeto com:
 
 Responda APENAS JSON (sem markdown):
 {"anexos": [ {"idx":0, "tipo":"...", "legivel":true, "paciente_lido":"...",
+"dentista_lido":"...", "cro_lido":"",
 "exames_lidos":[...], "data_solicitacao":null, "box_data":null, "box_assinatura":null}, ... ]}
 """
 
@@ -921,13 +978,19 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             # mensagem, que já usava os exames DESTA guia, saía com as duas listas
             # idênticas ("pede [panoramica] mas a GTO pede [panoramica]").
             _alvo_ex = alvo_cobertura(gto_ex_desta, out.get("exames_portal"), gto_ex)
-            idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex, len(cands))
+            _det = {}
+            idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
+                                                    len(cands), out.get("dentista_gto") or "",
+                                                    _det)
             # Falhou SÓ na cobertura de exames? Manuscrito costuma sair sub-lido na
             # 1ª passada (ex.: leu "periapical" e perdeu "panorâmica"). Releitura
             # dirigida do(s) candidato(s) e nova decisão determinística.
             if idx is None and _motivo == "NAO_COBRE":
                 _reler_exames_focado(gem, cands, leituras, pac["nome"])
-                idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex, len(cands))
+                _det = {}
+            idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
+                                                    len(cands), out.get("dentista_gto") or "",
+                                                    _det)
             candidato_valido = idx is not None
             if candidato_valido:
                 dec = {"indice_solicitacao": idx, "paciente_lido": a.get("paciente_lido"),
@@ -947,7 +1010,10 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                         _lidos = _a2.get("exames_lidos") or []
                         break
                 if _motivo == "NAO_COBRE":
-                    _cn = sorted(canon_exames(" ".join(str(e) for e in _lidos)))
+                    # usa EXATAMENTE o que a decisao avaliou (_det), nao um
+                    # recalculo por fora que pegava outro candidato
+                    _cn = _det.get("lidos") or sorted(
+                        expande_documentacao(canon_exames(" ".join(str(e) for e in _lidos))))
                     # MESMO conjunto usado no critério (_alvo_ex). Mensagem e regra
                     # têm de ser a mesma coisa: quando divergiam, a pendência saía
                     # com as duas listas idênticas e parecia um absurdo lógico.
@@ -955,7 +1021,10 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     # do controle). Vazava para a mensagem da operadora, que via
                     # "GTO pede ['documentacao', 'documentacao_completa']" — ruído.
                     _pede = sorted(x for x in _alvo_ex if not str(x).startswith("documentacao_"))
-                    _falta = sorted(set(_pede) - set(_cn))
+                    _falta = sorted(x for x in (_det.get("falta")
+                                                 if _det.get("falta") is not None
+                                                 else (set(_pede) - set(_cn)))
+                                    if not str(x).startswith("documentacao_"))
                     # Diz O QUE FALTA, não só os dois conjuntos: é o que a operadora
                     # precisa para cobrar o exame certo do dentista.
                     _motivo = (
