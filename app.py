@@ -2055,8 +2055,19 @@ def relatorios_pendencias():
         "fila_tecnica": [], "total_fila": 0, "faturadas": 0, "total_guias": 0,
         "por_responsavel": {}, "por_unidade": [], "contas": contas or [],
         "unidades_fora": [], "dias_sem_execucao": []}
+    # A tela promete que a fila tecnica "se resolve sozinha no reprocessamento".
+    # Isso so e verdade com o cron LIGADO e dentro do prazo. Sem esses dois dados a
+    # frase seria mentira exatamente quando mais importa — o cron vem desligado por
+    # padrao. Melhor a tela contar a configuracao real do que uma promessa bonita.
+    try:
+        _prazo = int(os.environ.get("FATURAR_PRAZO_DIAS", "7"))
+    except ValueError:
+        _prazo = 7
     return render_template("relatorio_pendencias.html", d=d, planos=PLANOS,
-                           data_iso=data_iso, fim_iso=fim_iso, qs=qs)
+                           data_iso=data_iso, fim_iso=fim_iso, qs=qs,
+                           cron_ligado=(os.environ.get("FATURAR_CRON", "0") == "1"),
+                           cron_hora=os.environ.get("FATURAR_CRON_HOUR", "5"),
+                           prazo_dias=_prazo)
 
 
 @app.route("/relatorios/pendencias.xlsx")
@@ -2340,6 +2351,9 @@ def api_diag():
             "pendencias_abertas": db.contar_pendencias_abertas(),
             "alerta_sla_ligado": os.environ.get("ALERTA_SLA", "1") != "0",
             "smtp_configurado": bool(os.environ.get("SMTP_HOST") and os.environ.get("ALERTA_EMAIL_TO")),
+            "faturar_cron": os.environ.get("FATURAR_CRON", "0") == "1",
+            "faturar_cron_hora": os.environ.get("FATURAR_CRON_HOUR", "5"),
+            "faturar_prazo_dias": os.environ.get("FATURAR_PRAZO_DIAS", "7"),
             "execucoes": [{
                 "id": e["id"], "dia": e["dia"], "conta": e["conta"],
                 "dry_run": e["dry_run"], "faturadas": e["faturadas"],

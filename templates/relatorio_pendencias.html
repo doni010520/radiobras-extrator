@@ -180,9 +180,15 @@
       <div class="nota">
         Estas guias não faturaram por <b>falha nossa</b>, não por falta de documento.
         Pedir pedido novo à clínica seria trabalho perdido — o documento certo já está
-        no prontuário. Elas ficam nesta fila e <b>o robô as refaz sozinho</b> assim que
-        a correção subir, no reprocessamento do dia. Estão aqui só para você saber que
-        existem.
+        no prontuário. Estão aqui só para você saber que existem.
+        {% if cron_ligado %}
+          Elas voltam a ser tentadas <b>sozinhas</b>, na rodada automática das
+          {{ cron_hora }}h, enquanto o dia estiver dentro de {{ prazo_dias }} dias.
+        {% else %}
+          <b>Atenção:</b> o faturamento automático está <b>desligado</b>, então elas
+          não se resolvem sozinhas — alguém precisa rodar este dia de novo em
+          <b>Faturar dia</b> depois que a correção subir.
+        {% endif %}
       </div>
       {% for g in d.fila_tecnica %}
         <section class="grupo tecnica">

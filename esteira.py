@@ -562,7 +562,9 @@ Responda APENAS JSON (sem markdown):
  "numero_guia": "<o número dos campos '2 - Nº Guia no Prestador' ou '7 - Nº da Guia
                  Atribuída pela Operadora'; use SÓ dígitos; "" se não achar>",
  "exames": ["<cada procedimento/exame listado, como está escrito>"],
- "campo_49": "<texto do campo '49 - Observação / Justificativa'; "" se vazio>"}
+ "campo_49": "<texto do campo '49 - Observação / Justificativa'; "" se vazio>",
+ "profissional_solicitante": "<nome do campo '17 - Nome do Profissional Solicitante'; "" se não achar>",
+ "conselho_numero": "<número do campo '19 - Número no Conselho' (o CRO do solicitante); só dígitos; "" se não achar>"}
 
 Regras:
 - "e_gto" só é true se o documento for mesmo a guia do convênio (tem numeração de
@@ -570,6 +572,63 @@ Regras:
   de exame, RG, laudo ou nota fiscal => false.
 - Transcreva LITERALMENTE. Não interprete, não complete, não deduza.
 - Se não conseguir ler um trecho, omita em vez de adivinhar."""
+
+
+# Endpoint de download de anexo do portal. NAO esta documentado e NAO da para
+# descobrir daqui: a API do OdontoPrev so responde atras do proxy residencial, que
+# so existe em producao. Entao a primeira guia da execucao testa uma lista curta,
+# guarda o que funcionou e usa nas demais. O que cada candidato respondeu vai para
+# o log — se nenhum servir, a proxima rodada sai com a resposta em vez de palpite.
+_ODO_IMG_EP = {"ok": None, "logado": False}
+
+_ODO_IMG_CANDIDATOS = [
+    "{api}/v1/gto/imagem?id={id}",
+    "{api}/v1/gto/imagens/{id}",
+    "{api}/v1/gto/imagem/{id}",
+    "{api}/v1/gto/imagens/download?id={id}",
+]
+
+_MIME_POR_ASSINATURA = [
+    (b"%PDF", "application/pdf"),
+    (bytes([0x89]) + b"PNG", "image/png"),
+    (bytes([0xFF, 0xD8, 0xFF]), "image/jpeg"),
+]
+
+
+def _mime_do_conteudo(b: bytes) -> str:
+    for assin, mime in _MIME_POR_ASSINATURA:
+        if b.startswith(assin):
+            return mime
+    return ""
+
+
+def _baixar_anexo_portal(sess, ident, _t=None):
+    """(bytes, mime) de UM anexo da guia, pelo id que /v1/gto/imagens devolve.
+
+    Aceita so o que TEM assinatura de PDF/PNG/JPEG: o portal responde 200 com HTML
+    de login quando a sessao cai, e um HTML lido como imagem viraria leitura de lixo
+    — o tipo de coisa que faz a IA "ver" o que nao existe."""
+    if not ident:
+        return None, ""
+    ordem = ([_ODO_IMG_EP["ok"]] if _ODO_IMG_EP["ok"]
+             else list(_ODO_IMG_CANDIDATOS))
+    tentativas = []
+    for modelo in ordem:
+        try:
+            r = sess.get(modelo.format(api=_ODO_API, id=ident), timeout=25)
+            corpo = r.content or b""
+            mime = _mime_do_conteudo(corpo)
+            tentativas.append(f"{modelo.split('/v1/')[-1]} -> {r.status_code}"
+                              f"/{len(corpo)}b/{mime or 'nao-e-arquivo'}")
+            if r.status_code == 200 and mime and len(corpo) > 512:
+                _ODO_IMG_EP["ok"] = modelo
+                return corpo, mime
+        except Exception as e:
+            tentativas.append(f"{modelo.split('/v1/')[-1]} -> {str(e)[:40]}")
+    if _t and not _ODO_IMG_EP["logado"]:
+        _ODO_IMG_EP["logado"] = True
+        _t("[API] nenhum endpoint de download de anexo funcionou | " + " | ".join(tentativas))
+    return None, ""
 
 
 def _ler_gto_por_imagem(gem, blob, mime, gto):
@@ -603,7 +662,9 @@ def _ler_gto_por_imagem(gem, blob, mime, gto):
     obs = str(d.get("campo_49") or "")
     palavras = [w for w in re.findall(r"[A-Za-zÀ-ú]{3,}", obs) if not _BOILER_49.search(w)]
     justif = len(palavras) >= 2 and not _BOILER_49.search(obs[:40])
-    return {"e_desta_guia": True, "exames": exames, "justificativa": justif}
+    return {"e_desta_guia": True, "exames": exames, "justificativa": justif,
+            "dentista": str(d.get("profissional_solicitante") or "").strip(),
+            "cro": re.sub(r"\D", "", str(d.get("conselho_numero") or ""))}
 
 
 # Formatos que o Gemini aceita direto. O resto era DESCARTADO EM SILÊNCIO — sem
@@ -950,7 +1011,7 @@ def _date_from_name(s):
 
 
 def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
-             eventos_portal=None):
+             eventos_portal=None, gto_blob=None, gto_mime=""):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
     manda TUDO pro Gemini escolher a solicitação certa + decidir. NÃO anexa.
     Devolve plano (laudo+imgs sempre; solicitação se a IA confiar) + a decisão.
@@ -1076,6 +1137,36 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 gto_ex_desta |= _ex_portal
             if not gto_ex:
                 gto_ex |= _ex_portal
+
+    # A GUIA BAIXADA DO PORTAL. So entra quando o prontuario NAO trouxe a guia desta
+    # visita (_gtos_desta == 0) — e o caso em que o sistema ficava sem dentista, sem
+    # CRO e sem campo 49, e portanto sem o segundo sinal. Caso JOSETE DIAS DE
+    # SANTANA: o carimbo estava legivel, o CRO foi lido certo, e nao havia contra o
+    # que comparar porque a guia so existia no RedeUna.
+    #
+    # Vale mais que a do prontuario em um ponto: foi pedida por numeroFicha, entao E
+    # desta guia por construcao. Ainda assim _ler_gto_por_imagem confere o numero —
+    # cinto e suspensorio custam nada aqui.
+    if gem is not None and gto is not None and gto_blob and _gtos_desta == 0:
+        _lp = _ler_gto_por_imagem(gem, gto_blob, gto_mime or "image/png", gto)
+        if _lp:
+            out["gto_do_portal"] = True
+            if _lp.get("dentista") and not out.get("dentista_gto"):
+                out["dentista_gto"] = _lp["dentista"]
+            if _lp.get("cro"):
+                # _dentista_confere procura o CRO dentro do TEXTO da guia; aqui o
+                # texto e sintetico, so para carregar o numero ate la.
+                out["gto_texto"] = ((out.get("gto_texto") or "")
+                                    + " CRO " + _lp["cro"] + " ")
+            if _lp.get("justificativa"):
+                justif_ok = True
+            if _lp.get("exames"):
+                gto_ex |= _lp["exames"]
+                gto_ex_desta |= _lp["exames"]
+            _dbg = (f"dentista={_lp.get('dentista') or '-'} CRO={_lp.get('cro') or '-'} "
+                    f"exames={sorted(_lp.get('exames') or [])} "
+                    f"campo49={'sim' if _lp.get('justificativa') else 'nao'}")
+            out["gto_portal_lida"] = _dbg
 
     out["gto_exames"] = sorted(gto_ex)
     out["gto_exames_desta"] = sorted(gto_ex_desta)
@@ -1556,6 +1647,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                              "Referer": "https://credenciado.odontoprev.com.br/"})
 
         def _um(g):
+            imgs = []          # usado tambem depois do try (download da GTO)
             try:
                 r = sess.get(f"{_ODO_API}/v1/gto/imagens"
                              f"?numeroFicha={g['gto']}", timeout=20)
@@ -1594,11 +1686,26 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                        "status": "NAO_VERIFICADA"})
                 return
             if cnt >= 2:
+                # Os exames tambem para a guia PULADA. Sem isso a coluna "Exames" do
+                # relatorio saia vazia justamente nas FATURADAS — "nenhum" em 27 de 27
+                # no dia 24/07 — e a operadora nao tinha como conferir o que foi
+                # faturado. E um GET a mais numa etapa que ja e so HTTP.
+                _ex_ja = []
+                try:
+                    _rj = sess.get(f"{_ODO_API}/v1/gto/eventos/ficha"
+                                   f"?numeroFicha={g['gto']}", timeout=20)
+                    if _rj.status_code == 200:
+                        _ex_ja = sorted(canon_exames(" ".join(
+                            str(e.get("descricao") or "") for e in (_rj.json() or [])
+                            if isinstance(e, dict))))
+                except Exception:
+                    _ex_ja = []
                 _t(f"[DESC] GTO {g['gto']}: {cnt} anexos -> ja tem documentacao, pula "
                    f"| anexos: {sorted(nomes)}")
                 with _lock:
                     resultados.append({"gto": g["gto"], "nome": g["nome"],
                                        "status": "JA_ANEXADO",
+                                       "exames_portal": _ex_ja,
                                        "anexos_no_portal": sorted(nomes)})
                 return
             g["nome_norm"] = normaliza_nome(g["nome"])
@@ -1617,6 +1724,25 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                        if isinstance(e, dict)]
             except Exception:
                 g["eventos_portal"] = []
+            # A GUIA VEM DO PORTAL, NAO DO PRONTUARIO. Ate aqui, dentista e CRO da
+            # guia so existiam se o PDF dela estivesse anexado no prontuario do
+            # PRORADIS. Quando nao estava — caso JOSETE DIAS DE SANTANA, confirmado
+            # pelo dono — o segundo sinal (carimbo do dentista) ficava CEGO: havia o
+            # CRO lido no papel e nada contra o que comparar, e a guia virava
+            # "nenhum documento esta no nome deste paciente".
+            # Aqui a propria guia e baixada do RedeUna, onde ela SEMPRE existe: o
+            # anexo marcado imagemGTO=True e, pela regra do dono, o unico anexo que
+            # toda guia tem ao nascer. Baixar e barato (1 GET); a leitura por IA so
+            # acontece depois, e so se o prontuario nao tiver a guia.
+            try:
+                _ig = next((i for i in (imgs or []) if isinstance(i, dict)
+                            and str(i.get("imagemGTO")).strip().lower() == "true"), None)
+                if _ig and _ig.get("id"):
+                    _b, _m = _baixar_anexo_portal(sess, _ig.get("id"), _t)
+                    if _b:
+                        g["gto_portal_blob"], g["gto_portal_mime"] = _b, _m
+            except Exception:
+                pass
             with _lock:
                 n_pend["n"] += 1
             _t(f"[DESC] >>> PENDENTE {g['gto']} {g['nome']} ({cnt} anexos) -> fila"
@@ -1691,7 +1817,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 try:
                     dec = _decidir(gem, pg, ctx, item["_pac"], item.get("_pasta"),
                                    review_dir=review_dir, gto=item["gto"],
-                                   eventos_portal=item.get("eventos_portal"))
+                                   eventos_portal=item.get("eventos_portal"),
+                                   gto_blob=item.get("gto_portal_blob"),
+                                   gto_mime=item.get("gto_portal_mime") or "")
                 except Exception as e:
                     dec = {"erro": str(e)[:100], "decisao": None, "anexos": 0,
                            "gto_exames": [], "plano_laudo_imgs": [], "plano_solicitacao": None}
@@ -1828,10 +1956,37 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 _laudo_no_plano = any(n.upper().startswith("LAUDO_") for n in nomes)
                 if not _laudo_no_plano and not _dec_it.get("dispensa_laudo"):
                     item["anexado"] = "ERRO"
-                    item["anexar_erro"] = (
-                        "após excluir exames fora da guia não sobrou nenhum laudo — "
-                        "conferir se o exame é do convênio" if excluidos else
-                        "nenhum laudo disponível para anexar")
+                    # A MENSAGEM PRECISA DIZER *QUAIS* EXAMES. "Conferir se o exame e
+                    # do convenio" escondia dois casos opostos e a pessoa nao tinha
+                    # como saber em qual estava:
+                    #   (a) o exame era particular mesmo -> nada a fazer;
+                    #   (b) o exame E da guia e nos nao reconhecemos o nome -> estamos
+                    #       perdendo faturamento por falha nossa.
+                    # Caso ELIENE LIMA DE OLIVEIRA LOPEZ, 25/07: a guia pedia
+                    # periapical e os unicos laudos eram de panoramica e
+                    # telerradiografia, de uma documentacao do MESMO dia (acessao
+                    # 40336804). Era (a) — mas so deu para saber lendo o log.
+                    _ex_guia = lista_amigavel(_dec_it.get("gto_exames")
+                                              or item.get("exames_gto") or [])
+                    _ex_fora = lista_amigavel(exames_fora or [])
+                    if excluidos and _ex_fora:
+                        item["anexar_erro"] = (
+                            f"a guia pede {_ex_guia or 'exames que não consegui ler'}, "
+                            f"mas os laudos encontrados eram de {_ex_fora} — de outro "
+                            f"exame do mesmo dia. O QUE FAZER: se esses laudos SÃO "
+                            f"desta guia, o nome do exame está diferente do que "
+                            f"reconhecemos (falha nossa); se forem de exame "
+                            f"particular, não há o que faturar.")
+                    elif excluidos:
+                        item["anexar_erro"] = (
+                            f"a guia pede {_ex_guia or '(exames ilegíveis)'} e todos os "
+                            f"laudos do paciente foram excluídos por não pertencerem a "
+                            f"ela — conferir se o exame é do convênio")
+                    else:
+                        item["anexar_erro"] = (
+                            f"não há nenhum laudo para anexar. A guia pede "
+                            f"{_ex_guia or '(exames ilegíveis)'} — cobrar a emissão "
+                            f"do laudo com o radiologista.")
                     _t(f"[ANEX{wid}] GTO {item['gto']} NÃO ANEXADA: sem laudo no plano "
                        f"(excluídos: {excluidos or '—'})")
                     with _lock:
@@ -2056,7 +2211,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 # diferenca. Nada pode ser silencioso.
                 "categoria": "ja_anexada",
                 "anexado": "OK", "laudo_imgs": [], "solicitacao": None,
-                "anexar_solic": False, "justificativa": None, "gto_exames": [],
+                "anexar_solic": False, "justificativa": None,
+                "gto_exames": r.get("exames_portal") or [],
                 "candidatos": [], "solic_idx": None,
                 "gemini": {"motivo": (
                     f"NAO FOI PRECISO FATURAR: a guia ja tinha {len(_an) or 2} anexo(s) "
