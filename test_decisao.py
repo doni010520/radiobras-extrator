@@ -1004,3 +1004,24 @@ def test_intervalo_tem_teto():
     cada dia e uma consulta ao banco."""
     from db import _dias_do_intervalo
     assert len(_dias_do_intervalo("01/01/2020", "31/12/2026")) == 62
+
+
+# ── Guia baixada do portal (JOSETE) ──────────────────────────────────────────
+
+def test_so_aceita_arquivo_de_verdade_do_portal():
+    """O portal responde 200 com HTML de login quando a sessao cai. Um HTML lido
+    como imagem viraria leitura de lixo — e leitura de lixo faz a IA "ver" o que
+    nao existe. So passa o que tem assinatura de PDF, PNG ou JPEG."""
+    from esteira import _mime_do_conteudo
+    assert _mime_do_conteudo(b"%PDF-1.4 blah") == "application/pdf"
+    assert _mime_do_conteudo(bytes([0x89]) + b"PNG") == "image/png"
+    assert _mime_do_conteudo(bytes([0xFF, 0xD8, 0xFF, 0xE0])) == "image/jpeg"
+    assert _mime_do_conteudo(b"<!doctype html><html>login") == ""
+    assert _mime_do_conteudo(b"") == ""
+
+
+def test_download_do_portal_sem_id_nao_tenta():
+    """Sem id nao ha o que baixar — e nao se bate na API de producao a toa."""
+    from esteira import _baixar_anexo_portal
+    b, m = _baixar_anexo_portal(None, None)
+    assert b is None and m == ""
