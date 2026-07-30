@@ -918,3 +918,69 @@ def test_motivo_desconhecido_nao_some():
     from db import classificar_pendencia
     chave, quem, acao = classificar_pendencia("qualquer coisa nova que ninguem previu")
     assert chave == "outros" and quem and acao
+# ── Pareamento de guias (OZIEL) ──────────────────────────────────────────────
+
+def _leitura_dt(idx, paciente, exames, data):
+    d = _leitura(idx, paciente, exames)
+    d["data_solicitacao"] = data
+    return d
+
+
+def test_oziel_cada_guia_com_o_seu_pedido():
+    """OZIEL FERRAZ SANTANA, 25/07 — DUAS guias no mesmo episodio (195420152
+    documentacao ortodontica, 195420167 periapical) e os DOIS pedidos no mesmo
+    prontuario. 'A mais recente vence' entregava o pedido da doc orto para as duas,
+    e a guia de periapical virava pendencia com o pedido dela ali do lado."""
+    leituras = [
+        _leitura_dt(0, "OZIEL FERRAZ SANTANA",
+                    ["documentacao ortodontica", "panoramica", "telerradiografia",
+                     "fotografias", "modelos"], "28/07/2026"),
+        _leitura_dt(1, "OZIEL FERRAZ SANTANA", ["radiografia periapical"], "24/07/2026"),
+    ]
+    idx, a, motivo = _escolher_solicitacao(leituras, "OZIEL FERRAZ SANTANA",
+                                           {"periapical"}, 2)
+    assert motivo is None, motivo
+    assert idx == 1, "devia parear com o pedido de periapical, nao com o de doc orto"
+
+
+def test_pedido_antigo_nao_e_pareado():
+    """A regra do dono continua de pe: pedido de 2023 nao serve para exame de 2026.
+    Casos MATHEUS (1066 dias), JAQUELINE e VANESSA. O pareamento so vale dentro da
+    janela do episodio."""
+    leituras = [
+        _leitura_dt(0, "MATHEUS SILVA", ["panoramica"], "17/07/2026"),
+        _leitura_dt(1, "MATHEUS SILVA", ["periapical"], "20/09/2023"),
+    ]
+    idx, a, motivo = _escolher_solicitacao(leituras, "MATHEUS SILVA", {"periapical"}, 2)
+    assert idx is None and motivo == "NAO_COBRE"
+
+
+def test_pareamento_exige_data_nos_dois():
+    """Sem data lida nao da para afirmar que e o mesmo episodio — vai para pessoa."""
+    leituras = [
+        _leitura_dt(0, "ANA SOUZA", ["panoramica"], "28/07/2026"),
+        _leitura(1, "ANA SOUZA", ["periapical"]),          # sem data
+    ]
+    idx, a, motivo = _escolher_solicitacao(leituras, "ANA SOUZA", {"periapical"}, 2)
+    assert idx is None and motivo == "NAO_COBRE"
+
+
+# ── Inicial abreviada no nome (ISABELA) ──────────────────────────────────────
+
+def test_isabela_inicial_abreviada_e_a_mesma_pessoa():
+    """ISABELA BENINI MEDINA TAVARES, GTO 195416813, 25/07 — o pedido trazia
+    "Isabela Benini M. Tavares". Tres palavras batiam exatamente, mas o "M." era
+    lido como token DIVERGENTE e a guarda contra o irmao reprovava a guia dizendo
+    que o documento era de outra pessoa. O pedido cobria a guia inteira."""
+    assert _nomes_compat("Isabela Benini M. Tavares", "ISABELA BENINI MEDINA TAVARES")
+    assert _nomes_compat("MARIA J. SANTOS", "MARIA JOSE SANTOS")
+    assert _nomes_compat("MARIA J SANTOS", "MARIA JOSE SANTOS")   # sem ponto
+
+
+def test_inicial_nao_vira_carta_branca():
+    """A guarda que existe por causa do irmao (SALLES, pai x filho) continua de pe:
+    a inicial so e aceita DEPOIS de 2+ tokens baterem exatamente, e a letra precisa
+    casar com o token que falta."""
+    assert not _nomes_compat("PEDRO SILVA SANTOS", "JOAO SILVA SANTOS")
+    assert not _nomes_compat("MARIA J. SANTOS", "MARIA ANTONIA SANTOS")
+    assert not _nomes_compat("JOSE C. SILVA", "JOSE CARLOS PEREIRA")
