@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pendências do dia {{ d.dia or '' }}</title>
+{% include '_head.html' %}
+<style>
+  :root{
+    --verde:var(--rb-primary,#0f7a4f);
+    --bg:var(--rb-bg,#f4f6f5);
+    --card:var(--rb-surface,#fff);
+    --surface2:var(--rb-surface-2,#eef3f0);
+    --linha:var(--rb-border,#e6ebe8);
+    --txt:var(--rb-fg,#1f2a26);
+    --sub:var(--rb-fg-muted,#6b7a73);
+    --warn:var(--rb-warning,#a86a00);
+    --danger:var(--rb-danger,#b3261e);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:var(--rb-font,system-ui,-apple-system,sans-serif)}
+  .wrap{max-width:1180px;margin:0 auto;padding:20px}
+  h1{margin:6px 0 2px;letter-spacing:-.01em}
+  .meta{color:var(--sub);font-size:13px;margin-bottom:14px;font-variant-numeric:tabular-nums}
+  form.filtros{background:var(--card);border:1px solid var(--linha);border-radius:12px;
+    padding:14px 16px;margin:12px 0 18px;display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+  .campo{display:flex;flex-direction:column;gap:5px}
+  .campo label{font-size:12px;color:var(--sub);font-weight:600}
+  .campo input{padding:8px 10px;border:1px solid var(--linha);border-radius:8px;
+    background:var(--card);color:var(--txt);font:inherit;min-width:150px}
+  .planos{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .planos label{display:flex;gap:6px;align-items:center;font-size:13px;font-weight:500}
+  .btn{padding:9px 18px;border-radius:8px;border:1px solid var(--verde);background:var(--verde);
+    color:#fff;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;display:inline-block}
+  .btn.sec{background:var(--card);color:var(--verde)}
+  .cards{display:flex;gap:12px;flex-wrap:wrap;margin:14px 0 20px}
+  .card{background:var(--card);border:1px solid var(--linha);border-radius:12px;padding:14px 18px;
+    box-shadow:0 1px 3px rgba(20,40,30,.06);min-width:130px}
+  .card .n{font-size:26px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .card .l{color:var(--sub);font-size:13px}
+  .card.ok .n{color:var(--verde)} .card.pend .n{color:var(--warn)}
+  .card.tec .n{color:var(--sub)}
+
+  .grupo{background:var(--card);border:1px solid var(--linha);border-radius:12px;
+    margin-bottom:16px;overflow:hidden}
+  .grupo>header{padding:13px 16px;border-bottom:1px solid var(--linha);background:var(--surface2)}
+  .grupo h2{margin:0;font-size:15.5px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .quem{display:inline-block;padding:2px 10px;border-radius:999px;font-size:11.5px;
+    font-weight:800;letter-spacing:.02em;text-transform:uppercase}
+  .quem.Radiologista{background:#fdeceb;color:var(--danger)}
+  .quem.Clínica{background:#fdf1de;color:var(--warn)}
+  .quem.Cadastro{background:#e8eef6;color:#2b5b93}
+  .quem.Conferência{background:#eef3f0;color:var(--sub)}
+  .quem.Nós{background:#eef3f0;color:var(--sub)}
+  .cnt{margin-left:auto;font-size:13px;color:var(--sub);font-weight:700}
+  .acao{padding:10px 16px;background:var(--card);color:var(--txt);font-size:13px;
+    border-bottom:1px solid var(--linha)}
+  .acao b{color:var(--verde)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--linha);vertical-align:top}
+  th{font-size:11.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--sub)}
+  tr:last-child td{border-bottom:none}
+  td.mono{font-family:ui-monospace,Consolas,monospace;font-variant-numeric:tabular-nums;
+    color:var(--sub);white-space:nowrap}
+  .motivo{color:var(--sub);font-size:12.5px;margin-top:3px}
+  .tecnica{border-style:dashed}
+  .tecnica>header{background:transparent}
+  .nota{background:var(--surface2);border-left:3px solid var(--sub);padding:11px 14px;
+    border-radius:0 8px 8px 0;font-size:13px;color:var(--sub);margin:0 16px 14px}
+  .nota b{color:var(--txt)}
+  .vazio{background:var(--card);border:1px dashed var(--linha);border-radius:12px;padding:30px;
+    text-align:center;color:var(--sub)}
+  .tudo-ok{background:#e6f4ec;border:1px solid var(--verde);color:var(--verde);
+    border-radius:12px;padding:26px;text-align:center;font-weight:600}
+  @media print{.filtros,.noprint{display:none!important}body{background:#fff}}
+</style>
+</head>
+<body>
+{% include '_topnav.html' %}
+<div class="wrap">
+  <h1>Pendências do dia</h1>
+  <div class="meta">
+    {% if d.dia %}O que ainda não faturou em <strong>{{ d.dia }}</strong>, agrupado por quem precisa agir
+    {% else %}Escolha a data e as unidades{% endif %}
+  </div>
+
+  <form class="filtros" method="get" action="/relatorios/pendencias">
+    <div class="campo">
+      <label for="data">Data</label>
+      <input type="date" id="data" name="data" value="{{ data_iso or '' }}" required>
+    </div>
+    <div class="campo">
+      <label>Unidades</label>
+      <div class="planos">
+        {% for c, p in planos.items() %}
+          <label><input type="checkbox" name="conta" value="{{ c }}"
+                 {% if not d.contas or c in d.contas %}checked{% endif %}> {{ p.label or c }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    <button class="btn" type="submit">Ver pendências</button>
+    {% if d.dia %}
+      <a class="btn sec" href="/relatorios/pendencias.xlsx?{{ qs }}">Excel</a>
+      <a class="btn sec" href="/relatorios/dia?{{ qs }}">Relatório completo</a>
+    {% endif %}
+  </form>
+
+  {% if d.dia %}
+    <div class="cards">
+      <div class="card"><div class="n">{{ d.total_guias }}</div><div class="l">guias no dia</div></div>
+      <div class="card ok"><div class="n">{{ d.faturadas }}</div><div class="l">faturadas</div></div>
+      <div class="card pend"><div class="n">{{ d.total }}</div><div class="l">precisam de alguém</div></div>
+      {% if d.total_fila %}
+      <div class="card tec"><div class="n">{{ d.total_fila }}</div><div class="l">fila técnica (nossa)</div></div>
+      {% endif %}
+    </div>
+
+    {% if not d.grupos and not d.fila_tecnica %}
+      <div class="tudo-ok">Nenhuma pendência neste dia — tudo que podia faturar, faturou.</div>
+    {% endif %}
+
+    {% for g in d.grupos %}
+      <section class="grupo">
+        <header>
+          <h2>
+            <span class="quem {{ g.responsavel }}">{{ g.responsavel }}</span>
+            {{ g.titulo }}
+            <span class="cnt">{{ g.total }} guia{{ 's' if g.total != 1 else '' }}</span>
+          </h2>
+        </header>
+        <div class="acao"><b>O que fazer:</b> {{ g.acao }}</div>
+        <table>
+          <tr><th>Paciente</th><th>GTO</th><th>Unidade</th><th>Exames da guia</th></tr>
+          {% for i in g.itens %}
+          <tr>
+            <td><strong>{{ i.paciente or '—' }}</strong>
+              {% if g.chave in ('pedido_nao_cobre',) and i.motivo %}
+                <div class="motivo">{{ i.motivo }}</div>
+              {% endif %}
+            </td>
+            <td class="mono">{{ i.gto }}</td>
+            <td>{{ i.unidade }}</td>
+            <td>{{ i.exames_gto or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </section>
+    {% endfor %}
+
+    {% if d.fila_tecnica %}
+      <h2 style="margin:26px 0 6px;font-size:16px">Fila técnica — não é tarefa da operação</h2>
+      <div class="nota">
+        Estas guias não faturaram por <b>falha nossa</b>, não por falta de documento.
+        Pedir pedido novo à clínica seria trabalho perdido — o documento certo já está
+        no prontuário. Elas ficam nesta fila e <b>o robô as refaz sozinho</b> assim que
+        a correção subir, no reprocessamento do dia. Estão aqui só para você saber que
+        existem.
+      </div>
+      {% for g in d.fila_tecnica %}
+        <section class="grupo tecnica">
+          <header>
+            <h2>
+              <span class="quem Nós">Nós</span>
+              {{ g.titulo }}
+              <span class="cnt">{{ g.total }} guia{{ 's' if g.total != 1 else '' }}</span>
+            </h2>
+          </header>
+          <table>
+            <tr><th>Paciente</th><th>GTO</th><th>Unidade</th><th>Exames da guia</th></tr>
+            {% for i in g.itens %}
+            <tr>
+              <td>{{ i.paciente or '—' }}</td>
+              <td class="mono">{{ i.gto }}</td>
+              <td>{{ i.unidade }}</td>
+              <td>{{ i.exames_gto or '—' }}</td>
+            </tr>
+            {% endfor %}
+          </table>
+        </section>
+      {% endfor %}
+    {% endif %}
+  {% else %}
+    <div class="vazio">Escolha uma data acima para ver as pendências.</div>
+  {% endif %}
+</div>
+</body>
+</html>

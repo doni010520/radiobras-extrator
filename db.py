@@ -675,6 +675,115 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
         return ex.id
 
 
+# ── Pendências de um dia, agrupadas por QUEM RESOLVE ─────────────────────────
+# O relatório do dia já dizia o que não faturou e por quê. Faltava a pergunta que
+# a operadora realmente faz: "em qual destas eu preciso mexer?". Uma lista de 10
+# nomes misturados esconde que 7 se resolvem sozinhas quando o laudo sair e só 3
+# dependem de alguém. Agrupar por responsável é o que transforma relatório em
+# tarefa. Pedido do dono, 30/07.
+#
+# A ordem importa: o primeiro padrão que casar vence, então o mais específico vem
+# antes. Cada grupo carrega a AÇÃO — quem lê não precisa deduzir o que fazer.
+_GRUPOS_PENDENCIA = [
+    ("sem_entregavel", r"n[ãa]o h[áa] laudo nem imagem|ainda n[ãa]o tem entreg[áa]vel",
+     "Radiologista", "Exame registrado sem laudo E sem imagem — não há o que anexar. "
+     "Cobrar a emissão."),
+    ("falta_laudo", r"falta o LAUDO|sem laudo|laudo veio em branco|laudo.*n[ãa]o pronto",
+     "Radiologista", "O robô anexa sozinho assim que o laudo sair. Só cobrar."),
+    ("pedido_nao_cobre", r"n[ãa]o cobre tudo que a guia autoriza|FALTA no pedido",
+     "Clínica", "Pedir à clínica um pedido que inclua o exame que falta."),
+    ("sem_pedido", r"nenhum pedido do dentista|n[ãa]o h[áa] nenhum pedido|sem anexo candidato"
+     r"|Sem solicita[çc][ãa]o e sem justificativa",
+     "Clínica", "Pedir à clínica que anexe o pedido no prontuário."),
+    ("nome_nao_bate", r"nenhum documento do prontu[áa]rio est[áa] no nome"
+     r"|nenhum anexo com paciente compat",
+     "Nós", "O pedido pode ser do paciente e não estamos conseguindo provar. "
+     "Conferir no prontuário."),
+    ("guia_ilegivel", r"n[ãa]o conseguiu ler quais exames a guia autoriza|GTO ileg[íi]vel"
+     r"|sem exames de refer[êe]ncia",
+     "Nós", "Não lemos o que a guia autoriza. Abrir a guia no portal e conferir."),
+    ("anexacao", r"anexa[çc][ãa]o falhou|n[ãa]o sobrou nenhum laudo|upload",
+     "Nós", "A decisão passou e a anexação foi barrada. Conferir se o exame é do convênio."),
+    ("paciente_nao_achado", r"n[ãa]o foi encontrado no PRORADIS|paciente da guia n[ãa]o foi",
+     "Cadastro", "Procurar no PRORADIS pelo primeiro nome e conferir se o cadastro "
+     "bate com o da guia."),
+    ("homonimo", r"mais de um paciente|hom[ôo]nimo",
+     "Conferência", "Dois pacientes com o mesmo nome. Dizer qual é o certo."),
+]
+
+
+def classificar_pendencia(motivo: str, categoria: str = "") -> tuple:
+    """(chave, responsável, ação) de uma pendência, a partir do motivo escrito."""
+    import re as _re
+    m = str(motivo or "")
+    for chave, padrao, quem, acao in _GRUPOS_PENDENCIA:
+        if _re.search(padrao, m, _re.I):
+            return chave, quem, acao
+    return ("outros", "Conferência",
+            "Motivo fora dos padrões conhecidos — abrir a execução e ler o log técnico.")
+
+
+_NOSSO = "Nós"   # responsavel cujas pendencias vao para a FILA TECNICA
+
+
+_TITULO_GRUPO = {
+    "sem_entregavel": "Exame sem laudo e sem imagem",
+    "falta_laudo": "Esperando o laudo do radiologista",
+    "pedido_nao_cobre": "O pedido do dentista não cobre a guia",
+    "sem_pedido": "Não há pedido do dentista no prontuário",
+    "nome_nao_bate": "O nome do pedido não bate com o da guia",
+    "guia_ilegivel": "Não conseguimos ler o que a guia autoriza",
+    "anexacao": "A anexação foi barrada",
+    "paciente_nao_achado": "Paciente não encontrado no PRORADIS",
+    "homonimo": "Mais de um paciente com o mesmo nome",
+    "outros": "Outros",
+}
+
+
+def pendencias_do_dia(dia: str, contas: list = None) -> dict:
+    """Só as pendências de um dia, agrupadas por quem precisa agir.
+
+    Reaproveita relatorio_dia() — mesma consolidação, mesma regra de 'a informação
+    mais recente vence e faturada em qualquer execução conta como faturada'. Aqui
+    o recorte é outro: o que ainda depende de alguém, e de quem."""
+    d = relatorio_dia(dia, contas)
+    grupos = {}
+    for i in d.get("pendentes_lista") or []:
+        chave, quem, acao = classificar_pendencia(i.get("motivo"), i.get("categoria"))
+        g = grupos.setdefault(chave, {"chave": chave, "titulo": _TITULO_GRUPO.get(chave, chave),
+                                      "responsavel": quem, "acao": acao, "itens": []})
+        g["itens"].append(i)
+    _ordem = {"Radiologista": 0, "Clínica": 1, "Cadastro": 2, "Conferência": 3}
+    todos = sorted(grupos.values(),
+                   key=lambda g: (_ordem.get(g["responsavel"], 9), -len(g["itens"])))
+    for g in todos:
+        g["total"] = len(g["itens"])
+        g["itens"].sort(key=lambda x: (x.get("unidade") or "", x.get("paciente") or ""))
+    # FALHA NOSSA NÃO É TAREFA DA OPERAÇÃO. Regra do dono (30/07): "o que nós
+    # resolvemos aqui deve entrar num fallback até ser resolvido, não deve ir para
+    # pendências". Uma guia que não faturou por bug nosso não tem o que a recepção
+    # fazer — pedir pedido novo à clínica seria trabalho jogado fora, porque o
+    # documento certo já está lá. Ela fica numa FILA TÉCNICA, visível (nada é
+    # silencioso) mas fora da lista de tarefas, e o reprocessamento do dia a
+    # resolve sozinha assim que a correção subir.
+    lista = [g for g in todos if g["responsavel"] != _NOSSO]
+    fila = [g for g in todos if g["responsavel"] == _NOSSO]
+    por_quem = {}
+    for g in lista:
+        por_quem[g["responsavel"]] = por_quem.get(g["responsavel"], 0) + g["total"]
+    return {
+        "dia": d.get("dia"), "contas": d.get("contas"),
+        "grupos": lista,
+        "total": sum(g["total"] for g in lista),          # só o que depende de gente
+        "fila_tecnica": fila,
+        "total_fila": sum(g["total"] for g in fila),
+        "faturadas": d.get("resumo", {}).get("faturadas", 0),
+        "total_guias": d.get("resumo", {}).get("total", 0),
+        "por_responsavel": por_quem,
+        "por_unidade": d.get("por_unidade") or [],
+    }
+
+
 def relatorio_dia(dia: str, contas: list = None) -> dict:
     """Fechamento CONSOLIDADO de um dia (todas as unidades ou as informadas).
 
