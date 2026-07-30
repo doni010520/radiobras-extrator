@@ -30,14 +30,25 @@ _PEDIDO_MARK = ["solicito", "solicitacao", "solicitacao de exame", "requisicao",
 
 # Mapa de exames -> termo canônico (cobre sinônimos da solicitação e da GTO).
 _CANON = [
-    (r"panor", "panoramica"),
+    # `\bpano\b` cobre a ABREVIACAO da propria operadora no campo 32 da GTO:
+    # "Rad.Pano.C/Trac". Sem ela, `panor` nao casava (falta o "r"), a guia ficava
+    # SEM exame de referencia e caia em "nao consegui ler o que a guia autoriza"
+    # — falha nossa, nao da clinica. Caso PAULO ROBERTO, GTO 195418785.
+    (r"panor|\bpano\b", "panoramica"),
     (r"periap", "periapical"),
     (r"interprox|bite.?wing|bitewing", "interproximal"),
     # 'telerad' (um R só) e 'tele-radio': o dentista escreve à mão e abrevia.
     # Caso MIRLA (22/07 Centro): "Teleradigrafia lateral com tweed e Usp" não casava
     # com `telerr`, a telerradiografia sumia, e a documentação ortodôntica — que
     # exige panorâmica E telerradiografia como âncoras — era reprovada inteira.
-    (r"telerr|telerad|tele.?radio|cefalom|ricketts|\bceph\b", "telerradiografia"),
+    # "TELE PERFIL", "TELE DE PERFIL" e "RICKETES" (grafia livre) sao como o
+    # dentista escreve no dia a dia. Sem elas, um pedido que E documentacao
+    # COMPLETA saia lido como {documentacao, fotografia, panoramica} — sem a
+    # telerradiografia, que e justamente a ancora que separa completa de
+    # controle — e a guia virava "pedido nao cobre". Caso AMANDA QUEIROZ, 30/07.
+    # `ricket` como prefixo cobre RICKETTS/RICKETES/RICKETS (analise cefalometrica).
+    (r"telerr|telerad|tele.?radio|tele\s*(?:de\s*)?perfil"
+     r"|cefalom|ricket|\bceph\b", "telerradiografia"),
     # "documenta..." + as ABREVIACOES DO PORTAL OdontoPrev, colhidas do catalogo
     # /v1/gto/eventos em 26/07: "Doc Orto Basica/Compl/Espec./Contro", "DocOrtoComp
     # II", "Doc Ortopédica", "Doc Periodontal", "Doc Perio BD", "Doc Diag Imp BD".
@@ -248,8 +259,12 @@ def expande_documentacao(ex: set) -> set:
     componentes satisfaz uma guia de documentação; pedir 'documentação' NÃO
     satisfaz uma guia que exige panorâmica avulsa."""
     ex = set(ex or ())
-    if "documentacao" in ex:
-        return ex
+    # NAO sair cedo quando a palavra "documentacao" ja aparece no pedido. O
+    # atalho `if "documentacao" in ex: return ex` punia o pedido mais completo:
+    # quem escrevia "DOCUMENTACAO" E ainda listava tele + fotos + panoramica
+    # ficava com o rotulo generico, enquanto quem so listava os componentes era
+    # promovido a COMPLETA. A palavra escrita nao diz o subtipo — a composicao
+    # diz. Caso AMANDA QUEIROZ, 30/07.
     out = set(ex)
     if _DOC_ORTO_ANCORAS <= ex and (ex & _DOC_ORTO_TERCEIRO):
         out |= {"documentacao", "documentacao_completa"}

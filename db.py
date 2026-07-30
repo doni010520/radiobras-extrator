@@ -791,15 +791,25 @@ def get_execucao(eid: int) -> dict | None:
         e = s.get(Execucao, eid)
         if not e:
             return None
+        # EVIDÊNCIA: estes campos eram gravados desde o PR#20 e não saíam em lugar
+        # nenhum — nem na tela, nem no JSON. Toda pergunta "por que essa não
+        # faturou?" morria aqui: a resposta estava no banco, inalcançável. Sem
+        # eles, casos como DOMINGOS (paciente não achado), CLISSIA (sem laudo) e
+        # ELIENE (filtro tirou todos os laudos) só se explicavam por adivinhação.
         itens = [{
             "gto": it.gto, "paciente": it.paciente, "categoria": it.categoria,
             "faturado": it.faturado, "motivo": it.motivo, "solicitacao": it.solicitacao,
             "exames_gto": it.exames_gto, "exames_lidos": it.exames_lidos,
             "n_arquivos": it.n_arquivos,
+            "paciente_lido": it.paciente_lido,      # o nome que a IA leu no papel
+            "funil": it.funil,                      # prontuário -> candidatos -> descartados
+            "arquivos_plano": it.arquivos_plano,    # o que ia/foi anexado
+            "excluidos": it.excluidos,              # o que saiu do plano
+            "data_exame_real": it.data_exame_real,  # exame veio de outro dia
         } for it in e.itens]
         return {
             "id": e.id, "dia": e.dia, "conta": e.conta, "criado_em": e.criado_em,
-            "dry_run": e.dry_run, "erro": e.erro,
+            "dry_run": e.dry_run, "erro": e.erro, "log": e.log,
             "tempo_total": e.tempo_total, "tempo_descoberta": e.tempo_descoberta,
             "tempo_download": e.tempo_download, "pendentes": e.pendentes,
             "faturadas": e.faturadas, "nao_faturadas": e.nao_faturadas,

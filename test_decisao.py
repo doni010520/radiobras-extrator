@@ -849,3 +849,28 @@ def test_controle_nao_vira_completa():
     e = expande_documentacao(canon_exames("Fotografia extra-bucal, Rx Panoramico"))
     assert "documentacao" in e
     assert "documentacao_completa" not in e
+
+
+def test_amanda_escreveu_a_palavra_e_os_componentes():
+    """AMANDA QUEIROZ, 30/07 — o pedido escreve DOCUMENTACAO *e* lista tele,
+    fotos e panoramica. O atalho `if "documentacao" in ex: return ex` saia antes
+    de olhar a composicao, entao o pedido MAIS completo virava o rotulo generico
+    e a guia caia em 'pedido nao cobre'. A palavra nao diz o subtipo."""
+    txt = ("EXAMES RADIOGRAFICOS INTRA BUCAIS 1- PANORAMICA EM TOPO "
+           "2- TELE PERFIL COM TRACADO ANATOMICO 3- RICKETES FATORES "
+           "DOCUMENTACAO FOTOS INTRA BUCAIS FRONTAL PERFIL DIREITO E ESQUERDO")
+    assert "documentacao_completa" in expande_documentacao(canon_exames(txt))
+
+
+def test_tele_perfil_e_telerradiografia():
+    """Como o dentista escreve de verdade. Sem isto o pedido perdia a ancora que
+    separa documentacao COMPLETA de CONTROLE."""
+    for t in ("TELE PERFIL COM TRACADO ANATOMICO", "tele de perfil", "RICKETES"):
+        assert "telerradiografia" in canon_exames(t), t
+
+
+def test_abreviacao_da_operadora_no_campo_32():
+    """PAULO ROBERTO, GTO 195418785 — a propria OdontoPrev escreve
+    'Rad.Pano.C/Trac'. `panor` nao casa (falta o 'r'), a guia ficava sem exame de
+    referencia e nao dava para conferir pedido nenhum. Falha nossa."""
+    assert "panoramica" in canon_exames("Rad.Pano.C/Trac")

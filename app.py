@@ -21,7 +21,7 @@ except Exception:
     _TZ = None
 
 from flask import (Flask, jsonify, render_template, request, send_file,
-                   session, redirect, url_for)
+                   session, redirect, url_for, Response)
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -1416,6 +1416,26 @@ def relatorios_execucao(eid: int):
     ex["quando"] = _fmt_quando(ex.get("criado_em"))
     ex["plano"] = _plano_nome(ex.get("conta"))
     return render_template("execucao.html", ex=ex, pdf=False)
+
+
+@app.route("/relatorios/execucao/<int:eid>/log")
+def relatorios_execucao_log(eid: int):
+    """Log técnico BRUTO da execução — a evidência de cada decisão, guia por guia.
+
+    Existia gravado em Execucao.log desde sempre e não tinha por onde ler: a
+    pergunta "por que essa guia não faturou?" só se respondia por dedução. Aqui
+    está o que o robô viu — nomes lidos, arquivos baixados, o que entrou e saiu
+    do plano de anexação, e por quê."""
+    ex = db.get_execucao(eid)
+    if not ex:
+        return ("Execução não encontrada.", 404)
+    cab = (f"# execução {eid} · dia {ex.get('dia')} · conta {ex.get('conta')}"
+           f"{' · SIMULAÇÃO' if ex.get('dry_run') else ''}\n"
+           f"# {ex.get('faturadas')} faturadas · {ex.get('nao_faturadas')} não faturadas\n")
+    if ex.get("erro"):
+        cab += f"# ABORTOU: {ex['erro']}\n"
+    corpo = ex.get("log") or "(esta execução não gravou log)"
+    return Response(cab + "\n" + corpo, mimetype="text/plain; charset=utf-8")
 
 
 @app.route("/relatorios/execucao/<int:eid>.pdf")
