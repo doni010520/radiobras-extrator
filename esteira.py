@@ -288,6 +288,7 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
     comum, depois o mais recente (idx menor). Retorna (idx, leitura, motivo_ou_None)."""
     melhor = None
     algum_pac = False
+    cands_ok = []          # candidatas validas (tipo/legivel/paciente), em ordem
     for a in leituras or []:
         if not isinstance(a, dict):
             continue
@@ -328,18 +329,35 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         # primeiro candidato com nome compativel e SEM expandir documentacao — e
         # entao dizia "FALTA no pedido: nenhum" numa guia reprovada por falta de
         # cobertura. Absurdo logico, 6 casos em 23-24/07.
+        # A MAIS RECENTE VENCE — regra do dono (30/07): "nunca usar uma solicitacao
+        # mais velha se houver uma mais nova". Antes a COBERTURA decidia primeiro e a
+        # recencia era so desempate: quando a solicitacao nova nao cobria e uma
+        # antiga cobria, a ANTIGA era escolhida — e depois tinha a data reescrita.
+        # Medido: 10 guias faturadas com pedido de ate 1066 dias antes do exame
+        # (MATHEUS 20/09/23 para exame de 17/07/26; JAQUELINE 22/08/23; VANESSA
+        # 07/11/23). Um pedido de 2023 nao e o pedido de um exame de 2026.
+        #
+        # Recencia = ordem do anexo no prontuario (a lista chega ordenada por id
+        # decrescente, entao idx MENOR = mais novo). A data escrita no papel entra
+        # so como desempate, porque e lida por IA e as vezes falha.
+        _dt = _parse_br_date(a.get("data_solicitacao"))
+        cands_ok.append({"idx": ai, "a": a, "ex": ex, "data": _dt,
+                         "cobre": bool(gto_ex and gto_ex.issubset(ex))})
+    # ESCOLHA: a mais recente entre as candidatas — e SO ela e avaliada na cobertura.
+    if cands_ok:
+        cands_ok.sort(key=lambda c: (c["idx"], -(c["data"].toordinal() if c["data"] else 0)))
+        recente = cands_ok[0]
         if isinstance(detalhe, dict):
-            _falta_aqui = gto_ex - ex
-            _ant = detalhe.get("falta")
-            if _ant is None or len(_falta_aqui) < len(_ant):
-                detalhe.update({"idx": ai, "lidos": sorted(ex), "falta": _falta_aqui})
-        if not (gto_ex and gto_ex.issubset(ex)):
-            continue
-        score = (len(gto_ex & ex), -ai)
-        if melhor is None or score > melhor[0]:
-            melhor = (score, ai, a)
-    if melhor is not None:
-        return melhor[1], melhor[2], None
+            detalhe["escolhida_idx"] = recente["idx"]
+            detalhe["outras"] = len(cands_ok) - 1
+        if recente["cobre"]:
+            return recente["idx"], recente["a"], None
+        # A mais recente NAO cobre. NAO cai para uma anterior: se existe pedido novo,
+        # e ele que vale. A guia vira pendencia dizendo o que falta NELE.
+        if isinstance(detalhe, dict):
+            detalhe.update({"idx": recente["idx"], "lidos": sorted(recente["ex"]),
+                            "falta": gto_ex - recente["ex"]})
+        melhor = None
     if not leituras:
         return None, None, "LEITURA_VAZIA"
     if not gto_ex:
@@ -1026,6 +1044,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 dec = {"indice_solicitacao": idx, "paciente_lido": a.get("paciente_lido"),
                        "exames_lidos": a.get("exames_lidos"),
                        "data_solicitacao": a.get("data_solicitacao"),
+                       "outras_solicitacoes": (_det or {}).get("outras", 0),
                        "box_data": a.get("box_data"), "box_assinatura": a.get("box_assinatura"),
                        "legivel": True, "tipo": a.get("tipo"), "exames_batem": True,
                        "paciente_bate": True, "confianca": "alta", "anexar": True,

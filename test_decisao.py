@@ -683,3 +683,48 @@ def test_irma_com_o_mesmo_dentista_continua_rejeitada():
         leituras, "TAINA SALLES DE OLIVEIRA", {"panoramica"}, 1, "FABIELLE",
         None, "19 - Numero no Conselho 20489")
     assert idx is None
+
+
+# ── A MAIS RECENTE VENCE (regra do dono, 30/07) ─────────────────────────────
+# "nunca usar uma solicitacao mais velha se houver uma mais nova". Antes a
+# COBERTURA decidia primeiro: quando a nova nao cobria e uma antiga cobria, a
+# ANTIGA era escolhida e tinha a data reescrita. Medidas 10 guias faturadas com
+# pedido de ate 1066 dias antes do exame (MATHEUS 20/09/23 x exame 17/07/26).
+
+def _sol(idx, exames, data=None, paciente="ANA LIMA COSTA"):
+    return {"idx": idx, "tipo": "solicitacao", "legivel": True,
+            "paciente_lido": paciente, "exames_lidos": exames,
+            "data_solicitacao": data}
+
+
+def test_entre_duas_que_cobrem_usa_a_mais_recente():
+    """idx menor = anexo mais novo (a lista chega ordenada por id decrescente)."""
+    idx, _a, _m = _escolher_solicitacao(
+        [_sol(0, ["panoramica"]), _sol(1, ["panoramica", "periapical"])],
+        "ANA LIMA COSTA", {"panoramica"}, 2)
+    assert idx == 0
+
+
+def test_nao_cai_para_a_antiga_quando_a_nova_nao_cobre():
+    """O caso que faturava pedido de 2023 para exame de 2026."""
+    det = {}
+    idx, _a, motivo = _escolher_solicitacao(
+        [_sol(0, ["periapical"]), _sol(1, ["panoramica"])],
+        "ANA LIMA COSTA", {"panoramica"}, 2, "", det)
+    assert idx is None and motivo == "NAO_COBRE"
+    assert det["falta"] == {"panoramica"}      # o que falta NA MAIS RECENTE
+    assert det["escolhida_idx"] == 0
+
+
+def test_uma_unica_solicitacao_e_usada():
+    idx, _a, motivo = _escolher_solicitacao(
+        [_sol(3, ["panoramica"])], "ANA LIMA COSTA", {"panoramica"}, 4)
+    assert idx == 3 and motivo is None
+
+
+def test_registra_quantas_outras_solicitacoes_existiam():
+    det = {}
+    _escolher_solicitacao([_sol(0, ["panoramica"]), _sol(1, ["panoramica"]),
+                           _sol(2, ["panoramica"])],
+                          "ANA LIMA COSTA", {"panoramica"}, 3, "", det)
+    assert det["outras"] == 2
