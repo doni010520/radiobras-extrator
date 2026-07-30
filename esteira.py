@@ -351,7 +351,31 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
             detalhe["escolhida_idx"] = recente["idx"]
             detalhe["outras"] = len(cands_ok) - 1
         if recente["cobre"]:
+            if isinstance(detalhe, dict):
+                detalhe["idxs"] = [recente["idx"]]
             return recente["idx"], recente["a"], None
+        # UM PEDIDO PODE VIR EM MAIS DE UMA FOLHA. Caso JUCILENE PINHEIRO DE OLIVEIRA
+        # (GTO 195371168, 24/07 Centro): a guia autoriza panoramica + periapical +
+        # interproximal, e o prontuario tem DUAS solicitacoes da MESMA dentista, na
+        # MESMA data — "RADIOGRAFIA PANORAMICA COM LAUDO" e "RADIOGRAFIA PERIAPICAL E
+        # INTERPROXIMAL DAS UNIDADES 24, 25, 26, 27, 36 e 37". Juntas cobrem; sozinhas
+        # nenhuma cobre. O sistema avaliava uma por vez e reprovava.
+        #
+        # "A mais recente vence" continua valendo: o que se soma e o pedido mais
+        # recente, que pode estar escrito em varias folhas da MESMA DATA. Folha de
+        # data anterior fica de fora, como o dono definiu.
+        if recente["data"]:
+            grupo = [c for c in cands_ok if c["data"] == recente["data"]]
+            if len(grupo) > 1:
+                uniao = set()
+                for c in grupo:
+                    uniao |= c["ex"]
+                if gto_ex and gto_ex.issubset(uniao):
+                    if isinstance(detalhe, dict):
+                        detalhe["idxs"] = [c["idx"] for c in grupo]
+                        detalhe["somadas"] = len(grupo)
+                    return recente["idx"], recente["a"], None
+                recente = {**recente, "ex": uniao}   # a mensagem fala do CONJUNTO
         # A mais recente NAO cobre. NAO cai para uma anterior: se existe pedido novo,
         # e ele que vale. A guia vira pendencia dizendo o que falta NELE.
         if isinstance(detalhe, dict):
@@ -1227,6 +1251,23 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     sname = "SOLICITACAO_" + (re.sub(r"[^A-Za-z0-9._-]+", "_", cands[idx][0]) or "solic")
                     with open(os.path.join(pasta_dl, sname), "wb") as f:
                         f.write(blob)
+                    # PEDIDO EM VARIAS FOLHAS: quando o pedido mais recente veio
+                    # dividido (mesma data), TODAS as folhas sobem — senao a guia e
+                    # anexada com metade do pedido. Caso JUCILENE (GTO 195371168).
+                    # A folha extra vai como ESTA, sem ajuste de data: ela tem a
+                    # mesma data da principal, que ja foi tratada acima.
+                    _extras_idx = [i for i in (_det.get("idxs") or []) if i != idx]
+                    for _ix in _extras_idx:
+                        try:
+                            _fn2, _mm2, _bl2, _sv2 = cands[_ix]
+                            _sn2 = "SOLICITACAO_" + (
+                                re.sub(r"[^A-Za-z0-9._-]+", "_", _fn2) or f"solic{_ix}")
+                            with open(os.path.join(pasta_dl, _sn2), "wb") as f:
+                                f.write(_bl2)
+                        except Exception:
+                            continue
+                    if _extras_idx:
+                        out["solicitacoes_extras"] = len(_extras_idx)
             break
         except Exception as e:
             out["erro"] = f"gemini: {str(e)[:120]}"

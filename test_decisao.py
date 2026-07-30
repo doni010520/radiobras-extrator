@@ -753,3 +753,47 @@ def test_caso_lais_passa():
     idx, _a, motivo = _escolher_solicitacao(
         leituras, "LAIS ZAA GUIA SANTOS", canon_exames("Doc Orto Compl"), 1)
     assert idx == 0 and motivo is None
+
+
+# ── Pedido em VARIAS FOLHAS (caso JUCILENE, 24/07 Centro) ───────────────────
+# GTO 195371168 autoriza panoramica + periapical + interproximal. O prontuario tem
+# DUAS solicitacoes da mesma dentista, na MESMA data: uma pede a panoramica, outra
+# pede periapical e interproximal. Juntas cobrem; sozinhas nenhuma cobre.
+
+def _folha(idx, texto, data, paciente="JUCILENE PINHEIRO DE OLIVEIRA"):
+    return {"idx": idx, "tipo": "solicitacao", "legivel": True,
+            "paciente_lido": paciente, "exames_lidos": [texto],
+            "data_solicitacao": data}
+
+
+GUIA_JUCILENE = (canon_exames("Rad.Panor.S/Tra") | canon_exames("Rx Periapical")
+                 | canon_exames("Rx Interprox."))
+
+
+def test_duas_folhas_da_mesma_data_se_somam():
+    det = {}
+    idx, _a, motivo = _escolher_solicitacao([
+        _folha(0, "RADIOGRAFIA PERIAPICAL E INTERPROXIMAL DAS UNIDADES: 24, 25, 26, 27, 36 e 37",
+               "18/07/2026"),
+        _folha(1, "RADIOGRAFIA PANORAMICA COM LAUDO", "18/07/2026"),
+    ], "JUCILENE PINHEIRO DE OLIVEIRA", GUIA_JUCILENE, 2, "", det)
+    assert motivo is None and idx == 0
+    assert sorted(det["idxs"]) == [0, 1]      # as DUAS folhas vao ser anexadas
+
+
+def test_folha_de_data_ANTERIOR_nao_e_somada():
+    """A regra do dono continua: nunca usar pedido mais velho havendo um mais novo."""
+    idx, _a, motivo = _escolher_solicitacao([
+        _folha(0, "RADIOGRAFIA PERIAPICAL E INTERPROXIMAL", "18/07/2026"),
+        _folha(1, "RADIOGRAFIA PANORAMICA COM LAUDO", "02/01/2024"),
+    ], "JUCILENE PINHEIRO DE OLIVEIRA", GUIA_JUCILENE, 2, "", None)
+    assert idx is None and motivo == "NAO_COBRE"
+
+
+def test_uma_folha_que_cobre_sozinha_nao_arrasta_outras():
+    det = {}
+    idx, _a, motivo = _escolher_solicitacao([
+        _folha(0, "RADIOGRAFIA PANORAMICA", "18/07/2026"),
+        _folha(1, "RADIOGRAFIA PANORAMICA", "18/07/2026"),
+    ], "JUCILENE PINHEIRO DE OLIVEIRA", {"panoramica"}, 2, "", det)
+    assert motivo is None and det["idxs"] == [0]
