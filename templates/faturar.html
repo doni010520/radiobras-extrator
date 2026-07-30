@@ -219,9 +219,34 @@ async function doRun(plano, dia, label){
   }catch(e){ $('msg').innerHTML='<span class="err">Erro de rede.</span>'; setBusy(false); }
 }
 
+// Falhas seguidas de consulta. O job vive na MEMÓRIA do processo: se o container
+// reinicia (deploy) o job some e o /status passa a devolver 404. Antes isso caía no
+// "erro transitório" abaixo e a barra girava para sempre — o usuário ficava 30min
+// olhando um percentual congelado achando que estava trabalhando. Agora ela desiste.
+var pollFalhas=0;
+function pollDesiste(msg){
+  clearInterval(pollT); clearInterval(etaT);
+  onDone({done:true, error:msg});
+}
+
 async function poll(){
   try{
-    const r=await fetch('/faturar/status/'+jid); const j=await r.json();
+    const r=await fetch('/faturar/status/'+jid);
+    if(r.status===404){               // o job não existe mais no servidor: não volta
+      pollDesiste('A execução foi interrompida — o servidor reiniciou. '
+        +'Ela parou antes de anexar qualquer coisa, então nada foi enviado ao portal '
+        +'e nada ficou duplicado. Pode rodar este dia de novo com segurança.');
+      return;
+    }
+    if(!r.ok){                        // 5xx/302: pode ser transitório, mas não para sempre
+      if(++pollFalhas>=8){
+        pollDesiste('Perdi contato com o servidor (sessão expirada ou queda de rede). '
+          +'Recarregue a página e confira o Relatório do dia antes de rodar de novo.');
+      }
+      return;
+    }
+    const j=await r.json();
+    pollFalhas=0;
     if(j.done){                       // terminou (com sucesso OU com erro) -> onDone decide
       clearInterval(pollT); clearInterval(etaT);
       onDone(j);
@@ -236,7 +261,13 @@ async function poll(){
       etaLeft = (etaLeft==null) ? p.eta : Math.round(etaLeft*0.5 + p.eta*0.5);
       renderEta();
     }
-  }catch(e){}
+  }catch(e){
+    // rede caiu ou veio HTML de login no lugar do JSON: tolera alguns, depois desiste
+    if(++pollFalhas>=8){
+      pollDesiste('Perdi contato com o servidor (sessão expirada ou queda de rede). '
+        +'Recarregue a página e confira o Relatório do dia antes de rodar de novo.');
+    }
+  }
 }
 
 function onDone(j){
