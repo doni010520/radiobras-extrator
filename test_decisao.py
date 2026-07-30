@@ -876,6 +876,48 @@ def test_abreviacao_da_operadora_no_campo_32():
     assert "panoramica" in canon_exames("Rad.Pano.C/Trac")
 
 
+# ── Pendências agrupadas por quem resolve ────────────────────────────────────
+
+def test_classifica_os_motivos_reais_de_24_07():
+    """Os 13 motivos que a producao escreveu de fato. Nenhum pode cair em 'outros'
+    — uma pendencia sem dono e uma pendencia que ninguem pega."""
+    from db import classificar_pendencia
+    casos = [
+        ("nao ha laudo nem imagem para baixar", "Radiologista", "sem_entregavel"),
+        ("Solicitacao OK, mas falta o LAUDO valido no PRORADIS", "Radiologista", "falta_laudo"),
+        ("o pedido do dentista nao cobre tudo que a guia autoriza. FALTA no pedido: "
+         "panoramica", "Clinica", "pedido_nao_cobre"),
+        ("nao ha nenhum pedido do dentista anexado ao prontuario", "Clinica", "sem_pedido"),
+        ("nenhum documento do prontuario esta no nome deste paciente", "Nos", "nome_nao_bate"),
+        ("o sistema nao conseguiu ler quais exames a guia autoriza", "Nos", "guia_ilegivel"),
+        ("a anexacao falhou: apos excluir exames fora da guia nao sobrou nenhum laudo",
+         "Nos", "anexacao"),
+        ("o paciente da guia nao foi encontrado no PRORADIS", "Cadastro", "paciente_nao_achado"),
+    ]
+    for motivo, _quem, chave_esperada in casos:
+        chave, quem, acao = classificar_pendencia(motivo)
+        assert chave == chave_esperada, f"{motivo[:40]} -> {chave}"
+        assert acao, "toda pendencia precisa dizer o que fazer"
+
+
+def test_falha_nossa_nao_vira_tarefa_da_operacao():
+    """Regra do dono (30/07): 'o que nos resolvemos aqui deve entrar num fallback
+    ate ser resolvido, nao deve ir para pendencias'. Pedir pedido novo a clinica
+    por causa de bug nosso e trabalho jogado fora — o documento certo ja esta la."""
+    from db import classificar_pendencia
+    nossos = ["nenhum documento do prontuario esta no nome deste paciente",
+              "o sistema nao conseguiu ler quais exames a guia autoriza",
+              "a anexacao falhou: nao sobrou nenhum laudo"]
+    for m in nossos:
+        assert classificar_pendencia(m)[1] == "Nós", m
+
+
+def test_motivo_desconhecido_nao_some():
+    """Nada e silencioso: motivo fora do padrao cai em 'outros' com acao explicita,
+    nunca desaparece da lista."""
+    from db import classificar_pendencia
+    chave, quem, acao = classificar_pendencia("qualquer coisa nova que ninguem previu")
+    assert chave == "outros" and quem and acao
 # ── Pareamento de guias (OZIEL) ──────────────────────────────────────────────
 
 def _leitura_dt(idx, paciente, exames, data):

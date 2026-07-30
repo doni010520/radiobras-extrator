@@ -2024,6 +2024,67 @@ def relatorios_dia():
                            data_iso=data_iso, qs=qs, pdf=False)
 
 
+@app.route("/relatorios/pendencias")
+def relatorios_pendencias():
+    """As pendências de um dia, agrupadas por QUEM precisa agir.
+
+    O relatório do dia responde "o que não faturou e por quê". Este responde a
+    pergunta seguinte, que é a que gera trabalho: "em qual delas eu mexo?".
+    Numa lista de 10 nomes, 7 costumam se resolver sozinhas quando o laudo sair."""
+    from config import PLANOS
+    dia, contas, data_iso, qs = _rel_dia_params()
+    d = db.pendencias_do_dia(dia, contas) if dia else {
+        "dia": "", "grupos": [], "total": 0, "faturadas": 0, "total_guias": 0,
+        "por_responsavel": {}, "por_unidade": [], "contas": contas or []}
+    return render_template("relatorio_pendencias.html", d=d, planos=PLANOS,
+                           data_iso=data_iso, qs=qs)
+
+
+@app.route("/relatorios/pendencias.xlsx")
+def relatorios_pendencias_xlsx():
+    dia, contas, _iso, _qs = _rel_dia_params()
+    if not dia:
+        return ("Informe a data.", 400)
+    d = db.pendencias_do_dia(dia, contas)
+    import pandas as pd
+    linhas = []
+    for g in d["grupos"]:
+        for i in g["itens"]:
+            linhas.append({"Quem resolve": g["responsavel"], "Situação": g["titulo"],
+                           "Paciente": i["paciente"] or "—", "GTO": i["gto"],
+                           "Unidade": i["unidade"],
+                           "Exames (GTO)": i["exames_gto"] or "—",
+                           "O que fazer": g["acao"],
+                           "Motivo completo": i["motivo"] or "—"})
+    df = pd.DataFrame(linhas)
+    df_r = pd.DataFrame([{"Quem resolve": k, "Pendências": v}
+                         for k, v in sorted(d["por_responsavel"].items(),
+                                            key=lambda x: -x[1])])
+    bio = io.BytesIO()
+    with pd.ExcelWriter(bio, engine="openpyxl") as xw:
+        (df_r if not df_r.empty else pd.DataFrame([{"Quem resolve": "(nenhuma pendência)"}])
+         ).to_excel(xw, sheet_name="Resumo", index=False)
+        (df if not df.empty else pd.DataFrame([{"GTO": "(nenhuma)"}])
+         ).to_excel(xw, sheet_name="Pendencias", index=False)
+        from openpyxl.styles import Font, PatternFill, Alignment
+        for nome_ws in ("Resumo", "Pendencias"):
+            ws = xw.book[nome_ws]
+            for cell in ws[1]:
+                cell.fill = PatternFill("solid", fgColor="0F7A4F")
+                cell.font = Font(bold=True, color="FFFFFF", size=11)
+                cell.alignment = Alignment(vertical="center")
+            ws.row_dimensions[1].height = 24
+            ws.freeze_panes = "A2"
+            for col in ws.columns:
+                largura = max((len(str(c.value)) for c in col if c.value), default=10)
+                ws.column_dimensions[col[0].column_letter].width = min(max(largura + 3, 12), 70)
+    bio.seek(0)
+    nome = f"pendencias_{dia.replace('/', '-')}.xlsx"
+    return send_file(bio, as_attachment=True, download_name=nome,
+                     mimetype="application/vnd.openxmlformats-officedocument."
+                              "spreadsheetml.sheet")
+
+
 @app.route("/relatorios/dia.pdf")
 def relatorios_dia_pdf():
     from config import PLANOS
