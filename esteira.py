@@ -1054,9 +1054,26 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                         "NÃO FATUROU porque a leitura dos anexos do prontuário não "
                         "retornou nada. Normalmente é falha temporária da leitura. "
                         "O QUE FAZER: reprocessar o dia. (Falha nossa, não da clínica.)")
+                # NOMES LIDOS em cada anexo — sem isto nao da para saber se a
+                # guia travou por cadastro divergente de verdade ou por rigor da
+                # comparacao. Eram 18 guias em 21-24/07 e a unica evidencia
+                # gravada era "nenhum documento com nome compativel", que nao
+                # ajuda ninguem a agir.
+                _nl = []
+                for _a3 in (leituras or []):
+                    if not isinstance(_a3, dict):
+                        continue
+                    _pl = (_a3.get("paciente_lido") or "").strip()
+                    _dl = (_a3.get("dentista_lido") or "").strip()
+                    _cr = (_a3.get("cro_lido") or "").strip()
+                    _nl.append(f"[{_a3.get('idx')}/{_a3.get('tipo') or '?'}]"
+                               + (f" paciente={_pl!r}" if _pl else " paciente=(ilegivel)")
+                               + (f" dentista={_dl!r}" if _dl else "")
+                               + (f" CRO={_cr}" if _cr else ""))
                 dec = {"indice_solicitacao": None, "exames_batem": False,
                        "exames_lidos": _lidos, "paciente_bate": False, "anexar": False,
-                       "motivo": _motivo, "leituras": leituras}
+                       "motivo": _motivo, "leituras": leituras,
+                       "nomes_lidos": " | ".join(_nl)[:600]}
 
             # Se o candidato foi VALIDADO pelo codigo, avalia manipulação de data
             if candidato_valido:
@@ -1954,6 +1971,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             "solic_idx": dec.get("solic_idx"),
             "gemini": {k: d.get(k) for k in ("tipo", "legivel", "paciente_lido",
                        "exames_lidos", "exames_batem", "confianca", "anexar", "motivo")},
+            "nomes_lidos": d.get("nomes_lidos"),
             "erro": dec.get("erro"),
         })
     n_rev = len(baixados) - len(com_solic) - len(com_justif)

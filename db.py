@@ -625,7 +625,10 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
                 funil=(lambda f: (f"prontuario={f.get('prontuario')} cand={f.get('candidatos')} "
                                   f"descartados={f.get('descartados')} conv={f.get('convertidos')}")
                        if f else None)(x.get("funil")),
-                paciente_lido=(g.get("paciente_lido") or None),
+                # quando NAO casou, grava o que foi lido em CADA anexo — e o dado
+                # que permite dizer se e cadastro divergente ou rigor da regra
+                paciente_lido=((g.get("paciente_lido") or x.get("nomes_lidos") or None)
+                               if not faturado else (g.get("paciente_lido") or None)),
                 data_exame_real=x.get("data_exame_real"),
             ))
             itens_info.append((str(x.get("gto")), x.get("paciente"), cat, motivo, faturado))
