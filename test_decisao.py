@@ -797,3 +797,25 @@ def test_uma_folha_que_cobre_sozinha_nao_arrasta_outras():
         _folha(1, "RADIOGRAFIA PANORAMICA", "18/07/2026"),
     ], "JUCILENE PINHEIRO DE OLIVEIRA", {"panoramica"}, 2, "", det)
     assert motivo is None and det["idxs"] == [0]
+
+
+def test_releitura_so_olha_quem_nao_e_solicitacao():
+    """A 2a passada existe porque, em lote de anexos parecidos, o modelo erra o
+    TIPO. Caso JUCILENE: duas solicitacoes quase identicas, so uma reconhecida.
+    Ela nao pode reprocessar quem ja e candidato — isso e trabalho (e custo) a toa."""
+    import esteira
+    vistos = []
+
+    class _GemFake:
+        class models:
+            @staticmethod
+            def generate_content(**kw):
+                raise RuntimeError("nao deveria chamar")
+
+    leituras = [{"idx": 0, "tipo": "solicitacao", "paciente_lido": "X"},
+                {"idx": 1, "tipo": "solicitacao", "paciente_lido": "X"}]
+    # todos os candidatos ja sao solicitacao -> nada a reler, nao chama o modelo
+    n = esteira._reler_nao_classificados(_GemFake(), [("a", "image/jpeg", b"x", None),
+                                                      ("b", "image/jpeg", b"y", None)],
+                                         leituras)
+    assert n == 0
