@@ -556,6 +556,16 @@ def listar_portal_status() -> dict:
         return {}
 
 
+def _exames_visiveis(exames) -> str:
+    """Lista de exames como a operadora le: sem tokens internos, com nome amigavel."""
+    try:
+        from solicitacao_utils import lista_amigavel
+        return lista_amigavel(exames)
+    except Exception:
+        return ", ".join(str(e) for e in (exames or [])
+                         if not str(e).startswith("documentacao_"))
+
+
 def salvar_execucao_falha(dia: str, conta: str, dry_run: bool, erro: str,
                           log_linhas=None) -> int:
     """Registra uma execucao que NAO chegou ao fim. Sem isto, erro em
@@ -621,8 +631,11 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
                 gto=str(x.get("gto")), paciente=x.get("paciente"),
                 categoria=cat, faturado=faturado, motivo=motivo,
                 solicitacao=x.get("solicitacao"),
-                exames_gto=", ".join(x.get("gto_exames") or []),
-                exames_lidos=", ".join(g.get("exames_lidos") or []),
+                # nomes que a OPERADORA le, nao os tokens internos. O marcador
+                # 'documentacao_completa' (que separa a Completa da Controle)
+                # vazava para a coluna Exames da tela de faturadas.
+                exames_gto=_exames_visiveis(x.get("gto_exames")),
+                exames_lidos=", ".join(str(e) for e in (g.get("exames_lidos") or [])),
                 n_arquivos=len(x.get("laudo_imgs") or []) + (1 if x.get("solicitacao") else 0),
                 arquivos_plano=", ".join(x.get("arquivos_anexados")
                                          or x.get("laudo_imgs") or [])[:4000] or None,
