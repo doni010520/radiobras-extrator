@@ -376,26 +376,29 @@ def preparar_anexo_seguro(nome, blob):
     return preparar_anexo(nome, blob)
 
 
-def test_doc_orto_exige_os_quatro_exames():
-    """Regra do dono (28/07, corrigida): a Doc Orto COMPLETA é telerradiografia +
-    fotos + modelos. NÃO inclui panorâmica. A Doc Orto CONTROLE é fotos +
-    panorâmica, somente."""
-    from solicitacao_utils import _DOC_ORTO, _DOC_CONTROLE
-    assert _DOC_ORTO == {"telerradiografia", "fotografia", "modelo"}
+def test_composicao_da_doc_orto():
+    """Regra do dono, revista em 30/07 com os pedidos reais na mao: identifica uma
+    DOC ORTO COMPLETA no pedido a dupla telerradiografia + fotografias, mais UM
+    entre modelos e panoramica. A telerradiografia e o que separa da CONTROLE
+    (fotos + panoramica)."""
+    from solicitacao_utils import (_DOC_ORTO_ANCORAS, _DOC_ORTO_TERCEIRO,
+                                   _DOC_CONTROLE)
+    assert _DOC_ORTO_ANCORAS == {"telerradiografia", "fotografia"}
+    assert _DOC_ORTO_TERCEIRO == {"modelo", "panoramica"}
     assert _DOC_CONTROLE == {"fotografia", "panoramica"}
-    assert "panoramica" not in _DOC_ORTO
-    assert "documentacao_completa" in expande_documentacao(set(_DOC_ORTO))
-    # Faltando qualquer um dos quatro, deixa de ser COMPLETA. Pode continuar
-    # servindo para um subtipo menor (Controle) — por isso o alvo é o token
-    # 'documentacao_completa', não o genérico.
-    for faltando in _DOC_ORTO:
-        parcial = set(_DOC_ORTO) - {faltando}
-        assert "documentacao_completa" not in expande_documentacao(parcial), faltando
+    base = set(_DOC_ORTO_ANCORAS) | {"modelo"}
+    assert "documentacao_completa" in expande_documentacao(base)
+    # tirar uma ANCORA descaracteriza a completa; o terceiro item pode ser
+    # modelo OU panoramica — regra revista pelo dono em 30/07.
+    for ancora in _DOC_ORTO_ANCORAS:
+        assert "documentacao_completa" not in expande_documentacao(base - {ancora}), ancora
+    assert "documentacao_completa" in expande_documentacao(
+        set(_DOC_ORTO_ANCORAS) | {"panoramica"})
 
 
 def test_extras_nao_atrapalham_a_doc_orto():
-    from solicitacao_utils import _DOC_ORTO
-    lido = set(_DOC_ORTO) | {"periapical", "oclusal"}
+    from solicitacao_utils import _DOC_ORTO_ANCORAS
+    lido = set(_DOC_ORTO_ANCORAS) | {"modelo", "periapical", "oclusal"}
     assert "documentacao" in expande_documentacao(lido)
 
 
@@ -420,25 +423,31 @@ def test_completa_e_controle_sao_procedimentos_diferentes():
     assert "documentacao" in canon_exames("Doc Orto Contro")
 
 
-def test_so_os_quatro_cobrem_a_doc_completa():
+def test_sem_modelos_ainda_e_documentacao_completa():
+    """Regra revista pelo dono (30/07), com os pedidos reais na mao: telerradiografia
+    + fotografias + panoramica, SEM escrever 'modelos', E uma documentacao completa.
+    Casos LAIS ZAA GUIA SANTOS, ANDNA JAIRA e VANESSA SANTOS DE SOUSA."""
     sem_modelo = expande_documentacao({"panoramica", "telerradiografia",
                                        "fotografia", "periapical", "oclusal"})
-    assert not canon_exames("Doc Orto Compl") <= sem_modelo   # falta modelo
-    assert canon_exames("Doc Orto Contro") <= sem_modelo      # foto+panoramica: cobre
+    assert canon_exames("Doc Orto Compl") <= sem_modelo
+    assert canon_exames("Doc Orto Contro") <= sem_modelo
 
 
-def test_doc_completa_nao_cobre_automaticamente_o_controle():
-    """São composições diferentes: a completa não tem panorâmica, o controle tem."""
-    from solicitacao_utils import _DOC_ORTO, _DOC_CONTROLE
-    assert canon_exames("Doc Orto Compl") <= expande_documentacao(set(_DOC_ORTO))
+def test_doc_completa_e_controle_sao_composicoes_diferentes():
+    from solicitacao_utils import _DOC_ORTO_ANCORAS, _DOC_CONTROLE
+    completa = set(_DOC_ORTO_ANCORAS) | {"modelo"}
+    assert canon_exames("Doc Orto Compl") <= expande_documentacao(completa)
     assert canon_exames("Doc Orto Contro") <= expande_documentacao(set(_DOC_CONTROLE))
+    # controle (fotos + panoramica, SEM telerradiografia) nao vira completa
+    assert "documentacao_completa" not in expande_documentacao(set(_DOC_CONTROLE))
 
 
 def test_motivo_diz_o_que_falta_e_nao_vaza_token_interno():
     """A operadora precisa saber QUAL exame falta no pedido — e 'documentacao_completa'
     é token interno, nao pode aparecer na mensagem."""
-    leituras = [_leitura(0, "ANDNA JAIRA NEVES", ["panoramica", "telerradiografia",
-                                                 "fotografias", "periapicais", "oclusal"])]
+    # pedido que realmente NAO cobre: guia quer documentacao completa, pedido so
+    # traz periapical (a ANDNA, que antes caia aqui, agora e aceita — regra de 30/07)
+    leituras = [_leitura(0, "ANDNA JAIRA NEVES", ["radiografia periapical"])]
     alvo = canon_exames("Doc Orto Compl") | {"periapical"}
     idx, _a, motivo = _escolher_solicitacao(leituras, "ANDNA JAIRA NEVES", alvo, 1)
     assert idx is None
@@ -819,3 +828,24 @@ def test_releitura_so_olha_quem_nao_e_solicitacao():
                                                       ("b", "image/jpeg", b"y", None)],
                                          leituras)
     assert n == 0
+
+
+def test_casos_reais_de_documentacao_sem_modelos():
+    """Os tres pedidos que o dono conferiu em 30/07 e classificou como completos."""
+    completa = canon_exames("Doc Orto Compl")
+    for nome, txt in [
+        ("LAIS", "Telerradiografia Rickets, Fotografia extra-bucal, "
+                 "Fotografia intra-bucal, Rx Panoramico em topo"),
+        ("ANDNA", "Analise cefalometrica USP, Fotos extrabucais, Fotos intrabucais, "
+                  "Radiografia panoramica topo, Telerradiografia de perfil"),
+        ("VANESSA", "Rx Panoramico em topo, Telerradiografia Rickets, "
+                    "Fotografia extra-bucal, Fotografia intra-bucal"),
+    ]:
+        assert completa <= expande_documentacao(canon_exames(txt)), nome
+
+
+def test_controle_nao_vira_completa():
+    """A telerradiografia e o que separa: controle e fotos + panoramica."""
+    e = expande_documentacao(canon_exames("Fotografia extra-bucal, Rx Panoramico"))
+    assert "documentacao" in e
+    assert "documentacao_completa" not in e
