@@ -408,6 +408,70 @@ Se não conseguir ler um trecho, omita-o em vez de adivinhar.
 Responda APENAS JSON (sem markdown): {"exames": ["...", "..."]}"""
 
 
+_RELEITURA_TIPO_PROMPT = """Este e UM anexo de prontuario odontologico. Voce e um
+LEITOR/transcritor: NAO decida nada, apenas transcreva o que esta escrito.
+
+Responda APENAS JSON (sem markdown):
+{"tipo": "solicitacao" | "laudo" | "documento" | "nota_fiscal" | "raio_x" | "outro",
+ "legivel": true|false,
+ "paciente_lido": "<nome do paciente escrito no anexo; \"\" se nao houver ou ilegivel>",
+ "dentista_lido": "<nome no carimbo/assinatura; \"\" se nao houver>",
+ "cro_lido": "<numero do CRO no carimbo, so digitos; \"\" se nao houver>",
+ "exames_lidos": ["<cada exame/procedimento pedido ou citado, como esta escrito>"],
+ "data_solicitacao": "<DD/MM/AAAA escrita no anexo, ou null>"}
+
+"solicitacao" e um PEDIDO/REQUISICAO de exames feito por um dentista — costuma
+comecar com "Solicito", trazer o nome do paciente e a lista de exames, e ter
+carimbo/assinatura. Transcreva LITERALMENTE; nao interprete, nao complete, nao
+deduza. Se nao conseguir ler um trecho, omita em vez de adivinhar."""
+
+
+def _reler_nao_classificados(gem, cands, leituras, max_reler=4):
+    """2a passada, um anexo POR VEZ, nos que NAO foram classificados como
+    solicitacao na leitura em lote.
+
+    Por que existe: a 1a leitura manda ate 15 anexos juntos e o modelo erra a
+    CLASSIFICACAO em documentos parecidos. Caso JUCILENE PINHEIRO DE OLIVEIRA
+    (GTO 195371168): o prontuario tinha duas solicitacoes quase identicas — mesmo
+    timbre, mesmo layout, mesmo carimbo, diferindo por uma linha de texto. So uma
+    virou candidata; a outra (a da panoramica) foi descartada, e a guia reprovou
+    por "falta panoramica" com a panoramica na folha ao lado.
+
+    Le UM documento com atencao, que e onde esta o ganho — a releitura focada de
+    exames ja usava esse mesmo principio. Atualiza `leituras` in-place. Nao manda
+    o nome nem os exames da guia: quem compara continua sendo o codigo."""
+    from google.genai import types
+    ja = {a.get("idx") for a in (leituras or []) if isinstance(a, dict)
+          and a.get("tipo") == "solicitacao"}
+    alvos = [i for i in range(len(cands)) if i not in ja][:max_reler]
+    novos = 0
+    for i in alvos:
+        try:
+            _fn, _mime, _blob, _sv = cands[i]
+            r = gem.models.generate_content(
+                model=_GEM_MODEL, config=_gem_cfg(),
+                contents=[types.Part.from_bytes(data=_blob, mime_type=_mime),
+                          _RELEITURA_TIPO_PROMPT])
+            _contar_tokens(r)
+            t = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
+            d = json.loads(t) or {}
+        except Exception:
+            continue
+        if not isinstance(d, dict) or d.get("tipo") != "solicitacao":
+            continue
+        d["idx"] = i
+        d["_releitura"] = True          # rastro: entrou na 2a passada
+        # substitui a leitura anterior deste anexo (ou acrescenta)
+        for k, a in enumerate(leituras or []):
+            if isinstance(a, dict) and a.get("idx") == i:
+                leituras[k] = d
+                break
+        else:
+            leituras.append(d)
+        novos += 1
+    return novos
+
+
 def _reler_exames_focado(gem, cands, leituras, nome_gto):
     """2ª leitura quando a 1ª não cobriu os exames da GTO: reenvia SÓ o candidato
     que falhou apenas na cobertura, isolado (o ganho vem de ler UM documento com
@@ -1058,7 +1122,13 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             # 1ª passada (ex.: leu "periapical" e perdeu "panorâmica"). Releitura
             # dirigida do(s) candidato(s) e nova decisão determinística.
             if idx is None and _motivo == "NAO_COBRE":
+                # 1) relê os candidatos que ja eram solicitacao (exames sub-lidos)
                 _reler_exames_focado(gem, cands, leituras, pac["nome"])
+                # 2) relê os anexos que NAO foram classificados como solicitacao —
+                #    em lote o modelo erra o tipo em documentos parecidos (JUCILENE)
+                _n2 = _reler_nao_classificados(gem, cands, leituras)
+                if _n2:
+                    out["releitura_achou"] = _n2
                 _det = {}
             idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
                                                     len(cands), out.get("dentista_gto") or "",
@@ -1147,14 +1217,19 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     _pl = (_a3.get("paciente_lido") or "").strip()
                     _dl = (_a3.get("dentista_lido") or "").strip()
                     _cr = (_a3.get("cro_lido") or "").strip()
-                    _nl.append(f"[{_a3.get('idx')}/{_a3.get('tipo') or '?'}]"
+                    _ex3 = ", ".join(str(e) for e in (_a3.get("exames_lidos") or []))[:70]
+                    _nl.append(f"[{_a3.get('idx')}/{_a3.get('tipo') or '?'}"
+                               + ("/2a" if _a3.get("_releitura") else "") + "]"
                                + (f" paciente={_pl!r}" if _pl else " paciente=(ilegivel)")
                                + (f" dentista={_dl!r}" if _dl else "")
-                               + (f" CRO={_cr}" if _cr else ""))
+                               + (f" CRO={_cr}" if _cr else "")
+                               + (f" data={_a3.get('data_solicitacao')}"
+                                  if _a3.get("data_solicitacao") else "")
+                               + (f" exames=[{_ex3}]" if _ex3 else ""))
                 dec = {"indice_solicitacao": None, "exames_batem": False,
                        "exames_lidos": _lidos, "paciente_bate": False, "anexar": False,
                        "motivo": _motivo, "leituras": leituras,
-                       "nomes_lidos": " | ".join(_nl)[:600]}
+                       "nomes_lidos": " | ".join(_nl)[:3000]}
 
             # Se o candidato foi VALIDADO pelo codigo, avalia manipulação de data
             if candidato_valido:
