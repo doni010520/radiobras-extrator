@@ -30,7 +30,28 @@
   .rbnav-badge{background:var(--rb-danger,#b3261e);color:#fff;padding:1px 7px;border-radius:var(--rb-r-pill,999px);
     font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.5;}
   .rbnav-right{display:flex;align-items:center;gap:var(--rb-s3,12px);}
-  .rbnav-date{color:var(--rbnav-fg-muted);font-size:13px;text-transform:capitalize;white-space:nowrap;}
+  /* nada de capitalize: virava "Quinta-Feira, 30 De Julho". A 1a letra e
+     maiusculizada no JS, que e o certo em portugues. */
+  .rbnav-date{color:var(--rbnav-fg-muted);font-size:13px;white-space:nowrap;}
+  /* ── submenu ──────────────────────────────────────────────────────────── */
+  .rbnav-drop{position:relative;}
+  .rbnav-drop>.rbnav-link{background:none;border:none;font-family:inherit;}
+  .rbnav-caret{width:9px;height:9px;opacity:.7;transition:transform .18s ease;}
+  .rbnav-drop.open>.rbnav-link .rbnav-caret{transform:rotate(180deg);}
+  .rbnav-sub{position:absolute;top:calc(100% + 8px);left:0;min-width:236px;
+    background:var(--rb-surface,#fff);border:1px solid var(--rb-border,#e6ebe8);
+    border-radius:var(--rb-r-md,12px);box-shadow:0 10px 30px rgba(6,30,20,.20);
+    padding:6px;display:none;flex-direction:column;gap:2px;z-index:1100;}
+  .rbnav-drop.open>.rbnav-sub{display:flex;}
+  .rbnav-sub a{display:flex;flex-direction:column;gap:1px;padding:8px 11px;
+    border-radius:var(--rb-r-sm,8px);text-decoration:none;color:var(--rb-fg,#1f2a26);
+    font-size:14px;font-weight:600;transition:background .15s ease;}
+  .rbnav-sub a small{font-weight:400;font-size:12px;color:var(--rb-fg-muted,#6b7a73);}
+  .rbnav-sub a:hover{background:var(--rb-surface-2,#eef3f0);text-decoration:none;}
+  .rbnav-sub a.active{background:var(--rb-surface-2,#eef3f0);color:var(--rb-primary,#0f7a4f);}
+  .rbnav-sub a.active small{color:var(--rb-primary,#0f7a4f);opacity:.8;}
+  [data-theme="dark"] .rbnav-sub{background:var(--rb-surface,#141c18);
+    border-color:var(--rb-border,#27342e);box-shadow:0 10px 30px rgba(0,0,0,.5);}
   .rbnav-user{color:var(--rbnav-fg);font-size:13px;font-weight:600;white-space:nowrap;
     background:var(--rbnav-hover);padding:5px 11px;border-radius:var(--rb-r-pill,999px);}
   .rbnav-logout{color:var(--rbnav-fg);font-size:13px;font-weight:600;text-decoration:none;
@@ -53,12 +74,25 @@
   <div class="rbnav-menu">
     <a class="rbnav-link" href="/" data-path="/">Dashboard</a>
     <a class="rbnav-link" href="/faturar" data-path="/faturar">Faturar dia</a>
-    <a class="rbnav-link" href="/gtos" data-path="/gtos">GTOs</a>
     <a class="rbnav-link" href="/revisao" data-path="/revisao">Revisão{% if pendencias_abertas and pendencias_abertas > 0 %} <span class="rbnav-badge" id="rbNavRev">{{ pendencias_abertas }}</span>{% else %}<span class="rbnav-badge" id="rbNavRev" style="display:none">0</span>{% endif %}</a>
-    <a class="rbnav-link" href="/glosas" data-path="/glosas">Glosas</a>
-    <a class="rbnav-link" href="/relatorios/dia" data-path="/relatorios/dia">Relatório do dia</a>
-    <a class="rbnav-link" href="/relatorios/pendencias" data-path="/relatorios/pendencias">Pendências</a>
-    <a class="rbnav-link" href="/relatorios" data-path="/relatorios">Relatórios</a>
+    <div class="rbnav-drop" data-drop>
+      <button class="rbnav-link" type="button" aria-haspopup="true" aria-expanded="false"
+              data-path="/relatorios">Relatórios
+        <svg class="rbnav-caret" viewBox="0 0 10 6" fill="none" aria-hidden="true">
+          <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+      <div class="rbnav-sub" role="menu">
+        <a href="/relatorios/dia" data-path="/relatorios/dia">Relatório do dia
+          <small>Faturadas e não faturadas de uma data</small></a>
+        <a href="/relatorios/pendencias" data-path="/relatorios/pendencias">Pendências por data
+          <small>O que falta num dia ou período, por quem resolve</small></a>
+        <a href="/glosas" data-path="/glosas">Glosas e recursos
+          <small>O que a operadora recusou</small></a>
+        <a href="/relatorios" data-path="/relatorios">Execuções
+          <small>Histórico de cada rodada do robô</small></a>
+      </div>
+    </div>
+    <a class="rbnav-link" href="/gtos" data-path="/gtos">GTOs</a>
     {% if usuario_atual and usuario_atual.role == 'admin' %}<a class="rbnav-link" href="/usuarios" data-path="/usuarios">Usuários</a>{% endif %}
   </div>
   <div class="rbnav-right">
@@ -76,12 +110,54 @@
     var cur=document.documentElement.getAttribute('data-theme')||'light';
     var tb=document.getElementById('rbThemeBtn');var tu=tb&&tb.querySelector('use');if(tu)tu.setAttribute('href',cur==='dark'?'#i-sun':'#i-moon');
     var p=location.pathname;
-    document.querySelectorAll('.rbnav-link').forEach(function(a){
+    // Ativo no topo: prefixo. Nos SUBITENS tem que ser exato — senao "/relatorios"
+    // (Execucoes) acenderia junto com "/relatorios/dia" e "/relatorios/pendencias".
+    document.querySelectorAll('.rbnav-menu > .rbnav-link').forEach(function(a){
       var dp=a.getAttribute('data-path');
       var on=(dp==='/')?(p==='/'||p.indexOf('/plano')===0):(p.indexOf(dp)===0);
       if(on)a.classList.add('active');
     });
+    document.querySelectorAll('.rbnav-sub a').forEach(function(a){
+      if(p===a.getAttribute('data-path'))a.classList.add('active');
+    });
+    // O pai acende para qualquer tela de relatorio, inclusive Glosas.
+    document.querySelectorAll('.rbnav-drop').forEach(function(d){
+      var b=d.querySelector('.rbnav-link');
+      if(b&&(p.indexOf('/relatorios')===0||p.indexOf('/glosas')===0))b.classList.add('active');
+    });
+    // Abrir/fechar: clique no botao, fecha ao clicar fora ou com Esc.
+    document.querySelectorAll('[data-drop]').forEach(function(d){
+      var b=d.querySelector('.rbnav-link');
+      if(!b)return;
+      b.addEventListener('click',function(e){
+        e.stopPropagation();
+        var abrindo=!d.classList.contains('open');
+        document.querySelectorAll('[data-drop].open').forEach(function(o){
+          o.classList.remove('open');
+          var ob=o.querySelector('.rbnav-link'); if(ob)ob.setAttribute('aria-expanded','false');
+        });
+        if(abrindo){d.classList.add('open');b.setAttribute('aria-expanded','true');}
+      });
+      d.querySelector('.rbnav-sub').addEventListener('click',function(e){e.stopPropagation();});
+    });
+    document.addEventListener('click',function(){
+      document.querySelectorAll('[data-drop].open').forEach(function(o){
+        o.classList.remove('open');
+        var ob=o.querySelector('.rbnav-link'); if(ob)ob.setAttribute('aria-expanded','false');
+      });
+    });
+    document.addEventListener('keydown',function(e){
+      if(e.key!=='Escape')return;
+      document.querySelectorAll('[data-drop].open').forEach(function(o){
+        o.classList.remove('open');
+        var ob=o.querySelector('.rbnav-link'); if(ob){ob.setAttribute('aria-expanded','false');ob.focus();}
+      });
+    });
     var d=document.getElementById('rbNavDate');
-    if(d){try{d.textContent=new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'});}catch(e){}}
+    if(d){try{
+      // Em portugues so a PRIMEIRA letra e maiuscula: "Quinta-feira, 30 de julho".
+      var txt=new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'});
+      d.textContent=txt.charAt(0).toUpperCase()+txt.slice(1);
+    }catch(e){}}
   })();
 </script>
