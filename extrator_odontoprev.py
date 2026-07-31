@@ -481,7 +481,7 @@ def ler_dados_gto(gp) -> dict:
     }
 
 
-def upload_arquivos(gp, arquivos: list) -> dict:
+def upload_arquivos(gp, arquivos: list, max_antes: int = 1) -> dict:
     """Anexa a lista de arquivos na GTO aberta (input[type=file] oculto, multiple).
     O portal envia imediatamente.
 
@@ -489,6 +489,12 @@ def upload_arquivos(gp, arquivos: list) -> dict:
     reprocessar o dia sem duplicar). VERIFICAÇÃO ROBUSTA: confirma por NOME de
     arquivo (com polling), não pela aritmética do contador — que atualiza tarde
     na popup e gerava falso 'ERRO_UPLOAD'.
+
+    max_antes = maior nº de anexos pré-existentes que ainda permite enviar.
+    Default 1 (a própria GTO). A esteira passa o nº de CÓPIAS ASSINADAS da GTO
+    contado na descoberta (flag imagemGTO da API) — guia RE-ASSINADA tem 2+
+    cópias da GTO sem documentação nenhuma e precisa receber anexo (casos
+    PAULO SERGIO/WELLINGHTON/FABIO/PATRICK, 27/07).
     Retorna {anexos_antes, anexos_depois, ja_anexados, enviados, ok}."""
     # Esperar a seção de anexos RENDERIZAR antes de ler nomes/contador — senão a
     # leitura antecipada faz a idempotência achar que faltam arquivos e procurar
@@ -514,26 +520,34 @@ def upload_arquivos(gp, arquivos: list) -> dict:
     # PERMANENTE na guia — casos CLAUDIA REGINA e VANESSA SILVA BATISTA, que
     # chegaram a 12 anexos com imagens visivelmente duplicadas.
     #
-    # Regra: toda guia nasce com 1 anexo, a propria GTO. Se ja tem 2 ou mais,
-    # alguem ja anexou (nos ou um humano) e NAO ha o que acrescentar.
+    # Regra: toda guia nasce com a(s) copia(s) assinada(s) da propria GTO —
+    # normalmente 1; uma RE-ASSINATURA pode criar mais. `max_antes` e o nº de
+    # anexos comprovadamente copia da GTO (a esteira conta pelo flag imagemGTO
+    # da API, na descoberta). Acima disso, alguem ja anexou (nos ou um humano)
+    # ou algo mudou desde a descoberta — e NAO ha o que acrescentar.
     #
     # Esta guarda fica AQUI, e nao em quem chama, porque upload_arquivos e o UNICO
     # ponto de escrita do sistema: os tres caminhos que anexam (esteira.py:1602,
     # fechar_dia.py:478, ciclo_completo.py:185) passam por ela. Protegido aqui,
     # esta protegido em todos — inclusive em caminho novo que alguem escreva depois.
+    try:
+        max_antes = max(1, int(max_antes))
+    except Exception:
+        max_antes = 1
     if antes is None or antes < 0:
         return {"anexos_antes": antes, "anexos_depois": antes, "ja_anexados": [],
                 "enviados": [], "ok": False,
                 "erro": ("nao foi possivel LER quantos anexos a guia ja tem — "
                          "nada enviado, para nao arriscar duplicar (o portal nao "
                          "permite remover anexo)")}
-    if antes >= 2:
+    if antes > max_antes:
         return {"anexos_antes": antes, "anexos_depois": antes,
                 "ja_anexados": sorted(nomes_antes), "enviados": [], "ok": False,
-                "erro": (f"a guia ja tem {antes} anexos — nada enviado. Toda guia "
-                         f"nasce com 1 (a propria GTO); com 2 ou mais, a "
-                         f"documentacao ja foi anexada. O portal nao permite "
-                         f"remover anexo, entao duplicar seria irreversivel")}
+                "erro": (f"a guia ja tem {antes} anexos — nada enviado (esperado "
+                         f"ate {max_antes} copia(s) da propria GTO). Acima disso "
+                         f"a documentacao ja foi anexada ou algo mudou desde a "
+                         f"descoberta. O portal nao permite remover anexo, entao "
+                         f"duplicar seria irreversivel")}
 
     # IDEMPOTENCIA POR IDENTIDADE, nao por nome exato. Comparar o nome inteiro era
     # fragil: "ENTREGA_1.jpg" tem numero POSICIONAL (muda se a ordem de captura

@@ -596,6 +596,65 @@ def test_contagem_ilegivel_nao_arrisca(tmp_path):
     assert r["ok"] is False and "LER" in r["erro"]
 
 
+# ── Guia RE-ASSINADA nao e guia documentada (casos PAULO SERGIO, WELLINGHTON,
+# FABIO e PATRICK, 27/07) ───────────────────────────────────────────────────
+# Uma re-assinatura em lote (21:30 de 27/07) criou a 2ª copia da imagem
+# assinada da GTO (imagemGTO=True) nas 4 guias. A regra antiga pulava por
+# CONTAGEM (2+ anexos = documentada) e as 4 foram registradas como FATURADAS
+# sem ter laudo, solicitacao nem imagem. "Documentada" = existir anexo com
+# imagemGTO=False; copia da GTO nao conta. E como os 2 anexos tinham o MESMO
+# nome, o set de nomes dizia "ja tinha 1 anexo(s)" no relatorio — foi essa
+# incoerencia que entregou o bug.
+
+def _anx(nome, gto_flag=None):
+    d = {"id": 1, "nomeArquivo": nome}
+    if gto_flag is not None:
+        d["imagemGTO"] = gto_flag
+    return d
+
+
+def test_guia_reassinada_nao_conta_como_documentada():
+    from esteira import _anexos_portal_split
+    copias, docs = _anexos_portal_split(
+        [_anx("img_ASSINADA.png", True), _anx("img_ASSINADA.png", True)])
+    assert len(copias) == 2 and docs == []
+
+
+def test_guia_com_documento_de_verdade_continua_pulada():
+    from esteira import _anexos_portal_split
+    copias, docs = _anexos_portal_split(
+        [_anx("img_ASSINADA.png", True),
+         _anx("LAUDO_PANORAMICA_40337001_OFICIAL.pdf", False),
+         _anx("SOLICITACAO_CANDICE.jpg", False)])
+    assert len(copias) == 1 and len(docs) == 2
+
+
+def test_anexo_sem_flag_conta_como_documento():
+    """API sem o campo imagemGTO -> trata como documentada (pula): o lado
+    conservador e NAO anexar, porque duplicar e irreversivel."""
+    from esteira import _anexos_portal_split
+    copias, docs = _anexos_portal_split(
+        [_anx("img_ASSINADA.png", True), _anx("misterio.pdf")])
+    assert len(copias) == 1 and len(docs) == 1
+
+
+def test_upload_com_teto_das_copias_da_gto(tmp_path):
+    """max_antes = nº de copias da GTO vistas na descoberta. Guia re-assinada
+    (2 anexos, ambos copia) pode receber documentacao; qualquer anexo NOVO
+    desde a descoberta (3 > 2) bloqueia; e sem o parametro o teto segue 1."""
+    import pytest
+    from extrator_odontoprev import upload_arquivos
+    f = tmp_path / "LAUDO_PANORAMICA_1_OFICIAL.pdf"; f.write_bytes(b"x")
+    r = upload_arquivos(_GP(3), [str(f)], max_antes=2)
+    assert r["ok"] is False and "ja tem 3 anexos" in r["erro"]
+    r = upload_arquivos(_GP(2), [str(f)])
+    assert r["ok"] is False and "ja tem 2 anexos" in r["erro"]
+    # com teto 2 a trava LIBERA: o fake nao tem input[type=file], entao o fluxo
+    # segue ate estourar NELE — prova de que nao parou na trava de duplicidade
+    with pytest.raises(RuntimeError):
+        upload_arquivos(_GP(2), [str(f)], max_antes=2)
+
+
 # ── Nome ilegivel != nome de OUTRA pessoa (casos TAINA e THAILAN, 21/07) ────
 # O pedido do dentista e manuscrito. Quando o nome sai ilegivel, isso e AUSENCIA
 # de evidencia — nao evidencia contraria. Antes os dois casos eram tratados igual

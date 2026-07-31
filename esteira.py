@@ -933,7 +933,16 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
             "data_exame_real": g.get("data_exame_real"),
             # exames da guia lidos do PORTAL (fonte autoritativa) — usados quando o
             # PDF da GTO no prontuário vem sem a tabela de procedimentos
-            "eventos_portal": g.get("eventos_portal") or []}
+            "eventos_portal": g.get("eventos_portal") or [],
+            # nº de anexos da guia que são CÓPIA ASSINADA da própria GTO
+            # (imagemGTO=True na descoberta) — teto da trava do anexador
+            "n_gto_copias": g.get("n_gto_copias"),
+            # GTO baixada do PORTAL na descoberta (caso JOSETE): sem copiar estes
+            # dois campos aqui, o blob morria neste return (o leitor lê
+            # item.get("gto_portal_blob") e recebia sempre None — o 2º sinal
+            # via guia do portal nunca rodava)
+            "gto_portal_blob": g.get("gto_portal_blob"),
+            "gto_portal_mime": g.get("gto_portal_mime")}
 
 
 _DECISAO_PROMPT = """Acima estão VÁRIOS anexos do prontuário, indexados ([anexo 0], [anexo 1], ...).
@@ -1525,6 +1534,28 @@ def _limpar_temporarios_antigos(review_root="/tmp/esteira_rev"):
         pass
 
 
+def _anexos_portal_split(imgs):
+    """Separa os anexos de /v1/gto/imagens em COPIAS DA GTO e DOCUMENTOS.
+
+    imagemGTO=True marca a imagem ASSINADA da propria guia — o anexo com que
+    toda guia nasce, e que uma RE-ASSINATURA pode DUPLICAR (casos PAULO SERGIO/
+    WELLINGHTON/FABIO/PATRICK, 27/07: re-assinatura em lote as 21:30 criou a
+    2ª copia da GTO e as 4 guias foram puladas como "ja documentadas" sem ter
+    documento nenhum). Documentacao de verdade (laudo/solicitacao/entrega,
+    nossa ou manual) chega com imagemGTO=False. Anexo SEM o flag conta como
+    DOCUMENTO: na duvida a guia e tratada como ja documentada — o lado que
+    NAO duplica anexo (o portal nao permite remover)."""
+    copias, docs = [], []
+    for i in imgs or []:
+        if not isinstance(i, dict):
+            continue
+        if str(i.get("imagemGTO", "")).strip().lower() == "true":
+            copias.append(i)
+        else:
+            docs.append(i)
+    return copias, docs
+
+
 def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_key=None,
                   review_dir=None, k_attach=0, dry_run=True, conta=None, senha_portal=None):
     """Pipeline de até 4 estágios (descoberta -> download -> decisão -> anexação).
@@ -1667,16 +1698,18 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     _t(f"[API] amostra: {_amostra}")
             except Exception:
                 nomes, cnt = set(), -1
-            # Um GTO só é "completo" se JÁ tiver um LAUDO entre os anexos. Antes o
-            # código pulava por CONTAGEM (cnt >= 2), então GTO com imagens/solicitação
-            # mas SEM laudo (ex.: JOAO PEDRO — 4 anexos, 0 laudo) era marcado como
-            # completo e sumia do radar. Agora, sem laudo, ele ENTRA na fila (baixa o
-            # laudo real do PRORADIS e anexa; se não houver, vira pendência sem_laudo).
-            # REGRA DO DONO (29/07): toda guia nasce com 1 anexo — a propria GTO.
-            # Se ja tem 2 ou mais, alguem (nos ou um humano) ja anexou. NAO ha o que
-            # acrescentar, e tentar e perigoso: o OdontoPrev NAO PERMITE REMOVER
-            # anexo. Cada duplicata e dano PERMANENTE na guia. Casos CLAUDIA REGINA
-            # e VANESSA SILVA BATISTA, que chegaram a 12 anexos com imagens repetidas.
+            # REGRA (31/07 — casos PAULO SERGIO/WELLINGHTON/FABIO/PATRICK, 27/07):
+            # "ja documentada" NAO e contagem — e existir DOCUMENTO alem da guia.
+            # Toda guia nasce com 1 anexo, a imagem assinada da propria GTO
+            # (imagemGTO=True), mas uma RE-ASSINATURA cria uma 2ª copia da GTO e
+            # a guia passa a ter 2 anexos SEM documentacao nenhuma — a regra
+            # antiga (cnt >= 2 pula) marcou essas 4 guias como "ja documentadas"
+            # e elas sairam do radar como faturadas. Agora so pula se ha anexo
+            # com imagemGTO=False (laudo/solicitacao/entrega, nosso ou manual).
+            # Anexar continua perigoso — o OdontoPrev NAO PERMITE REMOVER anexo
+            # (casos CLAUDIA REGINA e VANESSA, 12 anexos) — entao o nº de copias
+            # da GTO visto AGORA (n_gto_copias) vira o TETO do anexador:
+            # qualquer anexo novo entre a descoberta e o upload bloqueia o envio.
             # Na duvida (cnt == -1, falha na consulta) tambem NAO segue.
             if cnt < 0:
                 _t(f"[DESC] GTO {g['gto']}: nao consegui LER os anexos -> pula "
@@ -1685,7 +1718,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     resultados.append({"gto": g["gto"], "nome": g["nome"],
                                        "status": "NAO_VERIFICADA"})
                 return
-            if cnt >= 2:
+            _copias, _docs = _anexos_portal_split(imgs)
+            g["n_gto_copias"] = len(_copias)
+            if _docs:
                 # Os exames tambem para a guia PULADA. Sem isso a coluna "Exames" do
                 # relatorio saia vazia justamente nas FATURADAS — "nenhum" em 27 de 27
                 # no dia 24/07 — e a operadora nao tinha como conferir o que foi
@@ -1700,14 +1735,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                             if isinstance(e, dict))))
                 except Exception:
                     _ex_ja = []
-                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos -> ja tem documentacao, pula "
-                   f"| anexos: {sorted(nomes)}")
+                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos, {len(_docs)} documento(s) "
+                   f"alem da GTO -> ja tem documentacao, pula | anexos: {sorted(nomes)}")
                 with _lock:
                     resultados.append({"gto": g["gto"], "nome": g["nome"],
                                        "status": "JA_ANEXADO",
                                        "exames_portal": _ex_ja,
+                                       "n_anexos": cnt, "n_docs": len(_docs),
                                        "anexos_no_portal": sorted(nomes)})
                 return
+            if cnt >= 2:
+                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos mas TODOS sao copia "
+                   f"assinada da propria GTO (re-assinatura) -> SEM documentacao, "
+                   f"entra na fila")
             g["nome_norm"] = normaliza_nome(g["nome"])
             # EXAMES DA GUIA direto do portal (fonte autoritativa). O PDF da GTO no
             # prontuário às vezes vem SEM a tabela de procedimentos — só os rótulos
@@ -2031,20 +2071,29 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                         # nao permite remover anexo: duplicar e dano permanente. A
                         # contagem da descoberta pode estar velha (outra execucao, ou
                         # alguem anexando a mao no meio) — reconfere na guia ABERTA.
+                        # O teto NAO e fixo em 1: guia RE-ASSINADA nasce com 2+
+                        # copias da propria GTO (n_gto_copias, contado na descoberta
+                        # pelo flag imagemGTO da API). Qualquer anexo ALEM das
+                        # copias vistas la — documento ou mais uma copia — bloqueia.
+                        _lim = item.get("n_gto_copias")
+                        _lim = _lim if isinstance(_lim, int) and _lim >= 1 else 1
                         try:
                             _n_agora = _anexos_count(gp)
                         except Exception:
                             _n_agora = -1
-                        if _n_agora is None or _n_agora < 0 or _n_agora >= 2:
+                        if _n_agora is None or _n_agora < 0 or _n_agora > _lim:
                             item["anexado"] = "ERRO"
                             item["anexar_erro"] = (
-                                f"guia ja tem {_n_agora} anexo(s) — nada foi enviado "
-                                f"(o portal nao permite remover anexo, entao duplicar "
-                                f"seria dano permanente)" if _n_agora >= 2 else
+                                f"guia ja tem {_n_agora} anexo(s), acima da(s) "
+                                f"{_lim} copia(s) da GTO vistas na descoberta — nada "
+                                f"foi enviado (algo mudou no meio; o portal nao "
+                                f"permite remover anexo, entao duplicar seria dano "
+                                f"permanente)"
+                                if isinstance(_n_agora, int) and _n_agora > _lim else
                                 "nao consegui ler quantos anexos a guia ja tem — nada "
                                 "foi enviado, por seguranca")
                             _t(f"[ANEX{wid}] GTO {item['gto']} BLOQUEADO: "
-                               f"{_n_agora} anexo(s) na guia")
+                               f"{_n_agora} anexo(s) na guia (teto {_lim})")
                             try:
                                 gp.close()
                             except Exception:
@@ -2053,7 +2102,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                 ativos_an["n"] -= 1
                                 resultados.append(item)
                             continue
-                        res = upload_arquivos(gp, arquivos)
+                        res = upload_arquivos(gp, arquivos, max_antes=_lim)
                         try:
                             gp.close()
                         except Exception:
@@ -2203,6 +2252,12 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     for r in baixados + _outros_res:
         if r.get("status") == "JA_ANEXADO":
             _an = r.get("anexos_no_portal") or []
+            # n_anexos e a CONTAGEM real da API — len(_an) e um SET de nomes e
+            # mentia quando dois anexos tinham o mesmo nome (2x img_ASSINADA.png
+            # dizia "ja tinha 1 anexo(s)" — foi assim que o dono pegou o bug da
+            # re-assinatura em 31/07)
+            _na = r.get("n_anexos") or (len(_an) or 2)
+            _nd = r.get("n_docs") or 0
             decisoes.append({
                 "gto": r["gto"], "paciente": r["nome"],
                 # categoria PROPRIA: antes vinha como "auto"/anexado OK, igual a uma
@@ -2215,11 +2270,12 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 "gto_exames": r.get("exames_portal") or [],
                 "candidatos": [], "solic_idx": None,
                 "gemini": {"motivo": (
-                    f"NAO FOI PRECISO FATURAR: a guia ja tinha {len(_an) or 2} anexo(s) "
-                    f"quando o robo chegou. Toda guia nasce com 1 (a propria GTO), "
-                    f"entao a documentacao ja havia sido anexada — por outra execucao "
-                    f"ou a mao. O robo NAO enviou nada: o portal nao permite remover "
-                    f"anexo, e duplicar seria irreversivel."
+                    f"NAO FOI PRECISO FATURAR: a guia ja tinha {_na} anexo(s) "
+                    + (f"— {_nd} documento(s) alem da propria GTO — "
+                       if _nd else "")
+                    + f"quando o robo chegou: a documentacao ja havia sido anexada, "
+                    f"por outra execucao ou a mao. O robo NAO enviou nada: o portal "
+                    f"nao permite remover anexo, e duplicar seria irreversivel."
                     + (f" Anexos na guia: {', '.join(_an)}." if _an else ""))},
                 "erro": None, "arquivos_anexados": _an,
             })
