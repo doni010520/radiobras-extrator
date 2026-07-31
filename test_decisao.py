@@ -655,6 +655,107 @@ def test_upload_com_teto_das_copias_da_gto(tmp_path):
         upload_arquivos(_GP(2), [str(f)], max_antes=2)
 
 
+# ── Download de anexo pelo ACERVO DIGITAL (endpoint real, 31/07) ────────────
+# Os 4 endpoints antigos davam 404 e o campo 49 da guia baixada do portal nunca
+# chegava ao leitor (caso DAVI SANTANA, GTO 195456616: justificativa preenchida
+# na guia e o robo pedindo "pedido do dentista"). O endpoint real e
+# /v1/gto/acervo-digital/imagem?numeroFicha=&sequencial= e devolve BASE64.
+
+class _SessFake:
+    def __init__(self, txt, status=200):
+        self._t, self._s, self.url = txt, status, None
+    def get(self, url, timeout=0):
+        self.url = url
+        class _R:  # noqa
+            pass
+        r = _R(); r.status_code = self._s; r.text = self._t
+        return r
+
+
+def test_download_acervo_digital_decodifica_base64():
+    import base64
+    from esteira import _baixar_anexo_portal
+    png = b"\x89PNG\r\n" + b"\x00" * 600
+    s = _SessFake(base64.b64encode(png).decode())
+    blob, mime = _baixar_anexo_portal(s, "195456616", 1)
+    assert mime == "image/png" and blob == png
+    assert "acervo-digital/imagem" in s.url and "sequencial=1" in s.url
+
+
+def test_download_acervo_digital_rejeita_nao_arquivo():
+    """HTML de login (sessao caida) em base64 nao pode virar 'imagem'."""
+    import base64
+    from esteira import _baixar_anexo_portal
+    s = _SessFake(base64.b64encode(b"<html>login</html>" + b" " * 600).decode())
+    assert _baixar_anexo_portal(s, "195456616", 1) == (None, "")
+    # e sem guia/posicao nao bate na API (contrato antigo preservado)
+    assert _baixar_anexo_portal(None, None) == (None, "")
+
+
+# ── Leitura degenerada do lote (caso SOPHIA, 31/07) ─────────────────────────
+# O lote fez o modelo loopar (200k tokens de saida, JSON truncado, 762s) e a
+# guia morreu com "gemini: Unterminated string". O resgate le os anexos UM A UM
+# e remapeia o idx para a posicao real do lote.
+
+def test_fallback_um_a_um_remapeia_idx():
+    from esteira import _ler_anexos_um_a_um
+
+    class _Resp:
+        text = '[{"idx": 0, "tipo": "solicitacao", "paciente_lido": "X"}]'
+        usage_metadata = None
+
+    class _Gem:
+        class models:  # noqa
+            @staticmethod
+            def generate_content(model=None, contents=None, config=None):
+                return _Resp()
+
+    cands = [("a.jpg", "image/jpeg", b"x", "a"), ("b.jpg", "image/jpeg", b"x", "b")]
+    ls = _ler_anexos_um_a_um(_Gem, cands)
+    assert [a["idx"] for a in ls] == [0, 1]
+    assert all(a["tipo"] == "solicitacao" for a in ls)
+
+
+# ── Pendencia sem dono e pendencia que ninguem pega (31/07) ─────────────────
+# Tres motivos reais do dia 27/07 caiam em "Outros/Conferencia": a data vencida
+# da ESTER, o "nao encontrado no cadastro" da ANGELICA LEAHY e o erro tecnico
+# da SOPHIA — que por ser falha NOSSA tem que ir para a fila tecnica.
+
+def test_novos_motivos_ganham_dono():
+    from db import classificar_pendencia
+    ch, quem, acao = classificar_pendencia(
+        "Solicitação com data vencida e o sistema não localizou onde ajustar "
+        "(sem box da data) — revisar")
+    assert ch == "data_vencida" and quem == "Conferência" and acao
+    ch, quem, _ = classificar_pendencia(
+        "anexos: paciente 'ANGELICA OLIVEIRA  LEAHY' não encontrado no "
+        "cadastro do PRORADIS — conferir se o nome está escrito igual")
+    assert ch == "paciente_nao_achado" and quem == "Cadastro"
+    ch, quem, _ = classificar_pendencia(
+        "gemini: Unterminated string starting at: line 2267 column 9")
+    assert ch == "falha_tecnica" and quem == "Nós"
+    ch, quem, _ = classificar_pendencia(
+        "NÃO FATUROU porque este paciente tem exame em MAIS DE UM dia próximo "
+        "à guia (26/07/2026, 28/07/2026) e o sistema não tem como saber qual "
+        "exame pertence a esta guia")
+    assert ch == "multi_dia" and quem == "Conferência"
+
+
+# ── Busca por nome com sobrenome a mais / espaco duplo (JEUSA e ANGELICA) ───
+# JEUSA (27/07): a worklist achava 0 com o nome COMPLETO do analitico e achava
+# com um sobrenome a menos — o laudo existia, integro (134KB). ANGELICA LEAHY:
+# o nome veio com espaco DUPLO e a busca do prontuario achava 0 cards.
+
+def test_tentativas_de_nome_encurtam_ate_dois_tokens():
+    from extrator_arquivos import _tentativas_nome
+    assert _tentativas_nome("JEUSA OLIVEIRA MATOS ARAUJO") == [
+        "JEUSA OLIVEIRA MATOS ARAUJO", "JEUSA OLIVEIRA MATOS", "JEUSA OLIVEIRA"]
+    assert _tentativas_nome("ANGELICA OLIVEIRA  LEAHY") == [
+        "ANGELICA OLIVEIRA LEAHY", "ANGELICA OLIVEIRA"]  # espaco duplo colapsado
+    assert _tentativas_nome("MARIA SILVA") == ["MARIA SILVA"]  # 2 tokens: nao encurta
+    assert _tentativas_nome("") == []
+
+
 # ── Nome ilegivel != nome de OUTRA pessoa (casos TAINA e THAILAN, 21/07) ────
 # O pedido do dentista e manuscrito. Quando o nome sai ilegivel, isso e AUSENCIA
 # de evidencia — nao evidencia contraria. Antes os dois casos eram tratados igual

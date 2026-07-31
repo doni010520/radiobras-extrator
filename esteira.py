@@ -73,6 +73,12 @@ _GEM_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 # (o prompt diz "NÃO interprete, NÃO deduza"), então raciocínio é desperdício.
 # Ajustável por env sem deploy, caso a leitura piore.
 _GEM_THINKING = int(os.environ.get("GEMINI_THINKING_BUDGET", "0"))
+# Teto de SAIDA por chamada. Caso SOPHIA (31/07, GTO 195467577): o modelo entrou
+# em loop transcrevendo um lote e gerou 200 MIL tokens de saida em 762s, com o
+# JSON ainda truncado no fim — uma guia segurou a execucao por 12 minutos. A
+# transcricao normal de um lote inteiro fica abaixo de 6k; 16k e folga larga.
+# Com o teto, a degeneracao falha em ~1 min e cai no resgate um-a-um.
+_GEM_MAX_SAIDA = int(os.environ.get("GEMINI_MAX_SAIDA", "16384"))
 _gem_tokens = {"in": 0, "out": 0, "chamadas": 0}
 _gem_tokens_lock = threading.Lock()
 
@@ -103,6 +109,10 @@ def _gem_cfg():
     from google.genai import types
     return types.GenerateContentConfig(
         temperature=0,
+        # JSON nativo + teto de saida: reduzem muito a chance de loop de
+        # geracao e limitam o estrago quando ele acontece (caso SOPHIA 31/07)
+        max_output_tokens=_GEM_MAX_SAIDA,
+        response_mime_type="application/json",
         thinking_config=types.ThinkingConfig(thinking_budget=_GEM_THINKING),
     )
 
@@ -574,19 +584,14 @@ Regras:
 - Se não conseguir ler um trecho, omita em vez de adivinhar."""
 
 
-# Endpoint de download de anexo do portal. NAO esta documentado e NAO da para
-# descobrir daqui: a API do OdontoPrev so responde atras do proxy residencial, que
-# so existe em producao. Entao a primeira guia da execucao testa uma lista curta,
-# guarda o que funcionou e usa nas demais. O que cada candidato respondeu vai para
-# o log — se nenhum servir, a proxima rodada sai com a resposta em vez de palpite.
-_ODO_IMG_EP = {"ok": None, "logado": False}
-
-_ODO_IMG_CANDIDATOS = [
-    "{api}/v1/gto/imagem?id={id}",
-    "{api}/v1/gto/imagens/{id}",
-    "{api}/v1/gto/imagem/{id}",
-    "{api}/v1/gto/imagens/download?id={id}",
-]
+# Download de anexo da guia pelo ACERVO DIGITAL do portal. Endpoint REAL,
+# descoberto em 31/07 sniffando o popup da guia — os 4 palpites antigos davam
+# 404 e o campo 49 da guia baixada do portal nunca chegava ao leitor (caso
+# DAVI SANTANA, GTO 195456616: justificativa preenchida e ignorada):
+#   GET /v1/gto/acervo-digital/imagem?numeroFicha=<gto>&sequencial=<n>&thumbnail=false
+# O corpo vem em BASE64 (content-type text/plain) e ate PDF chega RENDERIZADO
+# como imagem. `sequencial` e 1-based e segue a ORDEM de /v1/gto/imagens
+# (validado ao vivo: seq 1..4 casou 1:1 com a lista da guia 195446697).
 
 _MIME_POR_ASSINATURA = [
     (b"%PDF", "application/pdf"),
@@ -602,33 +607,36 @@ def _mime_do_conteudo(b: bytes) -> str:
     return ""
 
 
-def _baixar_anexo_portal(sess, ident, _t=None):
-    """(bytes, mime) de UM anexo da guia, pelo id que /v1/gto/imagens devolve.
+def _baixar_anexo_portal(sess, gto, sequencial=None, _t=None):
+    """(bytes, mime) de UM anexo da guia, pela POSICAO dele (sequencial 1-based)
+    na lista que /v1/gto/imagens devolve.
 
-    Aceita so o que TEM assinatura de PDF/PNG/JPEG: o portal responde 200 com HTML
-    de login quando a sessao cai, e um HTML lido como imagem viraria leitura de lixo
-    — o tipo de coisa que faz a IA "ver" o que nao existe."""
-    if not ident:
+    Aceita so o que TEM assinatura de PDF/PNG/JPEG depois de decodificar o
+    base64: o portal responde 200 com HTML de login quando a sessao cai, e um
+    HTML lido como imagem viraria leitura de lixo — o tipo de coisa que faz a
+    IA "ver" o que nao existe."""
+    if not gto or not sequencial:
         return None, ""
-    ordem = ([_ODO_IMG_EP["ok"]] if _ODO_IMG_EP["ok"]
-             else list(_ODO_IMG_CANDIDATOS))
-    tentativas = []
-    for modelo in ordem:
-        try:
-            r = sess.get(modelo.format(api=_ODO_API, id=ident), timeout=25)
-            corpo = r.content or b""
-            mime = _mime_do_conteudo(corpo)
-            tentativas.append(f"{modelo.split('/v1/')[-1]} -> {r.status_code}"
-                              f"/{len(corpo)}b/{mime or 'nao-e-arquivo'}")
-            if r.status_code == 200 and mime and len(corpo) > 512:
-                _ODO_IMG_EP["ok"] = modelo
-                return corpo, mime
-        except Exception as e:
-            tentativas.append(f"{modelo.split('/v1/')[-1]} -> {str(e)[:40]}")
-    if _t and not _ODO_IMG_EP["logado"]:
-        _ODO_IMG_EP["logado"] = True
-        _t("[API] nenhum endpoint de download de anexo funcionou | " + " | ".join(tentativas))
-    return None, ""
+    try:
+        import base64
+        r = sess.get(f"{_ODO_API}/v1/gto/acervo-digital/imagem"
+                     f"?numeroFicha={gto}&sequencial={int(sequencial)}"
+                     f"&thumbnail=false", timeout=25)
+        if r.status_code != 200:
+            return None, ""
+        bruto = (r.text or "").strip()
+        if bruto.startswith("data:"):           # data-url: fica so o payload
+            bruto = bruto.split(",", 1)[-1]
+        blob = base64.b64decode(bruto + "=" * (-len(bruto) % 4))
+        mime = _mime_do_conteudo(blob)
+        if not mime or len(blob) <= 512:
+            return None, ""
+        return blob, mime
+    except Exception as e:
+        if _t:
+            _t(f"[API] download acervo-digital falhou (gto {gto} seq "
+               f"{sequencial}): {str(e)[:60]}")
+        return None, ""
 
 
 def _ler_gto_por_imagem(gem, blob, mime, gto):
@@ -1019,6 +1027,41 @@ def _date_from_name(s):
         return None
 
 
+def _ler_anexos_um_a_um(gem, cands):
+    """RESGATE do lote de leitura: cada anexo numa chamada propria, com o mesmo
+    prompt, e o idx remapeado para a posicao real no lote.
+
+    Caso SOPHIA (31/07): o lote fez o modelo degenerar (loop de 200k tokens,
+    JSON truncado) e a guia morreu com erro tecnico. Lote de UM anexo nao
+    degenera na pratica — e um anexo individualmente ilegivel so tira ELE da
+    jogada, nao a guia inteira. Erro fatal (credito/chave) continua parando."""
+    from google.genai import types
+    out = []
+    for i, (fn, mime, blob, saved) in enumerate(cands):
+        try:
+            r = gem.models.generate_content(
+                model=_GEM_MODEL,
+                contents=["[anexo 0]",
+                          types.Part.from_bytes(data=blob, mime_type=mime),
+                          _DECISAO_PROMPT],
+                config=_gem_cfg())
+            _contar_tokens(r)
+            txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(),
+                         flags=re.M).strip()
+            data = json.loads(txt)
+            ls = (data.get("anexos") if isinstance(data, dict) else data) or []
+            for a in ls:
+                if isinstance(a, dict):
+                    a["idx"] = i
+                    out.append(a)
+                    break               # 1 anexo enviado -> 1 leitura
+        except Exception as e:
+            if _gem_fatal(e):
+                raise
+            # anexo individual que nao leu: segue sem ele
+    return out
+
+
 def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
              eventos_portal=None, gto_blob=None, gto_mime=""):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
@@ -1241,7 +1284,16 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                                             config=_gem_cfg())
             _contar_tokens(r)
             txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
-            data = json.loads(txt)
+            try:
+                data = json.loads(txt)
+            except Exception:
+                # Lote degenerou (caso SOPHIA 31/07: loop de geracao, JSON
+                # truncado). Com o teto de saida a falha e rapida; o resgate e
+                # ler os anexos UM A UM em vez de re-tentar o mesmo lote.
+                data = _ler_anexos_um_a_um(gem, cands)
+                if not data:
+                    raise
+                out["leitura_um_a_um"] = True
             leituras = (data.get("anexos") if isinstance(data, dict) else data) or []
 
             # ── O CÓDIGO ESCOLHE a solicitação (o Gemini só LEU/transcreveu) ──────
@@ -1775,10 +1827,14 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             # toda guia tem ao nascer. Baixar e barato (1 GET); a leitura por IA so
             # acontece depois, e so se o prontuario nao tiver a guia.
             try:
-                _ig = next((i for i in (imgs or []) if isinstance(i, dict)
-                            and str(i.get("imagemGTO")).strip().lower() == "true"), None)
-                if _ig and _ig.get("id"):
-                    _b, _m = _baixar_anexo_portal(sess, _ig.get("id"), _t)
+                # posicao (1-based) do anexo imagemGTO=True na lista — e o
+                # `sequencial` que o acervo digital usa para servir o arquivo
+                _seq = next((ix for ix, i in enumerate(imgs or [], 1)
+                             if isinstance(i, dict)
+                             and str(i.get("imagemGTO")).strip().lower() == "true"),
+                            None)
+                if _seq:
+                    _b, _m = _baixar_anexo_portal(sess, g["gto"], _seq, _t)
                     if _b:
                         g["gto_portal_blob"], g["gto_portal_mime"] = _b, _m
             except Exception:

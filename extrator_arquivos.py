@@ -91,6 +91,21 @@ def _variantes_nome(nome: str) -> list:
     return out
 
 
+def _tentativas_nome(nome: str) -> list:
+    """Nome completo + encurtamentos (tira o ULTIMO sobrenome por vez, ate
+    sobrarem 2 tokens), com espacos duplicados colapsados.
+
+    Caso JEUSA (27/07): o filtro por nome do PRORADIS achava 0 com o nome
+    COMPLETO do analitico ('JEUSA OLIVEIRA MATOS ARAUJO') e achava com um
+    sobrenome a menos ('JEUSA OLIVEIRA MATOS') — o laudo existia, integro.
+    Encurtar so AMPLIA a busca; quem garante a identidade e o matching por
+    accession/nome que roda depois, sobre as linhas devolvidas."""
+    toks = " ".join(str(nome or "").split()).split(" ")
+    if not toks or toks == [""]:
+        return []
+    return [" ".join(toks[:n]) for n in range(len(toks), 1, -1)] or [toks[0]]
+
+
 def parse_groups(html: str) -> dict:
     """
     Retorna {study_tail: desc}.
@@ -369,16 +384,27 @@ def listar_worklist_por_pacientes(page, data: str, nomes: list) -> list:
     by_acc: dict = {}
     vistos: set = set()
     for nome in nomes:
-        for chave in _variantes_nome(nome):  # original + sem acentos (bug da cedilha)
-            if chave.upper() in vistos:
-                continue
-            vistos.add(chave.upper())
-            for tipo in ("study_datetime", "realized"):
-                try:
-                    raw_html = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
-                    _parse_worklist_html(raw_html, by_acc)
-                except Exception as e:
-                    print(f"   [worklist] falha nome={chave} tipo={tipo}: {e}")
+        # FALLBACK DE SOBRENOME (caso JEUSA, 27/07): se o nome nao devolver
+        # NENHUMA linha nova, tenta de novo tirando o ultimo sobrenome, ate
+        # sobrarem 2 tokens. O matching por accession/nome dos chamadores
+        # continua valendo — aqui so se amplia a BUSCA.
+        for tentativa in _tentativas_nome(nome):
+            achou_linha = False
+            for chave in _variantes_nome(tentativa):  # original + sem acentos (bug da cedilha)
+                if chave.upper() in vistos:
+                    continue
+                vistos.add(chave.upper())
+                for tipo in ("study_datetime", "realized"):
+                    try:
+                        raw_html = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
+                        antes = len(by_acc)
+                        _parse_worklist_html(raw_html, by_acc)
+                        if len(by_acc) > antes:
+                            achou_linha = True
+                    except Exception as e:
+                        print(f"   [worklist] falha nome={chave} tipo={tipo}: {e}")
+            if achou_linha:
+                break
     return list(by_acc.values())
 
 

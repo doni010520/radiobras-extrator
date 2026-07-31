@@ -695,6 +695,12 @@ _GRUPOS_PENDENCIA = [
     ("sem_pedido", r"nenhum pedido do dentista|n[ãa]o h[áa] nenhum pedido|sem anexo candidato"
      r"|Sem solicita[çc][ãa]o e sem justificativa",
      "Clínica", "Pedir à clínica que anexe o pedido no prontuário."),
+    # Pedido validado mas com data velha que o robô não conseguiu ajustar
+    # (caso ESTER, 27/07 — caía em "Outros" sem dono)
+    ("data_vencida", r"data vencida",
+     "Conferência", "O pedido é do paciente e cobre a guia, mas está com data "
+     "antiga e o robô não conseguiu ajustar. Conferir na Revisão e anexar "
+     "manualmente (ou pedir pedido novo)."),
     ("nome_nao_bate", r"nenhum documento do prontu[áa]rio est[áa] no nome"
      r"|nenhum anexo com paciente compat",
      "Nós", "O pedido pode ser do paciente e não estamos conseguindo provar. "
@@ -704,9 +710,19 @@ _GRUPOS_PENDENCIA = [
      "Nós", "Não lemos o que a guia autoriza. Abrir a guia no portal e conferir."),
     ("anexacao", r"anexa[çc][ãa]o falhou|n[ãa]o sobrou nenhum laudo|upload",
      "Nós", "A decisão passou e a anexação foi barrada. Conferir se o exame é do convênio."),
-    ("paciente_nao_achado", r"n[ãa]o foi encontrado no PRORADIS|paciente da guia n[ãa]o foi",
+    # Falha do robô/leitura (ex.: "gemini: ..." — caso SOPHIA, 27/07): é NOSSA,
+    # vai para a fila técnica, não para a operação
+    ("falha_tecnica", r"\bgemini\s*:|falha t[ée]cnica|leitura indispon[íi]vel",
+     "Nós", "Falha nossa (robô/leitura), não do documento. Rodar o dia de novo "
+     "depois da correção."),
+    ("paciente_nao_achado", r"n[ãa]o foi encontrado no PRORADIS|paciente da guia n[ãa]o foi"
+     r"|n[ãa]o encontrado no cadastro do PRORADIS",
      "Cadastro", "Procurar no PRORADIS pelo primeiro nome e conferir se o cadastro "
      "bate com o da guia."),
+    # Exame achado em MAIS DE UM dia vizinho da guia (janela ±7) — caía em "Outros"
+    ("multi_dia", r"mais de um dia",
+     "Conferência", "O exame aparece em mais de um dia próximo ao da guia. "
+     "Dizer qual é o dia certo e rodar esse dia."),
     ("homonimo", r"mais de um paciente|hom[ôo]nimo",
      "Conferência", "Dois pacientes com o mesmo nome. Dizer qual é o certo."),
 ]
@@ -731,10 +747,13 @@ _TITULO_GRUPO = {
     "falta_laudo": "Esperando o laudo do radiologista",
     "pedido_nao_cobre": "O pedido do dentista não cobre a guia",
     "sem_pedido": "Não há pedido do dentista no prontuário",
+    "data_vencida": "Pedido certo, mas com data vencida — anexar à mão",
     "nome_nao_bate": "O nome do pedido não bate com o da guia",
     "guia_ilegivel": "Não conseguimos ler o que a guia autoriza",
     "anexacao": "A anexação foi barrada",
+    "falha_tecnica": "Falha técnica do robô",
     "paciente_nao_achado": "Paciente não encontrado no PRORADIS",
+    "multi_dia": "Exame encontrado em mais de um dia",
     "homonimo": "Mais de um paciente com o mesmo nome",
     "outros": "Outros",
 }

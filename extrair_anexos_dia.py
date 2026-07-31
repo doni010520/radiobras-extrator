@@ -117,26 +117,44 @@ class ProntuarioAmbiguo(Exception):
 
 
 def anexos_do_paciente(page, nome: str, cod: str) -> list:
-    """Busca o paciente, abre prontuario + anexos, retorna [{id, filename, url}]."""
-    page.goto(f"{BASE}/patients", wait_until="networkidle")
-    page.wait_for_timeout(1200)
-    campo = page.query_selector("#patient_search")
-    campo.click(); campo.fill(nome)
-    page.wait_for_timeout(2200)
-    page.keyboard.press("Enter")
-    page.wait_for_timeout(2500)
+    """Busca o paciente, abre prontuario + anexos, retorna [{id, filename, url}].
 
-    r = _record_href(page, cod) or {}
-    href, n_cards = r.get("href"), r.get("n", 0)
+    A busca colapsa espacos duplicados (caso ANGELICA OLIVEIRA  LEAHY, 27/07:
+    o nome veio do analitico com espaco DUPLO e o #patient_search achava 0
+    cards) e, se nao achar nada, tenta de novo tirando o ultimo sobrenome
+    (ate 2 tokens). O encurtamento so vale quando ha CODIGO real do paciente
+    (o card precisa conter o codigo — _record_href); no fallback por nome
+    (cod "WL*", sem prova) NAO se encurta: uma busca mais ampla com aceite de
+    card unico poderia abrir o prontuario de OUTRA pessoa."""
+    nome_limpo = " ".join(str(nome or "").split())
+    tentativas = [nome_limpo]
+    toks = nome_limpo.split(" ")
+    if not str(cod or "").startswith("WL"):
+        tentativas += [" ".join(toks[:n]) for n in range(len(toks) - 1, 1, -1)]
+
+    href, n_cards = None, 0
+    for busca in tentativas:
+        page.goto(f"{BASE}/patients", wait_until="networkidle")
+        page.wait_for_timeout(1200)
+        campo = page.query_selector("#patient_search")
+        campo.click(); campo.fill(busca)
+        page.wait_for_timeout(2200)
+        page.keyboard.press("Enter")
+        page.wait_for_timeout(2500)
+        r = _record_href(page, cod) or {}
+        href, n_cards = r.get("href"), r.get("n", 0)
+        if href:
+            break
+
     if not href:
         # O motivo tem que dizer a VERDADE: 0 cards e 2+ cards sao problemas
         # diferentes e mandam a operadora procurar coisas diferentes.
         if n_cards == 0:
             raise ProntuarioAmbiguo(
-                f"paciente {nome!r} não encontrado no cadastro do PRORADIS — "
+                f"paciente {nome_limpo!r} não encontrado no cadastro do PRORADIS — "
                 f"conferir se o nome está escrito igual nos dois sistemas")
         raise ProntuarioAmbiguo(
-            f"{n_cards} pacientes com o nome {nome!r} no PRORADIS — não foi "
+            f"{n_cards} pacientes com o nome {nome_limpo!r} no PRORADIS — não foi "
             f"possível identificar o prontuário com segurança")
     page.goto(href, wait_until="networkidle")
     page.wait_for_timeout(1500)
