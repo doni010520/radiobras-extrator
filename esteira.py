@@ -209,19 +209,38 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
         return False
     sa, sb = set(ta), set(tb)
     comuns = sa & sb
-    if len(comuns) < 2:
-        return False
+    if not comuns:
+        return False                     # nenhum token identico: nao e a pessoa
     if len(sa) <= len(sb):
         menor, maior, lista_maior = sa, sb, tb
     else:
         menor, maior, lista_maior = sb, sa, ta
-    se_falta = menor - comuns
+    # PAREAMENTO POR GRAFIA (caso SOPHIA CARVALHO DO ROSARIO, GTO 195469193,
+    # 31/07): o manuscrito foi lido 'Sophia Carvallo do Rosamo' — DOIS tokens
+    # com typo pequeno contavam como 'divergentes' e o nome morria no exame de
+    # '2 tokens identicos'. Cada token do menor sem par exato tenta casar com UM
+    # token livre do maior por erro de grafia, com teto pela MAIOR das duas
+    # palavras (ROSAMO/6 x ROSARIO/7 -> teto 2). A porta continua fechada para
+    # parente: exige >=1 token IDENTICO (acima) e tokens realmente diferentes
+    # (PEDRO/JOAO, TAINA/THAILAN) nao pareiam por grafia.
+    livres = sorted(maior - comuns)
+    pareados = set()
+    for tok in sorted(menor - comuns):
+        for cand in livres:
+            _teto = 1 if max(len(tok), len(cand)) <= 6 else 2
+            if _dist_edicao(tok, cand, _teto) <= _teto:
+                livres.remove(cand)
+                pareados.add(tok)
+                break
+    if len(comuns) + len(pareados) < 2:
+        return False
+    se_falta = menor - comuns - pareados
     if not se_falta:
         return True                      # menor totalmente contido no maior
     if len(se_falta) > 1:
         return False                     # 2+ tokens divergentes -> outra pessoa
     tok = next(iter(se_falta))
-    if _erro_de_grafia(tok, maior - comuns):
+    if _erro_de_grafia(tok, livres):
         return True
     # INICIAL ABREVIADA — "Isabela Benini M. Tavares" e a mesma pessoa que
     # "ISABELA BENINI MEDINA TAVARES". O dentista abrevia o nome do meio; a guarda
@@ -231,7 +250,7 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
     # irmao os comuns sao 1 e a funcao ja rejeitou la em cima.
     # Caso ISABELA BENINI MEDINA TAVARES, GTO 195416813, 25/07.
     _ini = re.sub(r"[^A-Za-z]", "", tok).upper()
-    if len(_ini) == 1 and any(str(f).upper().startswith(_ini) for f in (maior - comuns)):
+    if len(_ini) == 1 and any(str(f).upper().startswith(_ini) for f in livres):
         return True
     # NOME COMPOSTO grudado num sistema e separado no outro (VERALUCIA / VERA LUCIA).
     # Usa a lista ORDENADA: só concatena tokens que estão lado a lado no nome.

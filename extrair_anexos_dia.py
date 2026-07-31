@@ -118,6 +118,63 @@ class ProntuarioAmbiguo(Exception):
     Melhor parar do que ler o prontuario de outra pessoa."""
 
 
+def _nome_norm_simples(s) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFD", str(s or ""))
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    return " ".join(s.upper().split())
+
+
+def _cards_da_busca(page):
+    """Todos os cards do resultado da busca de pacientes:
+    {href, nome, nascimento, cod}. O card e o MENOR ancestral do link
+    'Prontuario' que contem o texto 'Nascimento' (nao atravessa outros cards)."""
+    return page.evaluate(r"""() => {
+        const out = [];
+        for (const a of document.querySelectorAll('a.prontuario')) {
+            let card = null, n = a;
+            for (let i = 0; i < 6 && n; i++) {
+                n = n.parentElement;
+                if (n && /Nascimento/.test(n.innerText)) { card = n; break; }
+            }
+            const txt = card ? card.innerText : '';
+            const nasc = (txt.match(/Nascimento:\s*([0-9\/]+)/) || [])[1] || '';
+            const cod = (txt.match(/Prontu[aá]rio:\s*(\d+)/) || [])[1] || '';
+            const nome = (txt.split('\n').map(s => s.trim())
+                .find(s => s && !/^(Perfil|Prontu|Nascimento|Sexo|Senha|Telefone|Novo|\+|Ú|U)/.test(s)) || '');
+            out.push({href: a.href, nome, nascimento: nasc, cod});
+        }
+        return out;
+    }""")
+
+
+def _gemeos_de(cards, href_principal):
+    """Prontuarios DUPLICADOS do mesmo paciente na busca.
+
+    Caso IRAMAIA MACIEL LOPES DE SOUZA (27/07, GTO 195441968): a paciente tem
+    DOIS prontuarios no PRORADIS — 20053338 e 20031156 — com o MESMO nome e o
+    MESMO nascimento. O exame estava registrado num deles (o que o codigo do
+    analitico aponta) e o pedido do dentista foi anexado NO OUTRO; o robo lia
+    so o primeiro e reprovava com 'nenhum documento no nome deste paciente'.
+
+    Duplicata comprovada = nome normalizado IDENTICO + nascimento IDENTICO e
+    nao-vazio. Homonimo de verdade tem nascimento diferente e fica de fora;
+    card 'Novo Paciente' (sem nascimento) tambem. Maximo 2 gemeos."""
+    principal = next((c for c in cards or [] if c.get("href") == href_principal), None)
+    if not principal or not principal.get("nascimento"):
+        return []
+    nome = _nome_norm_simples(principal.get("nome"))
+    if not nome:
+        return []
+    out = []
+    for c in cards:
+        if (c.get("href") and c["href"] != href_principal
+                and c.get("nascimento") == principal["nascimento"]
+                and _nome_norm_simples(c.get("nome")) == nome):
+            out.append(c)
+    return out[:2]
+
+
 def anexos_do_paciente(page, nome: str, cod: str) -> list:
     """Busca o paciente, abre prontuario + anexos, retorna [{id, filename, url}].
 
@@ -162,6 +219,34 @@ def anexos_do_paciente(page, nome: str, cod: str) -> list:
         raise ProntuarioAmbiguo(
             f"{n_cards} pacientes com o nome {nome_limpo!r} no PRORADIS — não foi "
             f"possível identificar o prontuário com segurança")
+    # PRONTUARIO DUPLICADO (caso IRAMAIA, 27/07): antes de sair da tela de
+    # busca, verifica se ha outro card do MESMO paciente (nome + nascimento
+    # identicos) — o pedido pode ter sido anexado no prontuario duplicado.
+    gemeos = []
+    if cod_s and not cod_s.startswith("WL"):
+        try:
+            gemeos = _gemeos_de(_cards_da_busca(page), href)
+        except Exception:
+            gemeos = []
+
+    itens = _abrir_anexos(page, href, cod)
+    if gemeos:
+        vistos = {(i.get("id"), i.get("filename")) for i in itens}
+        for g in gemeos:
+            try:
+                extras = _abrir_anexos(page, g["href"], g.get("cod") or cod)
+            except Exception:
+                continue
+            for it in extras:
+                k = (it.get("id"), it.get("filename"))
+                if k not in vistos:
+                    vistos.add(k)
+                    itens.append(it)
+    return itens
+
+
+def _abrir_anexos(page, href, cod) -> list:
+    """Abre UM prontuario (href) e lista os anexos dele."""
     page.goto(href, wait_until="networkidle")
     page.wait_for_timeout(1500)
 

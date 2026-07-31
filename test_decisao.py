@@ -756,6 +756,78 @@ def test_tentativas_de_nome_encurtam_ate_dois_tokens():
     assert _tentativas_nome("") == []
 
 
+# ── Nome manuscrito com DOIS typos pequenos e o "Rx BW" do dentista (caso
+# SOPHIA CARVALHO DO ROSARIO, GTO 195469193, 27/07 Tancredo) ────────────────
+# O modelo leu o pedido BEM: paciente 'Sophia Carvallo do Rosamo' (2 typos de
+# grafia), dentista 'Dra. Erica Lima' CRO 8334 (o carimbo), exames [Panorâmica,
+# Rx Bw direito e esquerdo]. Quem reprovou foram as NOSSAS reguas: (a) a
+# identidade exigia 2 tokens IDENTICOS e typo contava como divergente ->
+# "outra pessoa"; (b) "BW" (bitewing) nao estava no vocabulario -> "nao cobre".
+
+def test_caso_sophia_dois_typos_de_grafia_casam():
+    assert _nomes_compat("Sophia Carvallo do Rosamo", "SOPHIA CARVALHO DO ROSARIO")
+
+
+def test_pareamento_de_grafia_nao_abre_para_parente():
+    # tokens realmente DIFERENTES nao pareiam por grafia
+    assert not _nomes_compat("PEDRO SILVA SANTOS", "JOAO SILVA SANTOS")
+    assert not _nomes_compat("THAILAN CABRAL SALLES DE ALMEIDA",
+                             "TAINA SALLES DE OLIVEIRA")
+    # e sem NENHUM token identico nao ha pareamento que salve
+    assert not _nomes_compat("MARIA SOUSA", "MARIO SOUZA")
+
+
+def test_rx_bw_e_interproximal():
+    from solicitacao_utils import canon_exames
+    ex = canon_exames("Panorâmica em topo. Rx BW direito e esquerdo (PM e M)")
+    assert {"panoramica", "interproximal"} <= ex
+    # 'bw' precisa de fronteira de palavra: nao pode nascer de outra palavra
+    assert "interproximal" not in canon_exames("subwoofer")
+
+
+def test_caso_sophia_passa_inteiro():
+    l = _leitura_dt(0, "Sophia Carvallo do Rosamo",
+                    ["Panorâmica", "Rx Bw direito e esquerdo"], "21/07/2026")
+    idx, _a, motivo = _escolher_solicitacao(
+        [l], "SOPHIA CARVALHO DO ROSARIO", {"panoramica", "interproximal"}, 1)
+    assert motivo is None and idx == 0
+
+
+# ── Prontuario DUPLICADO no PRORADIS (caso IRAMAIA MACIEL LOPES DE SOUZA,
+# GTO 195441968, 27/07) ─────────────────────────────────────────────────────
+# A paciente tem DOIS prontuarios (20053338 e 20031156) com o mesmo nome e o
+# mesmo nascimento (25/03/1978). O exame estava no prontuario que o analitico
+# aponta e o PEDIDO foi anexado no duplicado — o robo lia so o primeiro e
+# reprovava com "nenhum documento no nome deste paciente". Duplicata provada
+# (nome + nascimento identicos) agora e lida tambem.
+
+def test_prontuarios_duplicados_sao_gemeos():
+    from extrair_anexos_dia import _gemeos_de
+    cards = [
+        {"href": "H1", "nome": "IRAMAIA MACIEL LOPES DE SOUZA",
+         "nascimento": "25/03/1978", "cod": "20053338"},
+        {"href": "H2", "nome": "IRAMAIA MACIEL LOPES DE SOUZA",
+         "nascimento": "25/03/1978", "cod": "20031156"},
+        {"href": "", "nome": "IRAMAIA MACIEL LOPES DE SOUZA",
+         "nascimento": ""},   # card "+ Novo Paciente" (sem nascimento)
+    ]
+    g = _gemeos_de(cards, "H1")
+    assert [c["cod"] for c in g] == ["20031156"]
+
+
+def test_gemeo_exige_nome_E_nascimento_identicos():
+    from extrair_anexos_dia import _gemeos_de
+    cards = [
+        {"href": "H1", "nome": "MARIA SILVA", "nascimento": "01/01/1990"},
+        {"href": "H2", "nome": "MARIA SILVA", "nascimento": "02/02/1985"},        # homonima real
+        {"href": "H3", "nome": "MARIA SILVA SANTOS", "nascimento": "01/01/1990"}, # outro nome
+    ]
+    assert _gemeos_de(cards, "H1") == []
+    # principal sem nascimento: nao ha como PROVAR duplicidade -> nao le nada extra
+    assert _gemeos_de([{"href": "H1", "nome": "X Y", "nascimento": ""},
+                       {"href": "H2", "nome": "X Y", "nascimento": ""}], "H1") == []
+
+
 # ── Nome ilegivel != nome de OUTRA pessoa (casos TAINA e THAILAN, 21/07) ────
 # O pedido do dentista e manuscrito. Quando o nome sai ilegivel, isso e AUSENCIA
 # de evidencia — nao evidencia contraria. Antes os dois casos eram tratados igual

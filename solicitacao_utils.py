@@ -36,7 +36,10 @@ _CANON = [
     # — falha nossa, nao da clinica. Caso PAULO ROBERTO, GTO 195418785.
     (r"panor|\bpano\b", "panoramica"),
     (r"periap", "periapical"),
-    (r"interprox|bite.?wing|bitewing", "interproximal"),
+    # '\bbw\b': o dentista escreve "Rx BW direito e esquerdo (PM e M)" — caso
+    # SOPHIA CARVALHO DO ROSARIO, GTO 195469193 (27/07): sem o BW a leitura
+    # perdia o interproximal e a guia era reprovada por "nao cobre".
+    (r"interprox|bite.?wing|bitewing|\bbw\b", "interproximal"),
     # 'telerad' (um R só) e 'tele-radio': o dentista escreve à mão e abrevia.
     # Caso MIRLA (22/07 Centro): "Teleradigrafia lateral com tweed e Usp" não casava
     # com `telerr`, a telerradiografia sumia, e a documentação ortodôntica — que
