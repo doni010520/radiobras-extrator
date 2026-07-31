@@ -78,6 +78,8 @@ _GEM_THINKING = int(os.environ.get("GEMINI_THINKING_BUDGET", "0"))
 # JSON ainda truncado no fim — uma guia segurou a execucao por 12 minutos. A
 # transcricao normal de um lote inteiro fica abaixo de 6k; 16k e folga larga.
 # Com o teto, a degeneracao falha em ~1 min e cai no resgate um-a-um.
+# ATENCAO: nos modelos 2.5 o thinking conta DENTRO deste teto — se subir
+# GEMINI_THINKING_BUDGET, suba GEMINI_MAX_SAIDA junto.
 _GEM_MAX_SAIDA = int(os.environ.get("GEMINI_MAX_SAIDA", "16384"))
 _gem_tokens = {"in": 0, "out": 0, "chamadas": 0}
 _gem_tokens_lock = threading.Lock()
@@ -627,6 +629,9 @@ def _baixar_anexo_portal(sess, gto, sequencial=None, _t=None):
         bruto = (r.text or "").strip()
         if bruto.startswith("data:"):           # data-url: fica so o payload
             bruto = bruto.split(",", 1)[-1]
+        # base64 pode vir quebrado em linhas; o padding tem que ser calculado
+        # SEM o whitespace interno (achado do code review 31/07)
+        bruto = re.sub(r"\s+", "", bruto)
         blob = base64.b64decode(bruto + "=" * (-len(bruto) % 4))
         mime = _mime_do_conteudo(blob)
         if not mime or len(blob) <= 512:

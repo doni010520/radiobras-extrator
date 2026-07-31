@@ -102,10 +102,12 @@ def _record_href(page, cod: str):
     """
     return page.evaluate("""(cod) => {
         const links = [...document.querySelectorAll('a.prontuario')];
-        for (const a of links) {
-            let node = a, txt = '';
-            for (let i = 0; i < 6 && node; i++) { node = node.parentElement; if (node) txt += ' ' + node.innerText; }
-            if (txt.includes(cod)) return {href: a.href, n: links.length};
+        if (cod) {   // cod vazio: ''.includes() casaria com QUALQUER card
+            for (const a of links) {
+                let node = a, txt = '';
+                for (let i = 0; i < 6 && node; i++) { node = node.parentElement; if (node) txt += ' ' + node.innerText; }
+                if (txt.includes(cod)) return {href: a.href, n: links.length};
+            }
         }
         return {href: links.length === 1 ? links[0].href : null, n: links.length};
     }""", cod)
@@ -129,7 +131,11 @@ def anexos_do_paciente(page, nome: str, cod: str) -> list:
     nome_limpo = " ".join(str(nome or "").split())
     tentativas = [nome_limpo]
     toks = nome_limpo.split(" ")
-    if not str(cod or "").startswith("WL"):
+    cod_s = str(cod or "").strip()
+    # Encurtar exige codigo REAL e nao-vazio: com cod vazio, o ''.includes()
+    # do _record_href e true para QUALQUER card, e a busca cada vez mais larga
+    # aceitaria o primeiro paciente que aparecesse (achado do code review 31/07)
+    if cod_s and not cod_s.startswith("WL"):
         tentativas += [" ".join(toks[:n]) for n in range(len(toks) - 1, 1, -1)]
 
     href, n_cards = None, 0

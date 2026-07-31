@@ -720,7 +720,7 @@ _GRUPOS_PENDENCIA = [
      "Cadastro", "Procurar no PRORADIS pelo primeiro nome e conferir se o cadastro "
      "bate com o da guia."),
     # Exame achado em MAIS DE UM dia vizinho da guia (janela ±7) — caía em "Outros"
-    ("multi_dia", r"mais de um dia",
+    ("multi_dia", r"exame em mais de um dia|mais de um dia pr[óo]ximo",
      "Conferência", "O exame aparece em mais de um dia próximo ao da guia. "
      "Dizer qual é o dia certo e rodar esse dia."),
     ("homonimo", r"mais de um paciente|hom[ôo]nimo",
