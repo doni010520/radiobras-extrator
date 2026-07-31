@@ -828,6 +828,52 @@ def test_gemeo_exige_nome_E_nascimento_identicos():
                        {"href": "H2", "nome": "X Y", "nascimento": ""}], "H1") == []
 
 
+# ── Mensagem "nao cobre" tem de descrever o MESMO candidato (caso MARIA CLARA,
+# GTO 195436162, 27/07) ─────────────────────────────────────────────────────
+# Quando o candidato mais recente teve exames ilegiveis (ex vazio), a mensagem
+# antiga mostrava "FALTA periapical" (do candidato avaliado) junto com "o pedido
+# pede [...periapical...]" (de OUTRO anexo) — contradicao pura. det["lidos"] e
+# det["falta"] tem de sair do MESMO candidato avaliado.
+
+def test_det_lidos_e_falta_sao_do_mesmo_candidato():
+    # so ha UMA solicitacao compat, e seus exames nao canonizam em nada
+    l = _leitura(0, "MARIA CLARA DA SILVA SOUZA", ["texto ilegivel xyz"])
+    det = {}
+    idx, _a, motivo = _escolher_solicitacao(
+        [l], "MARIA CLARA DA SILVA SOUZA", {"periapical"}, 1, detalhe=det)
+    assert idx is None and motivo == "NAO_COBRE"
+    # o candidato avaliado nao leu exame nenhum -> lidos vazio, falta = alvo
+    # inteiro; as duas descrevem o MESMO anexo (nada de "falta X mas pede X")
+    assert det["lidos"] == []
+    assert set(det["falta"]) == {"periapical"}
+
+
+# ── Releitura focada do box da data (caso ESTER SANTOS EISENBACH, GTO 195441738,
+# 27/07) ────────────────────────────────────────────────────────────────────
+# Pedido validado + data vencida, mas a IA nao devolveu ONDE a data esta. Em vez
+# de mandar direto pra revisao manual, o sistema pergunta so a localizacao, num
+# anexo so — acerta muito mais.
+
+def test_reler_box_data_devolve_a_caixa():
+    from esteira import _reler_box_data
+
+    class _Resp:
+        text = '{"data_solicitacao": "10/01/2026", "box_data": [820, 400, 860, 700]}'
+        usage_metadata = None
+
+    class _Gem:
+        class models:  # noqa
+            @staticmethod
+            def generate_content(model=None, contents=None, config=None):
+                return _Resp()
+
+    cands = [("pedido.jpg", "image/jpeg", b"x", None)]
+    box, data = _reler_box_data(_Gem, cands, 0)
+    assert box == [820.0, 400.0, 860.0, 700.0] and data == "10/01/2026"
+    # idx fora da lista: nao chama o modelo, devolve (None, None)
+    assert _reler_box_data(_Gem, cands, 5) == (None, None)
+
+
 # ── Nome ilegivel != nome de OUTRA pessoa (casos TAINA e THAILAN, 21/07) ────
 # O pedido do dentista e manuscrito. Quando o nome sai ilegivel, isso e AUSENCIA
 # de evidencia — nao evidencia contraria. Antes os dois casos eram tratados igual

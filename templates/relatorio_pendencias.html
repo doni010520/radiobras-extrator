@@ -162,7 +162,7 @@
           <tr>
             {% if d.periodo %}<td class="mono">{{ i.dia }}</td>{% endif %}
             <td><strong>{{ i.paciente or '—' }}</strong>
-              {% if g.chave in ('pedido_nao_cobre',) and i.motivo %}
+              {% if i.motivo %}
                 <div class="motivo">{{ i.motivo }}</div>
               {% endif %}
             </td>
@@ -205,7 +205,9 @@
             {% for i in g.itens %}
             <tr>
               {% if d.periodo %}<td class="mono">{{ i.dia }}</td>{% endif %}
-              <td>{{ i.paciente or '—' }}</td>
+              <td>{{ i.paciente or '—' }}
+                {% if i.motivo %}<div class="motivo">{{ i.motivo }}</div>{% endif %}
+              </td>
               <td class="mono">{{ i.gto }}</td>
               <td>{{ i.unidade }}</td>
               <td>{{ i.exames_gto or '—' }}</td>

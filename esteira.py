@@ -498,6 +498,48 @@ carimbo/assinatura. Transcreva LITERALMENTE; nao interprete, nao complete, nao
 deduza. Se nao conseguir ler um trecho, omita em vez de adivinhar."""
 
 
+_BOX_DATA_PROMPT = """Este anexo é um PEDIDO/SOLICITAÇÃO de exames odontológicos. Nele há uma
+DATA escrita (a data em que o pedido foi feito), normalmente perto do nome da
+cidade e da assinatura do dentista, no rodapé.
+
+Sua ÚNICA tarefa: localizar essa data na imagem e devolver a caixa que a contém,
+em coordenadas de 0 a 1000 (0 = topo/esquerda, 1000 = base/direita).
+
+Responda APENAS JSON (sem markdown):
+{"data_solicitacao": "<DD/MM/AAAA lida, ou null>",
+ "box_data": [ymin, xmin, ymax, xmax]}
+
+Se realmente não houver data escrita, retorne box_data: null."""
+
+
+def _reler_box_data(gem, cands, idx):
+    """Releitura FOCADA só da caixa da data de UM anexo.
+
+    Caso ESTER SANTOS EISENBACH (GTO 195441738, 27/07): o pedido foi validado e
+    a data está vencida (>60 dias), então o sistema precisa reescrever a data de
+    hoje POR CIMA da antiga — e para isso precisa saber ONDE ela está (box_data).
+    Na leitura em lote a IA leu a data mas não devolveu a caixa, e a guia virava
+    pendência manual. Perguntar só a localização, num anexo só, acerta muito mais.
+    Devolve (box_data, data_lida) ou (None, None)."""
+    from google.genai import types
+    if not (isinstance(idx, int) and 0 <= idx < len(cands)):
+        return None, None
+    try:
+        _fn, _mime, _blob, _sv = cands[idx]
+        r = gem.models.generate_content(
+            model=_GEM_MODEL, config=_gem_cfg(),
+            contents=[types.Part.from_bytes(data=_blob, mime_type=_mime),
+                      _BOX_DATA_PROMPT])
+        _contar_tokens(r)
+        t = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
+        d = json.loads(t) or {}
+        return _box4(d.get("box_data")), d.get("data_solicitacao")
+    except Exception as e:
+        if _gem_fatal(e):
+            raise
+        return None, None
+
+
 def _reler_nao_classificados(gem, cands, leituras, max_reler=4):
     """2a passada, um anexo POR VEZ, nos que NAO foram classificados como
     solicitacao na leitura em lote.
@@ -1361,8 +1403,9 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                        "paciente_bate": True, "confianca": "alta", "anexar": True,
                        "leituras": leituras}
             else:
-                # transparência p/ a pendência: o que foi LIDO do melhor candidato
-                # nome-compatível (a usuária audita "lido" vs "GTO pede")
+                # transparência p/ a pendência: o que foi LIDO do candidato que a
+                # decisão AVALIOU (não outro qualquer). Só usado como último recurso
+                # quando _det não trouxe os exames — nunca para "corrigir" a lista.
                 _lidos = []
                 for _a2 in leituras:
                     if (isinstance(_a2, dict) and _a2.get("tipo") == "solicitacao"
@@ -1370,10 +1413,17 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                         _lidos = _a2.get("exames_lidos") or []
                         break
                 if _motivo == "NAO_COBRE":
-                    # usa EXATAMENTE o que a decisao avaliou (_det), nao um
-                    # recalculo por fora que pegava outro candidato
-                    _cn = _det.get("lidos") or sorted(
-                        expande_documentacao(canon_exames(" ".join(str(e) for e in _lidos))))
+                    # _cn e _falta TÊM de descrever o MESMO candidato — o que a
+                    # decisão avaliou (_det). Caso MARIA CLARA (GTO 195436162,
+                    # 27/07): quando o candidato avaliado tinha exames vazios, o
+                    # `or` caía no fallback e mostrava os exames de OUTRO anexo —
+                    # saía "FALTA periapical, mas o pedido pede [...periapical...]",
+                    # contradição pura. `is None` preserva a lista vazia do
+                    # candidato certo em vez de trocar de candidato.
+                    _cn = _det.get("lidos")
+                    if _cn is None:
+                        _cn = sorted(expande_documentacao(
+                            canon_exames(" ".join(str(e) for e in _lidos))))
                     # MESMO conjunto usado no critério (_alvo_ex). Mensagem e regra
                     # têm de ser a mesma coisa: quando divergiam, a pendência saía
                     # com as duas listas idênticas e parecia um absurdo lógico.
@@ -1393,13 +1443,18 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     if not _falta and _falta_bruto:
                         _falta = ["a especificacao de que a documentacao e COMPLETA "
                                   "(telerradiografia, fotografias e modelos)"]
+                    # Candidato avaliado sem NENHUM exame reconhecido: dizer isso em
+                    # vez de mostrar a lista de outro anexo (era a origem da
+                    # contradição da MARIA CLARA).
+                    _cn_txt = (lista_amigavel(_cn) if _cn
+                               else "não foi possível ler os exames do pedido mais recente")
                     # Diz O QUE FALTA, não só os dois conjuntos: é o que a operadora
                     # precisa para cobrar o exame certo do dentista.
                     _motivo = (
                         f"NÃO FATUROU porque o pedido do dentista não cobre tudo que a "
                         f"guia autoriza. FALTA no pedido: {lista_amigavel(_falta)}. "
                         f"A guia autoriza {lista_amigavel(_pede)}; o pedido encontrado "
-                        f"no prontuário pede {lista_amigavel(_cn)}. "
+                        f"no prontuário pede {_cn_txt}. "
                         f"O QUE FAZER: pedir à clínica um pedido que inclua "
                         f"{lista_amigavel(_falta)}.")
                 elif _motivo == "PACIENTE_INCOMPATIVEL":
@@ -1490,6 +1545,13 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             
                         _editou = False   # a edição REALMENTE aconteceu?
                         _bd = _box4(dec.get("box_data"))
+                        # Data vencida e a IA não devolveu ONDE a data está: em vez
+                        # de mandar direto para revisão manual (caso ESTER, 27/07),
+                        # pergunta a localização num anexo só — acerta muito mais.
+                        if tipo == 'atualizar' and not _bd:
+                            _bd2, _ = _reler_box_data(gem, cands, idx)
+                            if _bd2:
+                                _bd = _bd2
                         if tipo == 'atualizar' and _bd:
                             ymin, xmin, ymax, xmax = _bd
                             # Apaga data antiga com retângulo branco
