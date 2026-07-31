@@ -411,6 +411,12 @@ def test_box_invalido_nao_derruba_a_guia():
     assert _box4([10, 20, 30, 40, 50]) is None
     assert _box4([[1, 2, 3, 4], [5, 6, 7, 8]]) is None
     assert _box4(None) is None and _box4("x") is None
+    # Caixa alucinada (invertida ou fora de 0-1000) e REJEITADA — a anexacao e
+    # irreversivel e carimbar data em lugar errado seria dano (code review 31/07)
+    assert _box4([30, 20, 10, 40]) is None      # ymax < ymin
+    assert _box4([10, 40, 30, 20]) is None      # xmax < xmin
+    assert _box4([10, 20, 30, 1400]) is None    # fora da escala 0-1000
+    assert _box4([-5, 20, 30, 40]) is None       # negativo
 
 
 # ── Subtipo da documentação (HAMILTON 195268018, 22/07) ─────────────────────

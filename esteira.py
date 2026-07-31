@@ -1061,9 +1061,17 @@ def _box4(v):
     if not isinstance(v, (list, tuple)) or len(v) != 4:
         return None
     try:
-        return [float(x) for x in v]
+        ymin, xmin, ymax, xmax = (float(x) for x in v)
     except Exception:
         return None
+    # A anexacao e IRREVERSIVEL: uma caixa alucinada (invertida ou fora de
+    # 0-1000) carimbaria a data em lugar errado do documento certo. Na duvida,
+    # rejeita -> quem chama trata como "sem box" e a guia vai para revisao, em
+    # vez de subir um pedido com a data desenhada por cima do texto. (Reforco do
+    # code review 31/07; escala 0-1000 conforme o prompt.)
+    if not (0 <= xmin < xmax <= 1000 and 0 <= ymin < ymax <= 1000):
+        return None
+    return [ymin, xmin, ymax, xmax]
 
 
 def _parse_br_date(s):
