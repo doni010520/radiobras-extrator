@@ -1210,9 +1210,19 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             _desta = gto_e_desta_guia(path, gto) if gto is not None else False
             try:
                 _ex_pdf = gto_exames(path)
-                gto_ex |= _ex_pdf            # união: só torna a cobertura MAIS exigente
+                # SÓ a GTO DESTA guia (número confere) alimenta a referência de
+                # cobertura. Caso MARIA CLARA (GTO 195436162, 27/07): o prontuário
+                # acumula GTOs de ANOS e episódios diferentes — uma guia doc-orto
+                # de 2025 no meio dos anexos. Antes, os exames de TODAS as GTOs
+                # entravam na união (gto_ex), e a guia atual (que pede só
+                # periapical) passava a "exigir" documentação/ATM que ela nunca
+                # pediu — cobertura falsa-negativa. A referência correta é a GTO
+                # DESTA guia; quando ela não está legível no prontuário, os
+                # EVENTOS DO PORTAL (fonte autoritativa por ficha) preenchem
+                # gto_ex logo abaixo. GTO de outra guia NÃO entra.
                 if _desta:
-                    gto_ex_desta |= _ex_pdf  # os exames REAIS desta guia (p/ mensagem)
+                    gto_ex |= _ex_pdf
+                    gto_ex_desta |= _ex_pdf
             except Exception:
                 pass
             if _desta:
