@@ -2330,9 +2330,24 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     # Login/consulta que falha ABORTA a execução (não segue como "0 faturados/sucesso").
     if setup.get("err_odo") is not None:
         _cod = _odo_user or "(padrão)"
+        _det_odo = str(setup["err_odo"])
+        _low = _det_odo.lower()
+        # PROXY != senha. ERR_PROXY_AUTH_UNSUPPORTED / net::ERR_PROXY* vem do proxy
+        # residencial (o OdontoPrev bloqueia IP de datacenter, entao o acesso passa
+        # por proxy). Mandar "cadastre a senha do portal" aqui manda a operacao
+        # para o lugar errado — a senha esta certa, quem falhou foi o proxy (saldo/
+        # dados acabaram, credencial trocou, ou instabilidade do provedor).
+        if "proxy" in _low or "err_proxy" in _low or "tunnel" in _low:
+            raise RuntimeError(
+                f"Não foi possível conectar ao OdontoPrev pelo proxy (código {_cod}) "
+                f"— NÃO é a senha do portal. É o proxy residencial que dá acesso ao "
+                f"OdontoPrev que falhou (saldo/dados acabaram, credencial mudou, ou "
+                f"instabilidade do provedor). O QUE FAZER: conferir a conta do proxy "
+                f"(ODONTO_PROXY_URL) e o saldo/dados; depois tentar de novo. "
+                f"Detalhe técnico: {_det_odo[:140]}")
         raise RuntimeError(
             f"Login no RedeUna/OdontoPrev falhou para o código {_cod} — "
-            f"verifique/cadastre a senha do portal. Detalhe: {str(setup['err_odo'])[:140]}")
+            f"verifique/cadastre a senha do portal. Detalhe: {_det_odo[:140]}")
     if setup.get("err_prorad") is not None:
         _ep = str(setup["err_prorad"])
         if "sem linhas" in _ep.lower() or "vazi" in _ep.lower():

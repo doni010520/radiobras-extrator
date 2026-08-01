@@ -278,7 +278,10 @@ function onDone(j){
     $('failmsg').textContent=j.error;
     $('failLog').href='/faturar/log/'+jid;
     var e=j.error||'', h=$('failhint');
-    if(/proradis/i.test(e)){                       // PRORADIS -> NÃO é senha do portal
+    if(/proxy/i.test(e)){                          // PROXY -> NÃO é senha do portal
+      h.style.display='block';
+      h.innerHTML='Isso <b>não é senha do portal</b>. Falhou o <b>proxy</b> que dá acesso ao OdontoPrev (saldo/dados do proxy acabaram, credencial mudou, ou instabilidade). Conferir a conta do proxy e tentar de novo — cadastrar senha aqui não resolve.';
+    }else if(/proradis/i.test(e)){                 // PRORADIS -> NÃO é senha do portal
       h.style.display='block';
       if(/não retornou laudos|nada a faturar|sem linhas|laudad/i.test(e)){
         h.innerHTML='Isso <b>não é senha</b> — o PRORADIS não tem laudos desse dia nesta unidade. Confira se os exames já foram laudados, ou tente outro dia.';
