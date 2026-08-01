@@ -540,7 +540,7 @@ def _reler_box_data(gem, cands, idx):
         return None, None
 
 
-def _reler_nao_classificados(gem, cands, leituras, max_reler=4):
+def _reler_nao_classificados(gem, cands, leituras, max_reler=4, nome_gto=""):
     """2a passada, um anexo POR VEZ, nos que NAO foram classificados como
     solicitacao na leitura em lote.
 
@@ -557,7 +557,25 @@ def _reler_nao_classificados(gem, cands, leituras, max_reler=4):
     from google.genai import types
     ja = {a.get("idx") for a in (leituras or []) if isinstance(a, dict)
           and a.get("tipo") == "solicitacao"}
-    alvos = [i for i in range(len(cands)) if i not in ja][:max_reler]
+    # PRIORIDADE: releitura tem custo (1 chamada/anexo) e teto (max_reler).
+    # O sinal mais forte de "solicitacao mal classificada como documento" e o
+    # anexo ja ter sido lido com o NOME do proprio paciente E com exames —
+    # caso MARIA CLARA (GTO 195436162, 27/07): 10 anexos, e os 3 pedidos dela
+    # (no nome dela, com exames) caiam DEPOIS dos documentos genericos e nunca
+    # eram relidos (teto de 4). Ordena: (nome-compat + exames) > nome-compat > resto.
+    _by_idx = {a.get("idx"): a for a in (leituras or []) if isinstance(a, dict)}
+
+    def _prio(i):
+        a = _by_idx.get(i) or {}
+        _compat = bool(nome_gto) and _nomes_compat(a.get("paciente_lido") or "", nome_gto)
+        _tem_ex = bool(a.get("exames_lidos"))
+        if _compat and _tem_ex:
+            return (0, i)
+        if _compat:
+            return (1, i)
+        return (2, i)
+    _nao = sorted((i for i in range(len(cands)) if i not in ja), key=_prio)
+    alvos = _nao[:max_reler]
     novos = 0
     for i in alvos:
         try:
@@ -1393,7 +1411,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 _reler_exames_focado(gem, cands, leituras, pac["nome"])
                 # 2) relê os anexos que NAO foram classificados como solicitacao —
                 #    em lote o modelo erra o tipo em documentos parecidos (JUCILENE)
-                _n2 = _reler_nao_classificados(gem, cands, leituras)
+                _n2 = _reler_nao_classificados(gem, cands, leituras,
+                                               nome_gto=pac["nome"])
                 if _n2:
                     out["releitura_achou"] = _n2
                 _det = {}

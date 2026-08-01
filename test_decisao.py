@@ -860,6 +860,50 @@ def test_det_lidos_e_falta_sao_do_mesmo_candidato():
 # de mandar direto pra revisao manual, o sistema pergunta so a localizacao, num
 # anexo so — acerta muito mais.
 
+def test_releitura_prioriza_anexo_no_nome_do_paciente():
+    """Caso MARIA CLARA (GTO 195436162): prontuario com muitos anexos; os pedidos
+    reais dela (no nome dela, com exames) estavam DEPOIS dos documentos genericos
+    e o teto de 4 releituras nunca os alcancava. A reordenacao poe (nome-compat +
+    exames) na frente."""
+    from esteira import _reler_nao_classificados
+
+    # blob = índice do anexo (byte), pra sabermos qual foi relido
+    cands = [("f%d.jpg" % i, "image/jpeg", bytes([i]), None) for i in range(6)]
+    leituras = [
+        {"idx": 0, "tipo": "documento", "paciente_lido": "", "exames_lidos": []},
+        {"idx": 1, "tipo": "documento", "paciente_lido": "", "exames_lidos": []},
+        {"idx": 2, "tipo": "documento", "paciente_lido": "", "exames_lidos": []},
+        {"idx": 3, "tipo": "documento", "paciente_lido": "", "exames_lidos": []},
+        {"idx": 4, "tipo": "documento", "paciente_lido": "MARIA CLARA DA SILVA SOUZA",
+         "exames_lidos": ["RX PANORAMICA", "PERIAPICAL"]},
+        {"idx": 5, "tipo": "documento", "paciente_lido": "MARIA CLARA DA SILVA SOUZA",
+         "exames_lidos": ["RX PANORAMICA", "PERIAPICAL"]},
+    ]
+    relidos = []
+
+    def _gen(model=None, contents=None, config=None):
+        # o 1o item de contents é o Part.from_bytes; recupera o byte-índice
+        for p in contents:
+            data = getattr(getattr(p, "inline_data", None), "data", None)
+            if data:
+                relidos.append(data[0])
+        class _R:
+            text = '{"tipo": "documento"}'
+            usage_metadata = None
+        return _R()
+
+    class _G:
+        class models:  # noqa
+            generate_content = staticmethod(_gen)
+
+    _reler_nao_classificados(_G, cands, leituras, max_reler=4,
+                             nome_gto="MARIA CLARA DA SILVA SOUZA")
+    # teto 4: os DOIS anexos no nome dela (idx 4 e 5) TÊM de ter sido relidos,
+    # mesmo estando por último na ordem do prontuário
+    assert 4 in relidos and 5 in relidos
+    assert len(relidos) == 4
+
+
 def test_reler_box_data_devolve_a_caixa():
     from esteira import _reler_box_data
 
