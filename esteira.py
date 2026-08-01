@@ -262,12 +262,17 @@ def alvo_cobertura(gto_ex_desta, exames_portal, gto_ex_uniao):
 
       1) a GTO DESTA guia (número conferido no PDF, ou lida por imagem);
       2) os eventos DESTA ficha no portal (a operadora dizendo o que autorizou);
-      3) a união das GTOs achadas no prontuário — ÚLTIMO recurso.
+      3) gto_ex — a referência acumulada da própria guia (NÃO de outras).
 
-    (3) inclui GTOs de OUTRAS visitas do mesmo paciente. Usá-la como alvo cobra da
-    solicitação exames que esta guia nunca pediu, e reprova documentação correta.
-    Ela só existe como rede: sem identificar a guia, é mais seguro exigir demais
-    (pendência) do que de menos (anexar errado)."""
+    ATENÇÃO (mudou em 01/08 — caso MARIA CLARA): o 3º argumento NÃO é mais a união
+    de todas as GTOs do prontuário. O caller (_decidir) só acumula em gto_ex os
+    exames da GTO cujo NÚMERO confere (gto_e_desta_guia) — GTO de outra visita/ano
+    do mesmo paciente NÃO entra. Unir GTOs de outras visitas cobrava exames que
+    ESTA guia nunca pediu (uma doc-orto de 2025 fazia uma guia de periapical de
+    2026 "exigir" documentação) e reprovava pedido correto. NÃO reintroduza a
+    união cross-guia aqui nem no caller. Sem guia identificável, o alvo fica VAZIO
+    de propósito → a guia vira pendência GTO_ILEGIVEL (honesto), em vez de herdar a
+    exigência de outra guia."""
     return set(gto_ex_desta or ()) or set(exames_portal or ()) or set(gto_ex_uniao or ())
 
 
