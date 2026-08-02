@@ -282,6 +282,23 @@ def test_cron_grava_falha_sem_bug_do_j(monkeypatch):
     assert "proxy" in falhas[0][2]
 
 
+def test_cron_erro_ao_salvar_nao_vira_falha(monkeypatch):
+    """Se rodar_esteira faturou mas salvar_execucao falha (hiccup do banco), o dia
+    NÃO pode ser marcado como FALHOU — o faturamento já aconteceu (a guia já está
+    anexada). Espelha o handler web (app.py), que engole o erro de gravação."""
+    import app
+    resumo = {"anexado_ok": 3, "data": "29/07/2026", "conta": "388336"}
+    _mock_cron_deps(monkeypatch, resumo=resumo)
+    def _boom(r, log=None):
+        raise RuntimeError("db timeout")
+    monkeypatch.setattr(app.db, "salvar_execucao", _boom)
+    falhas = []
+    monkeypatch.setattr(app.db, "salvar_execucao_falha",
+                        lambda dia, conta, flag, msg, log=None: falhas.append(msg) or 1)
+    app._faturar_cron_body()          # não pode estourar
+    assert falhas == []               # erro de gravação != falha da execução
+
+
 # ── Cifra da senha do portal (item 7) ────────────────────────────────────────
 
 def test_senha_do_portal_cifra_e_decifra(monkeypatch):

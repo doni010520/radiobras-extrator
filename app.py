@@ -807,8 +807,15 @@ def _faturar_cron_body():
             # SEMPRE salva (antes só salvava com pendentes>0): quando a última
             # pendência do dia era resolvida, o cron pulava a gravação e ela NUNCA
             # fechava — o alerta de SLA seguia cobrando guia já faturada.
+            # A gravação tem try/except próprio (igual ao web): um hiccup do banco
+            # DEPOIS de a guia já ter faturado não pode virar "FALHOU" — a guia já
+            # está anexada; o próximo run vê 'ja_anexada' e não duplica.
             if resumo:
-                db.salvar_execucao(resumo, _logs)
+                try:
+                    db.salvar_execucao(resumo, _logs)
+                except Exception as e:
+                    app.logger.error("Cron faturar %s %s: anexou mas falhou ao "
+                                     "gravar: %s", conta, dia, str(e)[:120])
             nfat += (resumo or {}).get("anexado_ok", 0) or 0
             ndias += 1
             app.logger.info("Cron faturar %s %s: fat=%s pend=%s", conta, dia,
