@@ -219,6 +219,69 @@ def test_rotas_admin_esteira_nao_existem_mais():
     assert not [r for r in rotas if "admin/esteira" in r]
 
 
+# ── Cron diário D-4 + re-tentativa de pendências (Feature 2) ──────────────────
+# O cron das 5h fatura D-4 nas 3 unidades E re-roda os dias com pendência aberta
+# no prazo; quando uma guia fatura no reprocesso, a pendência dela fecha sozinha
+# dentro do salvar_execucao. Dois defeitos travavam isso: era D-3, e a gravação
+# usava uma variável `_j` inexistente (NameError engolido -> nada era salvo ->
+# pendência nunca fechava -> o alerta de SLA seguia cobrando guia já faturada).
+
+def test_dia_alvo_cron_e_D_menos_4():
+    """O alvo do cron é D-4 (quatro dias atrás), não D-3."""
+    from datetime import date
+    import app
+    assert app._dia_alvo_cron(date(2026, 8, 2)) == "29/07/2026"   # atravessa o mês
+    assert app._dia_alvo_cron(date(2026, 8, 10)) == "06/08/2026"
+
+
+def _mock_cron_deps(monkeypatch, resumo=None, erro=None):
+    """Isola _faturar_cron_body: 1 unidade, sem pendências, esteira mockada."""
+    import app, esteira
+    app._esteira_ativas.clear()
+    monkeypatch.setattr(app, "PLANOS", {"388336": {}})
+    monkeypatch.setattr(app.db, "dias_com_pendencia_aberta", lambda prazo=None: [])
+    monkeypatch.setattr(app, "_esteira_reservar", lambda dia, conta, tag: tag)
+    monkeypatch.setattr(app, "_esteira_liberar", lambda dia, conta, tag: None)
+    monkeypatch.setattr(app.db, "get_portal_senha", lambda c: "x")
+    monkeypatch.setattr(app.db, "cron_marcar_faturar", lambda d: None)
+    monkeypatch.setattr(app, "_enviar_alertas_sla", lambda: None)
+    def _fake(*a, **k):
+        if erro:
+            raise erro
+        return resumo
+    monkeypatch.setattr(esteira, "rodar_esteira", _fake)
+
+
+def test_cron_grava_execucao_sem_bug_do_j(monkeypatch):
+    """Regressão do `_j`: o cron TEM de gravar a execução. Antes o NameError era
+    engolido, salvar_execucao nunca rodava e a pendência nunca fechava."""
+    import app
+    resumo = {"anexado_ok": 2, "pendentes": 5, "data": "29/07/2026", "conta": "388336"}
+    _mock_cron_deps(monkeypatch, resumo=resumo)
+    salvos = []
+    monkeypatch.setattr(app.db, "salvar_execucao",
+                        lambda r, log=None: salvos.append((r, log)) or 1)
+    app._faturar_cron_body()
+    assert len(salvos) == 1
+    assert salvos[0][0] is resumo
+    # o log capturado é uma LISTA (as funções do db fazem o join), nunca uma string
+    assert isinstance(salvos[0][1], list)
+
+
+def test_cron_grava_falha_sem_bug_do_j(monkeypatch):
+    """O 2º `_j` (no except) também não pode estourar: falha vira registro de falha."""
+    import app
+    _mock_cron_deps(monkeypatch, erro=RuntimeError("proxy caiu"))
+    falhas = []
+    monkeypatch.setattr(app.db, "salvar_execucao_falha",
+                        lambda dia, conta, flag, msg, log=None: falhas.append((dia, conta, msg)) or 1)
+    monkeypatch.setattr(app.db, "salvar_execucao",
+                        lambda r, log=None: pytest.fail("não deveria salvar sucesso no caminho de erro"))
+    app._faturar_cron_body()
+    assert len(falhas) == 1
+    assert "proxy" in falhas[0][2]
+
+
 # ── Cifra da senha do portal (item 7) ────────────────────────────────────────
 
 def test_senha_do_portal_cifra_e_decifra(monkeypatch):

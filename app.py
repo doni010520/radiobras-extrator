@@ -774,15 +774,21 @@ def _esteira_liberar(dia, conta, tag):
             _esteira_ativas.pop(chave, None)
 
 
+def _dia_alvo_cron(hoje):
+    """Dia-alvo do cron diário: D-4 (quatro dias atrás), formatado 'DD/MM/AAAA'."""
+    from datetime import timedelta
+    return (hoje - timedelta(days=4)).strftime("%d/%m/%Y")
+
+
 def _faturar_cron_body():
-    from datetime import date, timedelta
+    from datetime import date
     try:
         prazo = int(os.environ.get("FATURAR_PRAZO_DIAS", "7"))
     except ValueError:
         prazo = 7
     hoje = datetime.now(_TZ).date() if _TZ else date.today()
-    target = (hoje - timedelta(days=3)).strftime("%d/%m/%Y")
-    combos = {(c, target) for c in PLANOS}                       # D-3 nas 3 unidades
+    target = _dia_alvo_cron(hoje)
+    combos = {(c, target) for c in PLANOS}                       # D-4 nas 3 unidades
     combos |= set(db.dias_com_pendencia_aberta(prazo))           # + pendências no prazo
     gkey = os.environ.get("GEMINI_API_KEY")
     from esteira import rodar_esteira
@@ -793,15 +799,16 @@ def _faturar_cron_body():
             app.logger.warning("Cron faturar %s %s PULADO: já há execução em andamento",
                                conta, dia)
             continue
+        _logs = []          # captura o log da execução p/ persistir (igual ao web)
         try:
-            resumo = rodar_esteira(dia, 6, 3, 5, log=lambda m: None,
+            resumo = rodar_esteira(dia, 6, 3, 5, log=_logs.append,
                                    gemini_key=gkey, k_attach=3, dry_run=False,
                                    conta=conta, senha_portal=db.get_portal_senha(conta))
             # SEMPRE salva (antes só salvava com pendentes>0): quando a última
             # pendência do dia era resolvida, o cron pulava a gravação e ela NUNCA
             # fechava — o alerta de SLA seguia cobrando guia já faturada.
             if resumo:
-                db.salvar_execucao(resumo, (_j or {}).get('log'))
+                db.salvar_execucao(resumo, _logs)
             nfat += (resumo or {}).get("anexado_ok", 0) or 0
             ndias += 1
             app.logger.info("Cron faturar %s %s: fat=%s pend=%s", conta, dia,
@@ -809,7 +816,7 @@ def _faturar_cron_body():
         except Exception as e:
             app.logger.error("Cron faturar %s %s FALHOU: %s", conta, dia, str(e)[:120])
             try:
-                db.salvar_execucao_falha(dia, conta, False, str(e), (_j or {}).get("log"))
+                db.salvar_execucao_falha(dia, conta, False, str(e), _logs)
             except Exception:
                 pass
         finally:
