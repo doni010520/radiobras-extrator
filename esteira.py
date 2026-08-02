@@ -303,6 +303,37 @@ def _nome_ausente(lido: str, alvo: str = "") -> bool:
     return not (set(toks) & alvo_t)
 
 
+def _erro_de_leitura_do_nome(lido: str, alvo: str) -> bool:
+    """O nome lido é uma LEITURA RUIM do nome da guia (MESMA pessoa, sobrenome
+    corrompido ou com lixo) — e NÃO um nome LIMPO de OUTRA pessoa (irmão)? Aceita
+    quando: o PRIMEIRO token do lido corresponde a algum token da guia (exato ou
+    grafia) OU é curto/lixo (não é um nome limpo diferente), e sobra no máximo UM
+    token 'estranho e limpo' (len>=5 sem correspondência). Rejeita quando o
+    primeiro nome é um nome limpo diferente (irmão), ou há 2+ tokens limpos
+    estranhos (ex.: THAILAN CABRAL ALMEIDA). NÃO depende do nome inteiro bater —
+    é o que separa 'mal lido' de 'outra pessoa'. Caso SIDNEY (27/07): 'Sidney
+    Sortas auto' é a mesma pessoa; 'Santos' virou 'Sortas' e 'auto' é lixo."""
+    la = [t for t in normaliza_nome(lido).split() if t not in _STOP_NOME and len(t) > 1]
+    lb = [t for t in normaliza_nome(alvo).split() if t not in _STOP_NOME and len(t) > 1]
+    if not la or not lb:
+        return False
+
+    def _casa(t):
+        for u in lb:
+            _teto = 1 if max(len(t), len(u)) <= 6 else 2
+            if t == u or _dist_edicao(t, u, _teto) <= _teto:
+                return True
+        return False
+
+    casados = [t for t in la if _casa(t)]
+    if not casados:
+        return False                       # nada corresponde: é ausência, não corrupção
+    if la[0] not in casados and len(la[0]) >= 4:
+        return False                       # 1º nome é nome LIMPO diferente -> outra pessoa
+    estranhos = [t for t in la if t not in casados and len(t) >= 5]
+    return len(estranhos) <= 1
+
+
 def _dentista_confere(a: dict, dentista_gto: str, gto_txt: str = "") -> str:
     """Segundo sinal quando o nome do paciente nao foi lido: o CARIMBO do dentista.
     Carimbo e IMPRESSO — le muito melhor que letra de medico. Compara com o campo 17
@@ -370,13 +401,19 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
     # vai para revisão, nunca chuta. Achado do code review (família de
     # ortodontia). O carimbo do dentista (_dentista_confere) NÃO é afetado: é
     # sinal mais forte e segue valendo mesmo com vários ilegíveis.
-    _n_ilegiveis = sum(
+    # Ambíguo = pedido cujo nome NÃO casa e é (a) AUSENTE/ilegível OU (b) uma
+    # LEITURA RUIM do próprio nome da guia (mesma pessoa, sobrenome corrompido —
+    # caso SIDNEY). Nos dois casos a identidade depende da corroboração, então a
+    # unicidade tem de contar os DOIS: dois ambíguos -> revisão (não chuta qual).
+    def _ambiguo(_p):
+        return (not _nomes_compat(_p, nome_gto)
+                and (_nome_ausente(_p, nome_gto) or _erro_de_leitura_do_nome(_p, nome_gto)))
+    _n_ambiguos = sum(
         1 for _a in (leituras or [])
         if isinstance(_a, dict) and _a.get("tipo") == "solicitacao"
         and bool(_a.get("legivel", True))
-        and not _nomes_compat(_a.get("paciente_lido") or "", nome_gto)
-        and _nome_ausente(_a.get("paciente_lido") or "", nome_gto))
-    _corrobora_ok = prontuario_confirmado and _n_ilegiveis <= 1
+        and _ambiguo(_a.get("paciente_lido") or ""))
+    _corrobora_ok = prontuario_confirmado and _n_ambiguos <= 1
     for a in leituras or []:
         if not isinstance(a, dict):
             continue
@@ -414,9 +451,19 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
             else:
                 continue
         else:
-            # nome LEGIVEL e de OUTRA pessoa -> rejeita. E a guarda que impede
-            # anexar o pedido do irmao (casos SALLES, pai x filho).
-            continue
+            # Nome presente mas NÃO compatível. Antes: sempre rejeita (guarda do
+            # irmão). NOVO (SIDNEY, 27/07): se o nome é uma LEITURA RUIM do nome
+            # da guia (mesma pessoa, sobrenome corrompido) — e não um nome LIMPO
+            # de OUTRA pessoa — aceita por corroboração (prontuário confirmado +
+            # único ambíguo + dentista não contradiz). O nó não é "o nome bater";
+            # é distinguir 'mal lido' de 'irmão'. Um nome limpo e diferente
+            # (THAILAN CABRAL SALLES, ou primeiro nome diferente) continua barrado
+            # dentro de _erro_de_leitura_do_nome.
+            if (_corrobora_ok and _erro_de_leitura_do_nome(_lido, nome_gto)
+                    and not _dentista_contradiz(a, dentista_gto, gto_txt)):
+                a["_via"] = "nome_mal_lido"
+            else:
+                continue
         algum_pac = True
         # expande SÓ o lado da solicitação: quem pede os componentes (panorâmica +
         # telerradiografia + ...) está pedindo uma documentação. A recíproca não vale.

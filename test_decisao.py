@@ -1195,6 +1195,52 @@ def test_corroboracao_nao_afrouxa_nome_de_outra_pessoa_legivel():
     assert idx is None
 
 
+# ── Nome MAL LIDO da mesma pessoa (caso SIDNEY, 27/07) ───────────────────────
+# "Sidney Sortas auto" (o Gemini leu mal) compartilha o PRIMEIRO nome com
+# "SIDNEY SANTOS CARVALHO" e o sobrenome saiu ilegível (SORTAS≈SANTOS). Antes o
+# código tratava "1 token em comum = PARENTE" e rejeitava, e a guia caía num
+# pedido velho de 2024. Distinção segura: mesma pessoa mal lida compartilha o
+# PRIMEIRO nome; parente/irmão compartilha o SOBRENOME e tem o 1º nome DIFERENTE.
+
+def test_erro_de_leitura_do_nome():
+    from esteira import _erro_de_leitura_do_nome
+    # SIDNEY: 1º nome corresponde, sobrenome corrompido (SORTAS~SANTOS), "auto" é lixo -> mal lido
+    assert _erro_de_leitura_do_nome("Sidney Sortas auto", "SIDNEY SANTOS CARVALHO")
+    # irmão: mesmo sobrenome, 1º nome LIMPO e diferente -> outra pessoa
+    assert not _erro_de_leitura_do_nome("MARCOS SANTOS CARVALHO", "SIDNEY SANTOS CARVALHO")
+    # vários nomes limpos e diferentes (SALLES pai×filho) -> outra pessoa
+    assert not _erro_de_leitura_do_nome("THAILAN CABRAL SALLES ALMEIDA", "TAINA SALLES DE OLIVEIRA")
+    # nada corresponde -> não é corrupção (é ausência, tratada à parte)
+    assert not _erro_de_leitura_do_nome("", "SIDNEY SANTOS CARVALHO")
+
+
+def test_sidney_nome_mal_lido_aceita_por_corroboracao():
+    """1º nome bate + prontuário confirmado + único ambíguo + dentista não
+    contradiz + cobre → aceita, apesar do sobrenome mal lido."""
+    l = _leitura2(0, "Sidney Sortas auto", ["periapical"], dentista="Vanessa Teixeira Gadea")
+    idx, _a, mot = _escolher_solicitacao(
+        [l], "SIDNEY SANTOS CARVALHO", {"periapical"}, 1, prontuario_confirmado=True)
+    assert idx == 0 and mot is None
+
+
+def test_sidney_irmao_mesmo_sobrenome_primeiro_nome_diferente_rejeita():
+    """Trava do irmão: mesmo com prontuário confirmado, primeiro nome DIFERENTE
+    (compartilha só o sobrenome) continua rejeitado — não é a mesma pessoa."""
+    l = _leitura2(0, "MARCOS SANTOS CARVALHO", ["periapical"], dentista="Vanessa Teixeira Gadea")
+    idx, _a, motivo = _escolher_solicitacao(
+        [l], "SIDNEY SANTOS CARVALHO", {"periapical"}, 1, prontuario_confirmado=True)
+    assert idx is None and motivo == "PACIENTE_INCOMPATIVEL"
+
+
+def test_sidney_dois_mal_lidos_do_mesmo_primeiro_nome_vao_a_revisao():
+    """Dois pedidos ambíguos (nome mal lido) → não dá para distinguir → revisão."""
+    l0 = _leitura2(0, "Sidney Sortas auto", ["periapical"], dentista="Vanessa Teixeira Gadea")
+    l1 = _leitura2(1, "Sidney Xyzt uvwq", ["periapical"], dentista="Vanessa Teixeira Gadea")
+    idx, _a, motivo = _escolher_solicitacao(
+        [l0, l1], "SIDNEY SANTOS CARVALHO", {"periapical"}, 2, prontuario_confirmado=True)
+    assert idx is None and motivo == "PACIENTE_INCOMPATIVEL"
+
+
 def test_mensagem_de_cobertura_usa_o_MESMO_candidato_da_decisao():
     """6 guias (23-24/07) saíram com "FALTA no pedido: nenhum" numa guia reprovada
     por falta de cobertura — absurdo lógico. A mensagem recalculava por fora e
