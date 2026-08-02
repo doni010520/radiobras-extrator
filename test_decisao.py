@@ -971,6 +971,76 @@ def test_nome_de_OUTRA_pessoa_e_rejeitado_mesmo_com_o_dentista_certo():
     assert idx is None
 
 
+# ── Corroboração do prontuário quando o nome está ILEGÍVEL (caso MAYSA ANTONIA
+# COELHO JESUS DOS SANTOS, GTO 195516236, 28/07 Centro) ──────────────────────
+# Pedido manuscrito de criança: o nome sai "Maja"/"Maysa" (1 token) e o dentista
+# ora "Mylena Queiroz" ora "Amanda Queiroz" — leitura cara-ou-coroa. A GTO da
+# própria guia está no prontuário dela (aberto pelo cadastro exato), o que prova
+# que o prontuário é dela. Nível "Equilibrado": aceita nome ilegível se o
+# prontuário está confirmado E o dentista NÃO contradiz (só rejeita dentista
+# claramente OUTRO) E os exames cobrem.
+
+def test_dentista_contradiz():
+    from esteira import _dentista_contradiz
+    # sobrenome em comum (Queiroz) -> NÃO contradiz: recupera a MAYSA
+    assert not _dentista_contradiz({"dentista_lido": "Amanda Queiroz", "cro_lido": ""},
+                                   "MYLENA SILVA QUEIROZ SANTANA")
+    # dentista claramente OUTRO (2 tokens, zero em comum) -> contradiz
+    assert _dentista_contradiz({"dentista_lido": "Carlos Andrade Souza", "cro_lido": ""},
+                               "MYLENA SILVA QUEIROZ SANTANA")
+    # ilegível/vazio -> não contradiz (ausência de evidência)
+    assert not _dentista_contradiz({"dentista_lido": "", "cro_lido": ""},
+                                   "MYLENA SILVA QUEIROZ SANTANA")
+    # um token só (leitura parcial) -> não contradiz
+    assert not _dentista_contradiz({"dentista_lido": "Mylena", "cro_lido": ""},
+                                   "MYLENA SILVA QUEIROZ SANTANA")
+    # CRO bate -> confirma, não contradiz, mesmo com nome diferente
+    assert not _dentista_contradiz({"dentista_lido": "Nome Errado", "cro_lido": "12345"},
+                                   "OUTRO DENTISTA", "CRO 12345")
+
+
+def test_maysa_passa_por_corroboracao_do_prontuario():
+    l = _leitura2(0, "Maja",
+                  ["PANORAMICA EM TOPO", "TELE PERFIL COM TRACADO", "RICKETES",
+                   "FOTOS INTRA BUCAIS", "MODELO"],
+                  dentista="Amanda Queiroz")
+    idx, _a, mot = _escolher_solicitacao(
+        [l], "MAYSA ANTONIA COELHO JESUS DOS SANTOS", {"documentacao_completa"}, 1,
+        "MYLENA SILVA QUEIROZ SANTANA", prontuario_confirmado=True)
+    assert idx == 0 and mot is None
+
+
+def test_corroboracao_rejeita_pedido_de_dentista_diferente():
+    """Trava de família: mesmo com o prontuário confirmado, um pedido cujo
+    dentista legível é OUTRO (2 tokens, nenhum em comum) é rejeitado."""
+    l = _leitura2(0, "Jaja", ["panoramica"], dentista="CARLOS ANDRADE SOUZA")
+    idx, _a, motivo = _escolher_solicitacao(
+        [l], "MAYSA ANTONIA COELHO JESUS DOS SANTOS", {"panoramica"}, 1,
+        "MYLENA SILVA QUEIROZ SANTANA", prontuario_confirmado=True)
+    assert idx is None and motivo == "PACIENTE_INCOMPATIVEL"
+
+
+def test_corroboracao_exige_prontuario_confirmado():
+    """Sem prontuário confirmado, nome ilegível + dentista que não bate (só
+    'Queiroz' em comum) continua indo para revisão, como hoje."""
+    l = _leitura2(0, "Maja", ["panoramica"], dentista="Amanda Queiroz")
+    idx, _a, motivo = _escolher_solicitacao(
+        [l], "MAYSA ANTONIA COELHO JESUS DOS SANTOS", {"panoramica"}, 1,
+        "MYLENA SILVA QUEIROZ SANTANA", prontuario_confirmado=False)
+    assert idx is None and motivo == "PACIENTE_INCOMPATIVEL"
+
+
+def test_corroboracao_nao_afrouxa_nome_de_outra_pessoa_legivel():
+    """Nome LEGÍVEL de outra pessoa (parente) continua rejeitado mesmo com o
+    prontuário confirmado — a corroboração é SÓ para nome ilegível."""
+    l = _leitura2(0, "THAILAN CABRAL SALLES DE ALMEIDA", ["panoramica"],
+                  dentista="VIRGINIA GABRIELA OLIVEIRA ALMEIDA")
+    idx, _a, _m = _escolher_solicitacao(
+        [l], "TAINA SALLES DE OLIVEIRA", {"panoramica"}, 1,
+        "VIRGINIA GABRIELA OLIVEIRA ALMEIDA", prontuario_confirmado=True)
+    assert idx is None
+
+
 def test_mensagem_de_cobertura_usa_o_MESMO_candidato_da_decisao():
     """6 guias (23-24/07) saíram com "FALTA no pedido: nenhum" numa guia reprovada
     por falta de cobertura — absurdo lógico. A mensagem recalculava por fora e

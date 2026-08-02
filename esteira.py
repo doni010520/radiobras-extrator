@@ -326,6 +326,28 @@ def _dentista_confere(a: dict, dentista_gto: str, gto_txt: str = "") -> str:
     return "nome" if len(lidos & alvo) >= 2 else ""
 
 
+def _dentista_contradiz(a: dict, dentista_gto: str, gto_txt: str = "") -> bool:
+    """True SÓ quando o pedido lê um dentista claramente OUTRO: nome legível com
+    >=2 tokens significativos e ZERO em comum com o campo 17, e sem CRO batendo.
+    Leitura parcial (1 token), sobrenome em comum (Amanda QUEIROZ x Mylena
+    QUEIROZ) ou dentista ilegível NÃO contradizem.
+
+    Diferente de _dentista_confere (que exige o dentista BATER, frágil na letra
+    manuscrita): aqui só se pergunta se ele CONTRADIZ. É a trava do fallback de
+    nome ilegível (caso MAYSA): a força vem da corroboração do prontuário, e o
+    dentista serve só para barrar o pedido de OUTRO dentista (pedido de irmão)."""
+    cro_g = re.sub(r"\D", "", str(a.get("cro_lido") or ""))
+    if cro_g and len(cro_g) >= 4 and re.search(r"\b" + cro_g + r"\b", gto_txt or ""):
+        return False                    # CRO bate -> confirma, nunca contradiz
+    lidos = {t for t in normaliza_nome(a.get("dentista_lido") or "").split()
+             if t not in _STOP_NOME and len(t) > 2}
+    alvo = {t for t in normaliza_nome(dentista_gto or "").split()
+            if t not in _STOP_NOME and len(t) > 2}
+    if not alvo or len(lidos) < 2:
+        return False                    # sem referência ou leitura parcial
+    return len(lidos & alvo) == 0       # 2+ tokens legíveis, nenhum em comum
+
+
 # Distancia maxima, em dias, para considerar que dois pedidos do prontuario sao do
 # MESMO episodio de tratamento e portanto podem ser pareados com guias diferentes.
 # Curta de proposito: os casos que o dono reprovou (MATHEUS, JAQUELINE, VANESSA)
@@ -334,7 +356,7 @@ _JANELA_PAREAMENTO_DIAS = int(os.environ.get("SOLIC_PAREAMENTO_DIAS", "30"))
 
 
 def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
-                          detalhe=None, gto_txt=""):
+                          detalhe=None, gto_txt="", prontuario_confirmado=False):
     """NÍVEL 2 — o CÓDIGO escolhe a solicitação certa entre as leituras que o Gemini
     transcreveu (uma por anexo). Determinístico: tipo solicitação, legível, paciente
     compatível (tokens) e exames que COBREM os da GTO. Desempate: mais exames em
@@ -364,9 +386,19 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
             # carimbo do dentista bate com o campo 17 da GTO. O carimbo e impresso,
             # entao le bem; e o documento ja veio do prontuario DESTE paciente.
             _via = _dentista_confere(a, dentista_gto, gto_txt)
-            if not _via:
+            if _via:
+                a["_via"] = "dentista_" + _via
+            # CORROBORAÇÃO DO PRONTUÁRIO (caso MAYSA, 28/07): pedido de crianca
+            # manuscrito, nome ilegivel E o dentista tambem sai instavel na letra
+            # (as vezes bate, as vezes nao). Se o prontuario esta CONFIRMADO como
+            # sendo do paciente (a GTO da propria guia esta nele, ou outro anexo
+            # le um nome compativel) e o dentista NAO CONTRADIZ (nao le um dentista
+            # claramente outro), aceita. A letra deixa de ser obrigatoria; a trava
+            # de familia continua: pedido de irmao com dentista diferente e barrado.
+            elif prontuario_confirmado and not _dentista_contradiz(a, dentista_gto, gto_txt):
+                a["_via"] = "corroboracao"
+            else:
                 continue
-            a["_via"] = "dentista_" + _via
         else:
             # nome LEGIVEL e de OUTRA pessoa -> rejeita. E a guarda que impede
             # anexar o pedido do irmao (casos SALLES, pai x filho).
@@ -1414,18 +1446,29 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             # mensagem, que já usava os exames DESTA guia, saía com as duas listas
             # idênticas ("pede [panoramica] mas a GTO pede [panoramica]").
             _alvo_ex = alvo_cobertura(gto_ex_desta, out.get("exames_portal"), gto_ex)
+            # PRONTUÁRIO CONFIRMADO como sendo do paciente: a GTO da PRÓPRIA guia
+            # está nele (número confere) OU algum anexo lê um nome compatível.
+            # Habilita a corroboração do fallback de nome ilegível (caso MAYSA).
+            _pront_ok = (_gtos_desta > 0) or any(
+                isinstance(_x, dict)
+                and _nomes_compat(_x.get("paciente_lido") or "", pac["nome"])
+                for _x in (leituras or []))
             _det = {}
             idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
                                                     len(cands), out.get("dentista_gto") or "",
-                                                    _det, out.get("gto_texto") or "")
-            # Falhou SÓ na cobertura de exames? Manuscrito costuma sair sub-lido na
-            # 1ª passada (ex.: leu "periapical" e perdeu "panorâmica"). Releitura
-            # dirigida do(s) candidato(s) e nova decisão determinística.
-            if idx is None and _motivo == "NAO_COBRE":
-                # 1) relê os candidatos que ja eram solicitacao (exames sub-lidos)
-                _reler_exames_focado(gem, cands, leituras, pac["nome"])
-                # 2) relê os anexos que NAO foram classificados como solicitacao —
-                #    em lote o modelo erra o tipo em documentos parecidos (JUCILENE)
+                                                    _det, out.get("gto_texto") or "",
+                                                    prontuario_confirmado=_pront_ok)
+            # Falhou na cobertura OU na identidade? Releitura dirigida e nova
+            # decisão. NAO_COBRE: manuscrito sub-lido (leu "periapical", perdeu
+            # "panorâmica"). PACIENTE_INCOMPATIVEL: um pedido IMPRESSO que lê o
+            # nome certo pode ter sido mal-classificado como "documento" — reler
+            # o tipo pode salvá-lo sem depender da letra (parte 3, caso MAYSA).
+            if idx is None and _motivo in ("NAO_COBRE", "PACIENTE_INCOMPATIVEL"):
+                # relê exames dos que já eram solicitação SÓ quando o problema é
+                # cobertura (no "nome não bate" não há candidato de nome compatível
+                # a reler); nos dois casos, relê o TIPO dos não-classificados.
+                if _motivo == "NAO_COBRE":
+                    _reler_exames_focado(gem, cands, leituras, pac["nome"])
                 _n2 = _reler_nao_classificados(gem, cands, leituras,
                                                nome_gto=pac["nome"])
                 if _n2:
@@ -1433,7 +1476,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 _det = {}
             idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
                                                     len(cands), out.get("dentista_gto") or "",
-                                                    _det, out.get("gto_texto") or "")
+                                                    _det, out.get("gto_texto") or "",
+                                                    prontuario_confirmado=_pront_ok)
             candidato_valido = idx is not None
             if candidato_valido:
                 dec = {"indice_solicitacao": idx, "paciente_lido": a.get("paciente_lido"),
