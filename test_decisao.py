@@ -386,6 +386,18 @@ def test_pdf_para_imagem_lixo_retorna_none():
     assert _pdf_para_imagem(b"") is None
 
 
+def test_pdf_multipagina_nao_converte():
+    """Achado do code review: multi-página NÃO pode virar 1 imagem (truncaria as
+    páginas 2+ num upload irreversível) -> None -> cai no fluxo antigo (revisão p/
+    vencida, PDF original p/ inserir)."""
+    import fitz
+    from esteira import _pdf_para_imagem
+    doc = fitz.open()
+    doc.new_page(width=300, height=400); doc.new_page(width=300, height=400)
+    pdf2 = doc.tobytes(); doc.close()
+    assert _pdf_para_imagem(pdf2) is None
+
+
 # ── Cifra da senha do portal (item 7) ────────────────────────────────────────
 
 def test_senha_do_portal_cifra_e_decifra(monkeypatch):

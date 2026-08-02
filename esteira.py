@@ -629,7 +629,10 @@ def _pdf_para_imagem(blob):
         import fitz  # PyMuPDF (já é dependência)
         doc = fitz.open(stream=blob, filetype="pdf")
         try:
-            if doc.page_count < 1:
+            # SÓ 1 página: multi-página não pode virar 1 imagem — truncaria as
+            # páginas 2+ num upload IRREVERSÍVEL (achado do code review). Multi e
+            # 0-página -> None -> fluxo antigo (revisão p/ vencida, PDF p/ inserir).
+            if doc.page_count != 1:
                 return None
             pix = doc.load_page(0).get_pixmap(dpi=200)   # nítido p/ leitura, ainda leve
             png = pix.tobytes("png")
