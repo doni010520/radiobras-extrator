@@ -398,6 +398,37 @@ def test_pdf_multipagina_nao_converte():
     assert _pdf_para_imagem(pdf2) is None
 
 
+# ── Pedido ILEGÍVEL != pedido que não cobre (caso MARIA CLARA) ───────────────
+# O Gemini não decifrou a caligrafia do pedido ('periapical' -> 'perigeed'). Antes
+# a mensagem culpava a clínica ("pedir um pedido que inclua periapical") por um
+# pedido que EXISTE e pode até cobrir. Preferência do dono (02/08): dizer que a
+# GRAFIA estava ilegível, e não jogar a culpa na clínica.
+
+def test_motivo_nao_cobre_distingue_ilegivel_de_nao_cobre():
+    from esteira import _motivo_nao_cobre
+    # pedido ILEGÍVEL (cn vazio: não leu os exames) -> caligrafia ilegível
+    m_ile = _motivo_nao_cobre(["periapical"], ["periapical"], [])
+    assert "ilegível" in m_ile.lower()
+    assert "à mão" in m_ile.lower()
+    assert "pedir à clínica" not in m_ile.lower()
+    # pedido LEGÍVEL que não cobre -> falta X, pedir à clínica (como antes)
+    m_cob = _motivo_nao_cobre(["periapical"], ["periapical"], ["panoramica"])
+    assert "pedir à clínica" in m_cob.lower()
+    assert "FALTA no pedido" in m_cob
+
+
+def test_pedido_ilegivel_nao_e_classificado_como_clinica():
+    from esteira import _motivo_nao_cobre
+    from db import classificar_pendencia
+    m = _motivo_nao_cobre(["periapical"], ["periapical"], [])     # ilegível
+    chave, resp, _ = classificar_pendencia(m)
+    assert chave == "pedido_ilegivel" and resp != "Clínica"
+    # o legível-que-não-cobre continua na Clínica
+    m2 = _motivo_nao_cobre(["periapical"], ["periapical"], ["panoramica"])
+    _, resp2, _ = classificar_pendencia(m2)
+    assert resp2 == "Clínica"
+
+
 # ── Cifra da senha do portal (item 7) ────────────────────────────────────────
 
 def test_senha_do_portal_cifra_e_decifra(monkeypatch):

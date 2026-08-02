@@ -690,6 +690,13 @@ _GRUPOS_PENDENCIA = [
      "Cobrar a emissão."),
     ("falta_laudo", r"falta o LAUDO|sem laudo|laudo veio em branco|laudo.*n[ãa]o pronto",
      "Radiologista", "O robô anexa sozinho assim que o laudo sair. Só cobrar."),
+    # PEDIDO ILEGÍVEL (caso MARIA CLARA): o robô não leu a caligrafia dos exames.
+    # NÃO é culpa da clínica (o pedido existe e pode cobrir) — é leitura nossa que
+    # falhou. Vem ANTES de pedido_nao_cobre. Resolução: conferir e anexar à mão.
+    ("pedido_ilegivel",
+     r"caligrafia do pedido.{0,40}ileg[íi]vel|n[ãa]o conseguiu ler os exames escritos",
+     "Conferência", "A letra do pedido do dentista não foi lida pelo robô — não é "
+     "falta de pedido. Conferir o pedido no prontuário e anexar à mão."),
     ("pedido_nao_cobre", r"n[ãa]o cobre tudo que a guia autoriza|FALTA no pedido",
      "Clínica", "Pedir à clínica um pedido que inclua o exame que falta."),
     ("sem_pedido", r"nenhum pedido do dentista|n[ãa]o h[áa] nenhum pedido|sem anexo candidato"
@@ -745,6 +752,7 @@ _NOSSO = "Nós"   # responsavel cujas pendencias vao para a FILA TECNICA
 _TITULO_GRUPO = {
     "sem_entregavel": "Exame sem laudo e sem imagem",
     "falta_laudo": "Esperando o laudo do radiologista",
+    "pedido_ilegivel": "Pedido do dentista com caligrafia ilegível",
     "pedido_nao_cobre": "O pedido do dentista não cobre a guia",
     "sem_pedido": "Não há pedido do dentista no prontuário",
     "data_vencida": "Pedido certo, mas com data vencida — anexar à mão",

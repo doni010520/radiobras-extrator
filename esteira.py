@@ -1314,6 +1314,26 @@ def _ler_anexos_um_a_um(gem, cands):
     return out
 
 
+def _motivo_nao_cobre(pede, falta, cn):
+    """Motivo da guia que não faturou por cobertura. Separa dois casos que ANTES
+    saíam com a MESMA mensagem (culpando a clínica):
+    - PEDIDO ILEGÍVEL (cn vazio = o Gemini não decifrou os exames escritos; caso
+      MARIA CLARA, 'periapical' -> 'perigeed'): é limitação de leitura NOSSA, não
+      falta de pedido -> conferir e anexar à mão. Preferência do dono (02/08).
+    - PEDIDO LEGÍVEL que não cobre: falta X -> pedir à clínica (como antes)."""
+    if not cn:
+        return (f"NÃO FATUROU porque a caligrafia do pedido do dentista está ilegível "
+                f"— o robô não conseguiu ler os exames escritos no pedido mais recente. "
+                f"A guia autoriza {lista_amigavel(pede)} e o pedido pode até incluir isso, "
+                f"mas a letra não foi decifrada. O QUE FAZER: conferir o pedido no "
+                f"prontuário e anexar à mão (é limitação de leitura, não falta de pedido).")
+    return (f"NÃO FATUROU porque o pedido do dentista não cobre tudo que a guia "
+            f"autoriza. FALTA no pedido: {lista_amigavel(falta)}. A guia autoriza "
+            f"{lista_amigavel(pede)}; o pedido encontrado no prontuário pede "
+            f"{lista_amigavel(cn)}. O QUE FAZER: pedir à clínica um pedido que inclua "
+            f"{lista_amigavel(falta)}.")
+
+
 def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
              eventos_portal=None, gto_blob=None, gto_mime=""):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
@@ -1653,20 +1673,11 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     if not _falta and _falta_bruto:
                         _falta = ["a especificacao de que a documentacao e COMPLETA "
                                   "(telerradiografia, fotografias e modelos)"]
-                    # Candidato avaliado sem NENHUM exame reconhecido: dizer isso em
-                    # vez de mostrar a lista de outro anexo (era a origem da
-                    # contradição da MARIA CLARA).
-                    _cn_txt = (lista_amigavel(_cn) if _cn
-                               else "não foi possível ler os exames do pedido mais recente")
-                    # Diz O QUE FALTA, não só os dois conjuntos: é o que a operadora
-                    # precisa para cobrar o exame certo do dentista.
-                    _motivo = (
-                        f"NÃO FATUROU porque o pedido do dentista não cobre tudo que a "
-                        f"guia autoriza. FALTA no pedido: {lista_amigavel(_falta)}. "
-                        f"A guia autoriza {lista_amigavel(_pede)}; o pedido encontrado "
-                        f"no prontuário pede {_cn_txt}. "
-                        f"O QUE FAZER: pedir à clínica um pedido que inclua "
-                        f"{lista_amigavel(_falta)}.")
+                    # PEDIDO ILEGÍVEL (o Gemini não leu os exames, _cn vazio) recebe
+                    # mensagem diferente — grafia ilegível, anexar à mão — em vez de
+                    # culpar a clínica por um pedido que EXISTE (caso MARIA CLARA). O
+                    # pedido legível que não cobre segue como antes (pedir à clínica).
+                    _motivo = _motivo_nao_cobre(_pede, _falta, _cn)
                 elif _motivo == "PACIENTE_INCOMPATIVEL":
                     _motivo = (
                         "NÃO FATUROU porque nenhum documento do prontuário está no nome "
