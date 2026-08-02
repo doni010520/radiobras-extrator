@@ -359,6 +359,33 @@ def test_laudos_sem_guia_vazio_quando_nada_e_extra():
     assert _laudos_sem_guia(None, None) == []
 
 
+# ── Ajuste de data em PDF (renderiza a página p/ imagem) ─────────────────────
+# Caso SIDNEY (27/07): solicitação em PDF com data lida como vencida. O ajuste de
+# data edita IMAGEM (PIL); PDF caía em revisão. Fix: renderizar a página do PDF
+# para imagem (PyMuPDF/fitz) e aplicar o mesmo ajuste.
+
+def test_pdf_para_imagem_converte_pagina():
+    import io
+    import fitz  # PyMuPDF (já é dependência)
+    from PIL import Image
+    from esteira import _pdf_para_imagem
+    doc = fitz.open()
+    pg = doc.new_page(width=320, height=440)
+    pg.insert_text((40, 60), "Solicitacao de Radiografias")
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    img_bytes, mime = _pdf_para_imagem(pdf_bytes)
+    assert "image" in mime
+    im = Image.open(io.BytesIO(img_bytes))
+    assert im.width > 0 and im.height > 0     # abre como imagem editável pelo PIL
+
+
+def test_pdf_para_imagem_lixo_retorna_none():
+    from esteira import _pdf_para_imagem
+    assert _pdf_para_imagem(b"nao e um pdf") is None
+    assert _pdf_para_imagem(b"") is None
+
+
 # ── Cifra da senha do portal (item 7) ────────────────────────────────────────
 
 def test_senha_do_portal_cifra_e_decifra(monkeypatch):

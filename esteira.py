@@ -619,6 +619,27 @@ Responda APENAS JSON (sem markdown):
 Se realmente não houver data escrita, retorne box_data: null."""
 
 
+def _pdf_para_imagem(blob):
+    """Renderiza a 1ª página de um PDF para PNG, para o ajuste de data (que edita
+    IMAGEM com o PIL) também funcionar em solicitação-PDF. Devolve (png_bytes,
+    'image/png') ou None se não for PDF/render falhar. A data (box_data) é
+    normalizada 0-1000, então mapeia igual na imagem renderizada.
+    Caso SIDNEY (27/07): solicitação em PDF caía em revisão por 'data vencida'."""
+    try:
+        import fitz  # PyMuPDF (já é dependência)
+        doc = fitz.open(stream=blob, filetype="pdf")
+        try:
+            if doc.page_count < 1:
+                return None
+            pix = doc.load_page(0).get_pixmap(dpi=200)   # nítido p/ leitura, ainda leve
+            png = pix.tobytes("png")
+        finally:
+            doc.close()
+        return (png, "image/png") if png else None
+    except Exception:
+        return None
+
+
 def _reler_box_data(gem, cands, idx):
     """Releitura FOCADA só da caixa da data de UM anexo.
 
@@ -1704,16 +1725,26 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 elif (hoje - data_lida).days > 60:
                     precisa_manipular = True; tipo = 'atualizar'
             
-                # Solicitação em PDF: o ajuste de data só sabe editar IMAGEM. Antes o
-                # bloco inteiro era pulado em silêncio e o PDF subia com a data VELHA.
-                # Só bloqueia quando a data está VENCIDA ('atualizar'); PDF sem data
-                # legível ('inserir') segue o fluxo normal, como sempre seguiu.
-                if precisa_manipular and tipo == 'atualizar' and "image" not in mime.lower():
-                    dec["anexar"] = False
-                    dec["motivo"] = ("Solicitação em PDF com data vencida — o ajuste "
-                                     "automático só funciona em imagem; revisar")
-                    candidato_valido = False
-                elif precisa_manipular and "image" in mime.lower():
+                # Solicitação em PDF: o ajuste de data edita IMAGEM (PIL). Antes um PDF
+                # com data VENCIDA ia direto pra revisão. Agora RENDERIZA a página do
+                # PDF para imagem (PyMuPDF) e segue o MESMO ajuste — box_data é 0-1000,
+                # mapeia igual. Só cai em revisão se a renderização falhar E a data
+                # estiver vencida. 'inserir' + render falhou = fluxo antigo (sobe o PDF
+                # como está). Caso SIDNEY (27/07): PDF com data lida como vencida.
+                if precisa_manipular and "image" not in mime.lower():
+                    _rend = _pdf_para_imagem(blob)
+                    if _rend:
+                        blob, mime = _rend
+                        # o conteúdo virou PNG -> troca a extensão do NOME, senão o
+                        # arquivo salvo/enviado teria bytes PNG com nome .pdf e o
+                        # convênio rejeitaria. O nome saneado é usado no save abaixo.
+                        fn_candidato = re.sub(r"\.[A-Za-z0-9]+$", "", fn_candidato) + ".png"
+                    elif tipo == 'atualizar':
+                        dec["anexar"] = False
+                        dec["motivo"] = ("Solicitação em PDF com data vencida e a página "
+                                         "não pôde ser renderizada para ajustar — revisar")
+                        candidato_valido = False
+                if candidato_valido and precisa_manipular and "image" in mime.lower():
                     try:
                         img = Image.open(io.BytesIO(blob))
                         draw = ImageDraw.Draw(img)
@@ -1785,10 +1816,10 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             out["decisao"] = dec
             # Salva o arquivo (original ou modificado) — SÓ se o CÓDIGO validou
             if candidato_valido:
-                out["plano_solicitacao"] = cands[idx][0]
+                out["plano_solicitacao"] = fn_candidato
                 out["solic_idx"] = idx
                 if pasta_dl and os.path.isdir(pasta_dl):
-                    sname = "SOLICITACAO_" + (re.sub(r"[^A-Za-z0-9._-]+", "_", cands[idx][0]) or "solic")
+                    sname = "SOLICITACAO_" + (re.sub(r"[^A-Za-z0-9._-]+", "_", fn_candidato) or "solic")
                     with open(os.path.join(pasta_dl, sname), "wb") as f:
                         f.write(blob)
                     # PEDIDO EM VARIAS FOLHAS: quando o pedido mais recente veio
