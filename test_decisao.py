@@ -1212,6 +1212,21 @@ def test_erro_de_leitura_do_nome():
     assert not _erro_de_leitura_do_nome("THAILAN CABRAL SALLES ALMEIDA", "TAINA SALLES DE OLIVEIRA")
     # nada corresponde -> não é corrupção (é ausência, tratada à parte)
     assert not _erro_de_leitura_do_nome("", "SIDNEY SANTOS CARVALHO")
+    # FURO DO CODE REVIEW: irmã de primeiro nome CURTO (ANA, EVA) NÃO pode passar
+    # como "mal lido" — 1º nome que não corresponde = outra pessoa, qualquer tamanho.
+    assert not _erro_de_leitura_do_nome("ANA SANTOS CARVALHO", "SIDNEY SANTOS CARVALHO")
+    assert not _erro_de_leitura_do_nome("EVA SILVA LIMA", "SIDNEY SILVA LIMA")
+    assert not _erro_de_leitura_do_nome("ANA SILVA", "JOSE SILVA")
+
+
+def test_recencia_nao_entrega_guia_para_irma_de_nome_curto():
+    """Furo do review: irmã 'ANA' (idx 0, mais recente) NÃO pode ganhar do pedido
+    correto do próprio paciente (idx 1). 'ANA' não é leitura ruim de 'SIDNEY'."""
+    irma = _leitura2(0, "ANA SANTOS CARVALHO", ["periapical"], dentista="Vanessa Teixeira Gadea")
+    dele = _leitura2(1, "SIDNEY SANTOS CARVALHO", ["periapical"], dentista="Vanessa Teixeira Gadea")
+    idx, _a, _m = _escolher_solicitacao(
+        [irma, dele], "SIDNEY SANTOS CARVALHO", {"periapical"}, 2, prontuario_confirmado=True)
+    assert idx == 1  # o pedido do próprio paciente, não o da irmã
 
 
 def test_sidney_nome_mal_lido_aceita_por_corroboracao():

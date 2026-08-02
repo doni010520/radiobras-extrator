@@ -328,8 +328,13 @@ def _erro_de_leitura_do_nome(lido: str, alvo: str) -> bool:
     casados = [t for t in la if _casa(t)]
     if not casados:
         return False                       # nada corresponde: é ausência, não corrupção
-    if la[0] not in casados and len(la[0]) >= 4:
-        return False                       # 1º nome é nome LIMPO diferente -> outra pessoa
+    if la[0] not in casados:
+        # 1º nome NÃO corresponde a nenhum token da guia -> outra pessoa, mesmo
+        # com nome curto (ANA, EVA, ZÉ). O code review mostrou que exigir len>=4
+        # aqui deixava a IRMÃ de nome curto passar (ANA SANTOS x SIDNEY SANTOS) —
+        # reabrindo o furo do SALLES. Na dúvida (1º nome garbled), vai p/ revisão;
+        # o SIDNEY real não precisa disto (o 1º nome dele JÁ casa).
+        return False
     estranhos = [t for t in la if t not in casados and len(t) >= 5]
     return len(estranhos) <= 1
 
