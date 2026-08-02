@@ -1020,6 +1020,20 @@ def test_corroboracao_rejeita_pedido_de_dentista_diferente():
     assert idx is None and motivo == "PACIENTE_INCOMPATIVEL"
 
 
+def test_corroboracao_rejeita_com_dois_pedidos_ilegiveis():
+    """Trava de FAMÍLIA (achado do code review): prontuário confirmado, mas DOIS
+    pedidos de nome ilegível — o do paciente e o de um irmão mal-arquivado, do
+    MESMO dentista da família (que não contradiz). Não dá para distinguir qual é
+    de quem → vai para revisão, nunca chuta. A corroboração só vale quando o
+    pedido ilegível é ÚNICO."""
+    l0 = _leitura2(0, "Maja", ["panoramica"], dentista="Amanda Queiroz")
+    l1 = _leitura2(1, "Lu", ["panoramica"], dentista="Amanda Queiroz")
+    idx, _a, motivo = _escolher_solicitacao(
+        [l0, l1], "MAYSA ANTONIA COELHO JESUS DOS SANTOS", {"panoramica"}, 2,
+        "MYLENA SILVA QUEIROZ SANTANA", prontuario_confirmado=True)
+    assert idx is None and motivo == "PACIENTE_INCOMPATIVEL"
+
+
 def test_corroboracao_exige_prontuario_confirmado():
     """Sem prontuário confirmado, nome ilegível + dentista que não bate (só
     'Queiroz' em comum) continua indo para revisão, como hoje."""

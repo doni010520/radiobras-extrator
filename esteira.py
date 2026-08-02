@@ -364,6 +364,19 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
     melhor = None
     algum_pac = False
     cands_ok = []          # candidatas validas (tipo/legivel/paciente), em ordem
+    # CORROBORAÇÃO só vale quando o pedido de nome ILEGÍVEL é ÚNICO. Com dois ou
+    # mais (o do paciente + o de um irmão mal-arquivado, mesmo dentista da
+    # família — que não contradiz), não dá para distinguir de quem é cada um →
+    # vai para revisão, nunca chuta. Achado do code review (família de
+    # ortodontia). O carimbo do dentista (_dentista_confere) NÃO é afetado: é
+    # sinal mais forte e segue valendo mesmo com vários ilegíveis.
+    _n_ilegiveis = sum(
+        1 for _a in (leituras or [])
+        if isinstance(_a, dict) and _a.get("tipo") == "solicitacao"
+        and bool(_a.get("legivel", True))
+        and not _nomes_compat(_a.get("paciente_lido") or "", nome_gto)
+        and _nome_ausente(_a.get("paciente_lido") or "", nome_gto))
+    _corrobora_ok = prontuario_confirmado and _n_ilegiveis <= 1
     for a in leituras or []:
         if not isinstance(a, dict):
             continue
@@ -390,12 +403,13 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
                 a["_via"] = "dentista_" + _via
             # CORROBORAÇÃO DO PRONTUÁRIO (caso MAYSA, 28/07): pedido de crianca
             # manuscrito, nome ilegivel E o dentista tambem sai instavel na letra
-            # (as vezes bate, as vezes nao). Se o prontuario esta CONFIRMADO como
-            # sendo do paciente (a GTO da propria guia esta nele, ou outro anexo
-            # le um nome compativel) e o dentista NAO CONTRADIZ (nao le um dentista
-            # claramente outro), aceita. A letra deixa de ser obrigatoria; a trava
-            # de familia continua: pedido de irmao com dentista diferente e barrado.
-            elif prontuario_confirmado and not _dentista_contradiz(a, dentista_gto, gto_txt):
+            # (as vezes bate, as vezes nao). Aceita SE: o prontuario esta
+            # CONFIRMADO como sendo do paciente (a GTO da propria guia esta nele) E
+            # este e o UNICO pedido de nome ilegivel (_corrobora_ok) E o dentista
+            # NAO CONTRADIZ. A letra deixa de ser obrigatoria; a trava de familia
+            # e a UNICIDADE (varios ilegiveis do mesmo dentista -> revisao), nao o
+            # dentista (que na familia e o mesmo).
+            elif _corrobora_ok and not _dentista_contradiz(a, dentista_gto, gto_txt):
                 a["_via"] = "corroboracao"
             else:
                 continue
@@ -1447,12 +1461,13 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             # idênticas ("pede [panoramica] mas a GTO pede [panoramica]").
             _alvo_ex = alvo_cobertura(gto_ex_desta, out.get("exames_portal"), gto_ex)
             # PRONTUÁRIO CONFIRMADO como sendo do paciente: a GTO da PRÓPRIA guia
-            # está nele (número confere) OU algum anexo lê um nome compatível.
-            # Habilita a corroboração do fallback de nome ilegível (caso MAYSA).
-            _pront_ok = (_gtos_desta > 0) or any(
-                isinstance(_x, dict)
-                and _nomes_compat(_x.get("paciente_lido") or "", pac["nome"])
-                for _x in (leituras or []))
+            # (número confere) está arquivada nele — prova forte de que a pasta é
+            # deste paciente. Habilita a corroboração do fallback de nome ilegível
+            # (caso MAYSA). O ramo fraco "algum anexo lê nome compatível" foi
+            # removido no code review: confirmava a pasta de forma desacoplada do
+            # documento aceito, e para uma ação IRREVERSÍVEL preferimos a prova
+            # forte (a GTO da guia presente).
+            _pront_ok = (_gtos_desta > 0)
             _det = {}
             idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
                                                     len(cands), out.get("dentista_gto") or "",

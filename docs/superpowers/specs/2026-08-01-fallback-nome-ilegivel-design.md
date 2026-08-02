@@ -47,21 +47,32 @@ manuscrito, mas resolve os casos onde existe uma versão digitada.)
 ### Parte (1) — corroboração do prontuário (nível "Equilibrado")
 
 Novo caminho de identidade, **apenas** para nome ilegível (`_nome_ausente`).
-Aceita o candidato se as três condições valerem:
+Aceita o candidato se as quatro condições valerem:
 
-- **(a) Prontuário confirmado como sendo do paciente.** Verdadeiro se QUALQUER
-  um:
-  - a GTO **desta** guia está no prontuário (`_gtos_desta > 0` — o número da guia
-    confere no PDF), OU
-  - algum outro anexo do prontuário lê um nome compatível com a guia
-    (`_nomes_compat` verdadeiro para alguma leitura).
-- **(b) O dentista NÃO contradiz.** Rejeita só se o pedido lê um dentista
+- **(a) Prontuário confirmado como sendo do paciente.** A GTO **desta** guia está
+  no prontuário (`_gtos_desta > 0` — o número da guia confere no PDF). É a prova
+  forte de que a pasta é deste paciente. *(O ramo fraco "algum anexo lê um nome
+  compatível" foi removido no code review: confirmava a pasta de forma
+  desacoplada do documento aceito.)*
+- **(b) Pedido de nome ilegível ÚNICO.** Se houver dois ou mais pedidos de nome
+  ilegível na disputa (o do paciente + o de um irmão mal-arquivado, mesmo
+  dentista da família), não dá para distinguir de quem é cada um → vai para
+  revisão. **Esta é a trava de família principal** — não o dentista, que na
+  família é o mesmo. O carimbo do dentista (`_dentista_confere`, sinal mais
+  forte) NÃO é afetado por esta trava.
+- **(c) O dentista NÃO contradiz.** Rejeita só se o pedido lê um dentista
   claramente OUTRO — nome legível com ≥2 tokens significativos e **zero** em
   comum com o campo 17, e sem CRO batendo. Leitura parcial, sobrenome em comum
   ("Queiroz") ou dentista ilegível **não** contradizem (passam).
-- **(c) Cobertura de exames.** Continua sendo decidida pela lógica de cobertura
+- **(d) Cobertura de exames.** Continua sendo decidida pela lógica de cobertura
   existente (o candidato entra na disputa; se não cobrir, vira `NAO_COBRE`, não
   fatura). Não é parte da checagem de identidade.
+
+**Risco residual assumido (nível Equilibrado):** um pedido de irmão ÚNICO,
+mal-arquivado no prontuário confirmado, nome totalmente ilegível e mesmo dentista
+— sem outro pedido para gerar ambiguidade — ainda seria aceito. É um cenário raro
+(a pasta do paciente normalmente tem o pedido dele) e sem informação que o
+distinga no papel. O dono escolheu este nível ao optar por "Equilibrado".
 
 Diferença para o 2º sinal que já existe: o `_dentista_confere` exige o dentista
 **bater** (≥2 tokens) — frágil na letra manuscrita. A corroboração exige que o
