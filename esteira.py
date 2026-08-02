@@ -525,6 +525,10 @@ MANUSCRITO (letra cursiva). Transcreva LITERALMENTE o que está escrito no campo
 exames/procedimentos pedidos — palavra por palavra, como aparece no papel, mesmo que
 esteja abreviado, com grafia imperfeita ou você não reconheça o termo.
 
+Se for um FORMULÁRIO COM QUADRADINHOS/CAIXAS de opções pré-impressas, transcreva
+APENAS os exames cuja caixa está MARCADA (X, tique, traço, círculo, rabisco);
+IGNORE as opções em branco — são só o cardápio impresso, não o pedido.
+
 NÃO interprete, NÃO complete, NÃO deduza e NÃO acrescente nada que não esteja escrito.
 Se não conseguir ler um trecho, omita-o em vez de adivinhar.
 
@@ -540,7 +544,7 @@ Responda APENAS JSON (sem markdown):
  "paciente_lido": "<nome do paciente escrito no anexo; \"\" se nao houver ou ilegivel>",
  "dentista_lido": "<nome no carimbo/assinatura; \"\" se nao houver>",
  "cro_lido": "<numero do CRO no carimbo, so digitos; \"\" se nao houver>",
- "exames_lidos": ["<cada exame/procedimento pedido ou citado, como esta escrito>"],
+ "exames_lidos": ["<cada exame PEDIDO; em formulario de caixas, SO os MARCADOS (X/tique/circulo), ignore as opcoes em branco; em pedido a mao, os escritos>"],
  "data_solicitacao": "<DD/MM/AAAA escrita no anexo, ou null>"}
 
 "solicitacao" e um PEDIDO/REQUISICAO de exames feito por um dentista — costuma
@@ -879,6 +883,26 @@ def _acc_do_laudo(p):
     return m.group(2) if m else None
 
 
+def _laudos_sem_guia(excluidos, extras_acc):
+    """Dos laudos EXCLUÍDOS de uma guia, os que são 'de fora' por PROCEDÊNCIA
+    (accession em extras_acc = não veio do convênio → nenhuma guia o cobre): são
+    laudos prontos SEM GUIA (exame particular ou guia esquecida). Distingue do
+    excluído por TIPO de exame, que pode pertencer a OUTRA guia do mesmo paciente.
+    Laudos excluídos são, por construção, PRONTOS (só entram na pasta se baixaram).
+    Só LAUDO_* têm accession; ENTREGA_* e afins são ignorados.
+    Retorna [{'accession','exame','arquivo'}]."""
+    extras = {str(a) for a in (extras_acc or [])}
+    out = []
+    for lp in (excluidos or []):
+        acc = _acc_do_laudo(lp)
+        if acc and str(acc) in extras:
+            exs = sorted(_exame_do_laudo(lp))
+            out.append({"accession": str(acc),
+                        "exame": ", ".join(exs) or "?",
+                        "arquivo": os.path.basename(lp)})
+    return out
+
+
 def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None, convenio_acc=None):
     """Só sobem para a GTO os arquivos do CONVÊNIO. Exame PARTICULAR feito no mesmo
     dia não vai para a operadora — regra do dono.
@@ -1104,8 +1128,17 @@ Para CADA anexo, retorne um objeto com:
   se estiver ilegível — NÃO invente, NÃO complete)
 - "dentista_lido": nome do dentista que assina/carimba o pedido ("" se não houver)
 - "cro_lido": número do CRO no carimbo, só dígitos ("" se não houver)
-- "exames_lidos": lista com TODOS os exames pedidos/citados no anexo, ex.:
-  ["panoramica","periapical","interproximal","telerradiografia","documentacao"]
+- "exames_lidos": os exames EFETIVAMENTE PEDIDOS neste anexo — NÃO o cardápio impresso.
+  * FORMULÁRIO COM QUADRADINHOS/CAIXAS de opções: liste APENAS os exames cuja caixa
+    está MARCADA (um X, tique, traço, círculo, rabisco ou preenchida). IGNORE as
+    opções em branco — elas são só as opções impressas do papel, NÃO o pedido.
+    Olhe COM ATENÇÃO qual linha tem a marca; NÃO liste as primeiras opções por
+    padrão. Ex.: se só "Radiografia Periapical" está marcada, retorne ["periapical"]
+    mesmo que "Panorâmica" apareça impressa acima em branco.
+  * PEDIDO ESCRITO À MÃO / TEXTO LIVRE: liste os exames escritos.
+  Regra de ouro: nunca inclua um exame só porque a palavra aparece IMPRESSA; vale o
+  que está MARCADO ou ESCRITO como pedido.
+  ex. de tokens: ["panoramica","periapical","interproximal","telerradiografia","documentacao"]
 - "data_solicitacao": data escrita no anexo, "DD/MM/AAAA" ou null
 - "box_data": [ymin,xmin,ymax,xmax] (valores 0-1000) da data, ou null
 - "box_assinatura": [ymin,xmin,ymax,xmax] (0-1000) da assinatura do dentista, ou null

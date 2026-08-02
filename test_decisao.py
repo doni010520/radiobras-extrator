@@ -334,6 +334,31 @@ def test_laudo_fname_sem_barra_fica_igual():
     assert fname == "LAUDO_TOMOGRAFIA COMPUTADORIZADA CONE BEAM- POR REGIAO_40337054_OFICIAL.pdf"
 
 
+# ── Aviso "exame pronto SEM GUIA" — detecção por procedência ─────────────────
+# Sem guia = laudo pronto excluído por PROCEDÊNCIA (accession em extras_acc = não
+# veio do convênio → nenhuma guia cobre). Distinto do excluído por tipo de exame,
+# que pode ser de OUTRA guia do paciente. Caso PAULO: tomografia é sem guia.
+
+def test_laudos_sem_guia_pega_so_procedencia():
+    from esteira import _laudos_sem_guia
+    excluidos = [
+        "LAUDO_TOMOGRAFIA COMPUTADORIZADA CONE BEAM- POR REGIAO_40337054_OFICIAL.pdf",  # extra
+        "LAUDO_PERIAPICAL_40295386_OFICIAL.pdf",   # do convênio -> outra guia, NÃO é sem guia
+        "ENTREGA_abc1234567.jpg",                  # não é laudo -> ignora
+    ]
+    r = _laudos_sem_guia(excluidos, extras_acc={"40337054"})
+    assert {x["accession"] for x in r} == {"40337054"}
+    assert "tomografia" in r[0]["exame"].lower()
+    assert r[0]["arquivo"].startswith("LAUDO_")
+
+
+def test_laudos_sem_guia_vazio_quando_nada_e_extra():
+    from esteira import _laudos_sem_guia
+    assert _laudos_sem_guia(["LAUDO_PERIAPICAL_40295386_OFICIAL.pdf"], extras_acc=set()) == []
+    assert _laudos_sem_guia([], extras_acc={"40337054"}) == []
+    assert _laudos_sem_guia(None, None) == []
+
+
 # ── Cifra da senha do portal (item 7) ────────────────────────────────────────
 
 def test_senha_do_portal_cifra_e_decifra(monkeypatch):
