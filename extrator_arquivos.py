@@ -636,6 +636,17 @@ def baixar_imagens(
 
 # ── Download de laudos ────────────────────────────────────────────────────────
 
+def _laudo_fname(exame, acc, tipo) -> str:
+    """Nome do arquivo de laudo com o nome do exame SANITIZADO: separadores de
+    caminho ('/', '\\') e chars ilegais viram '-'. Sem isto, 'PANORAMICA C/ TRACADO'
+    faz o open(os.path.join(out_dir, "LAUDO_PANORAMICA C/ TRACADO_..._OFICIAL.pdf"))
+    tratar 'LAUDO_PANORAMICA C' como subpasta inexistente -> FileNotFoundError
+    engolido -> o laudo (pronto!) é perdido e a guia morre 'sem laudo'. O accession
+    no nome já garante unicidade; o rótulo do exame é só legibilidade."""
+    safe = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "-", str(exame or "EXAME")).strip() or "EXAME"
+    return f"LAUDO_{safe}_{acc}_{tipo}.pdf"
+
+
 def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
     """
     Porta _laudos_neuza.py: ceph via render Playwright; comuns via requests.
@@ -712,7 +723,7 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
                     )
                 else:
                     seen_ceph_keys.add(ceph_key)  # exame ja entregue; ignora tokens repetidos
-                    fname = _nome_unico(f"LAUDO_{exame}_{acc}_CEPH.pdf")
+                    fname = _nome_unico(_laudo_fname(exame, acc, "CEPH"))
                     with open(os.path.join(out_dir, fname), "wb") as f:
                         f.write(pdf_bytes)
                     resultados.append(
@@ -756,7 +767,7 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
                     if ch in seen_content:
                         continue  # mesmo laudo ja salvo (token diferente, conteudo igual)
                     seen_content.add(ch)
-                    fname = _nome_unico(f"LAUDO_{exame}_{acc}_OFICIAL.pdf")
+                    fname = _nome_unico(_laudo_fname(exame, acc, "OFICIAL"))
                     with open(os.path.join(out_dir, fname), "wb") as f:
                         f.write(content)
                     resultados.append(

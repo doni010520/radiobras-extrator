@@ -299,6 +299,41 @@ def test_cron_erro_ao_salvar_nao_vira_falha(monkeypatch):
     assert falhas == []               # erro de gravação != falha da execução
 
 
+# ── Bug da barra no nome do exame (laudo pronto perdido no save) ─────────────
+# 'PANORAMICA C/ TRACADO' tem '/', separador de caminho. Sem sanitizar, o
+# open(os.path.join(out_dir, "LAUDO_PANORAMICA C/ TRACADO_<acc>_OFICIAL.pdf"))
+# tenta gravar numa subpasta 'LAUDO_PANORAMICA C' inexistente -> FileNotFoundError
+# engolido -> o laudo (pronto!) some, a guia morre 'sem laudo'. Caso real:
+# PAULO SERGIO SILVA DA ROCHA, GTO 195454210, 27/07 (Pendencia id=467).
+
+def test_laudo_com_barra_no_nome_grava_em_pasta_plana(tmp_path):
+    """O nome do arquivo de laudo NÃO pode conter separador de caminho, senão o
+    open() joga o laudo numa subpasta inexistente e ele é perdido."""
+    import extrator_arquivos as ea
+    fname = ea._laudo_fname("PANORAMICA C/ TRACADO", "40337051", "OFICIAL")
+    assert "/" not in fname and "\\" not in fname
+    # grava de fato numa pasta plana (reproduz o cenário real do container)
+    p = tmp_path / fname
+    p.write_bytes(b"%PDF-1.4 conteudo do laudo")
+    assert p.exists() and p.read_bytes().startswith(b"%PDF")
+
+
+def test_laudo_fname_preserva_reconhecimento_do_exame():
+    """Sanitizar a '/' não pode cegar o casamento: _exame_do_laudo + canon ainda
+    têm de reconhecer 'panoramica' no nome saneado."""
+    import extrator_arquivos as ea
+    from esteira import _exame_do_laudo
+    fname = ea._laudo_fname("PANORAMICA C/ TRACADO", "40337051", "OFICIAL")
+    assert "panoramica" in _exame_do_laudo(fname)
+
+
+def test_laudo_fname_sem_barra_fica_igual():
+    """Exame sem char ilegal não deve ser alterado (tomografia continua legível)."""
+    import extrator_arquivos as ea
+    fname = ea._laudo_fname("TOMOGRAFIA COMPUTADORIZADA CONE BEAM- POR REGIAO", "40337054", "OFICIAL")
+    assert fname == "LAUDO_TOMOGRAFIA COMPUTADORIZADA CONE BEAM- POR REGIAO_40337054_OFICIAL.pdf"
+
+
 # ── Cifra da senha do portal (item 7) ────────────────────────────────────────
 
 def test_senha_do_portal_cifra_e_decifra(monkeypatch):
