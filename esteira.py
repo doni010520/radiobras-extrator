@@ -2050,16 +2050,35 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
 
         def _um(g):
             imgs = []          # usado tambem depois do try (download da GTO)
-            try:
-                r = sess.get(f"{_ODO_API}/v1/gto/imagens"
-                             f"?numeroFicha={g['gto']}", timeout=20)
-                imgs = r.json() if r.status_code == 200 else []
+            # RETRY + captura do erro REAL. A leitura dos anexos era UMA tentativa e o
+            # except engolia a excecao (cnt=-1) sem gravar o motivo — o log so dizia
+            # "nao consegui LER", sem pista. O proxy residencial as vezes da timeout/
+            # reset (caso ANA CELIA/WELLINGHTON, 27/07 run 261: as duas JA estavam
+            # faturadas, so hiccuparam; a chamada volta 200 na tentativa seguinte).
+            # Agora tenta 3x com backoff e, se ainda falhar, guarda o PORQUE (status
+            # HTTP ou tipo+msg da excecao) para o log. Tambem trata status != 200 como
+            # falha (antes virava cnt=0 -> guia lida como '0 anexos', mascarando um 500).
+            _falha = None
+            for _tent in range(3):
+                try:
+                    r = sess.get(f"{_ODO_API}/v1/gto/imagens"
+                                 f"?numeroFicha={g['gto']}", timeout=25)
+                    if r.status_code == 200:
+                        imgs, _falha = (r.json() or []), None
+                        break
+                    _falha = f"HTTP {r.status_code} {r.text[:80]!r}"
+                except Exception as e:
+                    _falha = f"{type(e).__name__}: {str(e)[:100]}"
+                if _tent < 2:
+                    time.sleep(1.5 * (_tent + 1))
+            if _falha:
+                nomes, cnt = set(), -1
+            else:
                 nomes = {str(i.get("nomeArquivo", "")) for i in imgs}
                 cnt = len(imgs)
-                # DIAGNOSTICO: que campos o portal devolve por anexo? Se houver id
-                # ou URL do arquivo, da para comparar o CONTEUDO do que ja esta na
-                # guia em vez do nome — que e o certo, e o que o dono cobrou. Sem
-                # isso a idempotencia depende de o nosso nome ser estavel.
+                # DIAGNOSTICO: que campos o portal devolve por anexo (id/URL) — permite
+                # comparar CONTEUDO em vez de nome. Sem isso a idempotencia depende do
+                # nosso nome ser estavel.
                 if imgs and isinstance(imgs[0], dict) and not _campos_anexo["visto"]:
                     _campos_anexo["visto"] = True
                     _t(f"[API] campos por anexo em /v1/gto/imagens: "
@@ -2067,8 +2086,6 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     _amostra = {k: (str(v)[:60] if v is not None else None)
                                 for k, v in imgs[0].items()}
                     _t(f"[API] amostra: {_amostra}")
-            except Exception:
-                nomes, cnt = set(), -1
             # REGRA (31/07 — casos PAULO SERGIO/WELLINGHTON/FABIO/PATRICK, 27/07):
             # "ja documentada" NAO e contagem — e existir DOCUMENTO alem da guia.
             # Toda guia nasce com 1 anexo, a imagem assinada da propria GTO
@@ -2083,8 +2100,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             # qualquer anexo novo entre a descoberta e o upload bloqueia o envio.
             # Na duvida (cnt == -1, falha na consulta) tambem NAO segue.
             if cnt < 0:
-                _t(f"[DESC] GTO {g['gto']}: nao consegui LER os anexos -> pula "
-                   f"(nao arrisco duplicar; reprocesse o dia)")
+                _t(f"[DESC] GTO {g['gto']}: nao consegui LER os anexos apos 3 "
+                   f"tentativas [{_falha}] -> pula (nao arrisco duplicar; "
+                   f"reprocesse o dia)")
                 with _lock:
                     resultados.append({"gto": g["gto"], "nome": g["nome"],
                                        "status": "NAO_VERIFICADA"})
