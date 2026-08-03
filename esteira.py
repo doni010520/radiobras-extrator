@@ -474,7 +474,7 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         # expande SÓ o lado da solicitação: quem pede os componentes (panorâmica +
         # telerradiografia + ...) está pedindo uma documentação. A recíproca não vale.
         ex = expande_documentacao(
-            canon_exames(" ".join(str(e) for e in (a.get("exames_lidos") or [])),
+            canon_exames(_texto_pedido(a),   # transcricao LITERAL + lista; canon decide
                          recuperar=True))   # PEDIDO manuscrito: recupera exame mal lido
         # QUASE-ACERTO: candidato que passou em tipo/legivel/paciente mas falhou na
         # cobertura. A mensagem PRECISA descrever ESTE, com o MESMO conjunto que a
@@ -592,7 +592,7 @@ IGNORE as opções em branco — são só o cardápio impresso, não o pedido.
 NÃO interprete, NÃO complete, NÃO deduza e NÃO acrescente nada que não esteja escrito.
 Se não conseguir ler um trecho, omita-o em vez de adivinhar.
 
-Responda APENAS JSON (sem markdown): {"exames": ["...", "..."]}"""
+Responda APENAS JSON (sem markdown): {"exames": ["...", "..."], "texto": "<transcrição LITERAL e COMPLETA de todo o texto do pedido, verbatim, incluindo os cabeçalhos DOCUMENTAÇÃO/FOTOS/MODELOS e tudo escrito abaixo deles; em formulário de caixas, só o texto dos itens MARCADOS>"}"""
 
 
 _RELEITURA_TIPO_PROMPT = """Este e UM anexo de prontuario odontologico. Voce e um
@@ -605,6 +605,7 @@ Responda APENAS JSON (sem markdown):
  "dentista_lido": "<nome no carimbo/assinatura; \"\" se nao houver>",
  "cro_lido": "<numero do CRO no carimbo, so digitos; \"\" se nao houver>",
  "exames_lidos": ["<cada exame PEDIDO, de TODAS as secoes do pedido: a lista numerada de exames radiograficos E os blocos de DOCUMENTACAO / FOTOS INTRA E EXTRA BUCAIS / MODELOS; em formulario de caixas, SO os MARCADOS (X/tique/circulo), ignore as opcoes em branco; em pedido a mao, os escritos>"],
+ "texto": "<transcricao LITERAL e COMPLETA de todo o texto do pedido, verbatim, incluindo os cabecalhos DOCUMENTACAO/FOTOS/MODELOS e tudo abaixo deles; em formulario de caixas so o texto dos itens MARCADOS; \"\" se nao for pedido/ilegivel>",
  "data_solicitacao": "<DD/MM/AAAA escrita no anexo, ou null>"}
 
 "solicitacao" e um PEDIDO/REQUISICAO de exames feito por um dentista — costuma
@@ -745,6 +746,22 @@ def _reler_nao_classificados(gem, cands, leituras, max_reler=4, nome_gto=""):
     return novos
 
 
+def _texto_pedido(a):
+    """Texto do PEDIDO que o canon vai reconhecer — a transcricao LITERAL (campo
+    'texto', a descricao mais fiel do que a IA viu) somada aos itens que a IA ja
+    normalizou (exames_lidos). A IA so transcreve; quem decide o exame e o
+    canon_exames() do codigo. Assim 'FOTOS INTRA BUCAIS' escrito no pedido vira
+    'fotografia' deterministicamente, mesmo que a IA nao a tenha posto na lista
+    curada — caso MAYSA/MIRIAN (doc orto completa da Dra. Amanda Queiroz, 28/07),
+    em que a lista dropava a secao de fotos e a guia caia em 'nao cobre'."""
+    if not isinstance(a, dict):
+        return ""
+    partes = [str(e) for e in (a.get("exames_lidos") or [])]
+    if a.get("texto"):
+        partes.append(str(a.get("texto")))
+    return " ".join(partes)
+
+
 def _reler_exames_focado(gem, cands, leituras, nome_gto):
     """2ª leitura quando a 1ª não cobriu os exames da GTO: reenvia SÓ o candidato
     que falhou apenas na cobertura, isolado (o ganho vem de ler UM documento com
@@ -775,12 +792,16 @@ def _reler_exames_focado(gem, cands, leituras, nome_gto):
                           _RELEITURA_PROMPT])
             _contar_tokens(r2)
             t2 = re.sub(r"^```json|^```|```$", "", (r2.text or "").strip(), flags=re.M).strip()
-            ex2 = (json.loads(t2) or {}).get("exames") or []
+            _j2 = json.loads(t2) or {}
+            ex2 = _j2.get("exames") or []
+            _txt2 = str(_j2.get("texto") or "")
             novos = sorted(set(_lidos1) | {str(e) for e in ex2})
-            if novos != sorted(set(_lidos1)):
+            if novos != sorted(set(_lidos1)) or _txt2:
                 a["exames_lidos_1a"] = sorted(set(_lidos1))   # rastro p/ auditoria
                 a["releitura"] = True
             a["exames_lidos"] = novos
+            if _txt2:   # transcricao literal da releitura -> canon decide (fotos etc.)
+                a["texto"] = (str(a.get("texto") or "") + " " + _txt2).strip()
         except Exception:
             continue
 
@@ -1317,14 +1338,21 @@ Para CADA anexo, retorne um objeto com:
   Regra de ouro: nunca inclua um exame só porque a palavra aparece IMPRESSA; vale o
   que está MARCADO ou ESCRITO como pedido.
   ex. de tokens: ["panoramica","periapical","interproximal","telerradiografia","documentacao","fotografias","modelos"]
+- "texto": a transcrição LITERAL e COMPLETA de TODO o texto do PEDIDO neste anexo,
+  verbatim, linha por linha, exatamente como está no papel — INCLUINDO os cabeçalhos
+  de seção ("DOCUMENTAÇÃO", "FOTOS/FOTOGRAFIAS INTRA E EXTRA BUCAIS", "MODELOS") e
+  TUDO escrito abaixo deles. NÃO resuma, NÃO normalize, NÃO decida o que é "exame" —
+  só COPIE o texto. (Em FORMULÁRIO de caixas, transcreva só o texto dos itens
+  MARCADOS; nunca as opções em branco.) "" se o anexo não for um pedido ou for ilegível.
+  É o campo mais importante: quem decide o exame é o sistema a partir DESTE texto.
 - "data_solicitacao": data escrita no anexo, "DD/MM/AAAA" ou null
 - "box_data": [ymin,xmin,ymax,xmax] (valores 0-1000) da data, ou null
 - "box_assinatura": [ymin,xmin,ymax,xmax] (0-1000) da assinatura do dentista, ou null
 
 Responda APENAS JSON (sem markdown):
 {"anexos": [ {"idx":0, "tipo":"...", "legivel":true, "paciente_lido":"...",
-"dentista_lido":"...", "cro_lido":"",
-"exames_lidos":[...], "data_solicitacao":null, "box_data":null, "box_assinatura":null}, ... ]}
+"dentista_lido":"...", "cro_lido":"", "exames_lidos":[...], "texto":"...",
+"data_solicitacao":null, "box_data":null, "box_assinatura":null}, ... ]}
 """
 
 
@@ -1739,10 +1767,12 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 # decisão AVALIOU (não outro qualquer). Só usado como último recurso
                 # quando _det não trouxe os exames — nunca para "corrigir" a lista.
                 _lidos = []
+                _a2m = None
                 for _a2 in leituras:
                     if (isinstance(_a2, dict) and _a2.get("tipo") == "solicitacao"
                             and _nomes_compat(_a2.get("paciente_lido") or "", pac["nome"])):
                         _lidos = _a2.get("exames_lidos") or []
+                        _a2m = _a2
                         break
                 if _motivo == "NAO_COBRE":
                     # _cn e _falta TÊM de descrever o MESMO candidato — o que a
@@ -1755,7 +1785,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     _cn = _det.get("lidos")
                     if _cn is None:
                         _cn = sorted(expande_documentacao(
-                            canon_exames(" ".join(str(e) for e in _lidos),
+                            canon_exames(_texto_pedido(_a2m) if _a2m
+                                         else " ".join(str(e) for e in _lidos),
                                          recuperar=True)))   # PEDIDO: mesma recuperação da decisão
                     # MESMO conjunto usado no critério (_alvo_ex). Mensagem e regra
                     # têm de ser a mesma coisa: quando divergiam, a pendência saía
@@ -1828,6 +1859,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     _dl = (_a3.get("dentista_lido") or "").strip()
                     _cr = (_a3.get("cro_lido") or "").strip()
                     _ex3 = ", ".join(str(e) for e in (_a3.get("exames_lidos") or []))[:70]
+                    _tx3 = re.sub(r"\s+", " ", str(_a3.get("texto") or "")).strip()[:180]
                     _nl.append(f"[{_a3.get('idx')}/{_a3.get('tipo') or '?'}"
                                + ("/2a" if _a3.get("_releitura") else "") + "]"
                                + (f" paciente={_pl!r}" if _pl else " paciente=(ilegivel)")
@@ -1835,7 +1867,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                                + (f" CRO={_cr}" if _cr else "")
                                + (f" data={_a3.get('data_solicitacao')}"
                                   if _a3.get("data_solicitacao") else "")
-                               + (f" exames=[{_ex3}]" if _ex3 else ""))
+                               + (f" exames=[{_ex3}]" if _ex3 else "")
+                               + (f" texto={_tx3!r}" if _tx3 else ""))
                 dec = {"indice_solicitacao": None, "exames_batem": False,
                        "exames_lidos": _lidos, "paciente_bate": False, "anexar": False,
                        "motivo": _motivo, "leituras": leituras,

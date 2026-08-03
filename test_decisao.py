@@ -751,6 +751,54 @@ def test_amanda_queiroz_so_a_secao_radiografica_nao_vira_completa():
     assert "documentacao_completa" not in ex
 
 
+def test_texto_verbatim_recupera_fotos_mesmo_a_lista_dropando():
+    """MAYSA/MIRIAN (28/07, run 269): a IA CUROU exames_lidos=[panoramica, tele,
+    ricketes] e DROPOU a secao de fotos — mas o campo 'texto' traz a transcricao
+    LITERAL do pedido inteiro. _texto_pedido junta os dois e o canon recupera
+    'fotografia' -> documentacao_completa. Prova que a decisao NAO depende de a IA
+    escolher certo a lista; depende da transcricao literal, que o CODIGO canoniza.
+    (Sem o fix, canonizando so a lista, daria {panoramica, telerradiografia} e a
+    guia 'Doc Orto Compl' caia em 'nao cobre'.)"""
+    from esteira import _texto_pedido
+    a = {"tipo": "solicitacao",
+         "paciente_lido": "MAYSA ANTONIA COELHO JESUS DOS SANTOS",
+         "exames_lidos": ["PANORAMICA EM TOPO", "TELE PERFIL COM TRACADO ANATOMICO",
+                          "RICKETES FATORE"],
+         "texto": ("Solicito: Dra. AMANDA QUEIROZ EXAMES RADIOGRAFICOS INTRA BUCAIS "
+                   "1-PANORAMICA EM TOPO 2-TELE PERFIL COM TRACADO ANATOMICO "
+                   "3-RICKETES FATORE DOCUMENTACAO FOTOS INTRA BUCAIS FRONTAL PERFIL "
+                   "DIREITO E ESQUERDO SORRISO FOTOS INTRA BUCAIS FRONTAL PERFIL "
+                   "DIREITO E ESQUERDO E ARCOS")}
+    # com o texto literal:
+    ex = expande_documentacao(canon_exames(_texto_pedido(a)))
+    assert {"panoramica", "telerradiografia", "fotografia"} <= ex
+    assert "documentacao_completa" in ex
+    # sem o texto (so a lista curada) NAO promove — o que causava o bug:
+    so_lista = expande_documentacao(canon_exames(" ".join(a["exames_lidos"])))
+    assert "documentacao_completa" not in so_lista
+
+
+def test_escolher_aceita_maysa_pela_transcricao_literal():
+    """Fim a fim: guia 'Doc Orto Compl'; a leitura tem exames_lidos SEM fotos, mas
+    'texto' com as fotos -> _escolher_solicitacao ACEITA (idx 0, motivo None), porque
+    canoniza _texto_pedido. Com a lista sozinha (sem 'texto'), a MESMA guia reprova."""
+    a_com_texto = {"idx": 0, "tipo": "solicitacao", "legivel": True,
+                   "paciente_lido": "MAYSA ANTONIA COELHO JESUS DOS SANTOS",
+                   "exames_lidos": ["PANORAMICA EM TOPO", "TELE PERFIL", "RICKETES FATORE"],
+                   "texto": ("EXAMES RADIOGRAFICOS 1-PANORAMICA EM TOPO 2-TELE PERFIL "
+                             "COM TRACADO 3-RICKETES DOCUMENTACAO FOTOS INTRA BUCAIS "
+                             "FRONTAL PERFIL DIREITO E ESQUERDO SORRISO ARCOS")}
+    alvo = canon_exames("Doc Orto Compl")
+    idx, _a, motivo = _escolher_solicitacao(
+        [a_com_texto], "MAYSA ANTONIA COELHO JESUS DOS SANTOS", alvo, 1)
+    assert idx == 0 and motivo is None
+
+    a_so_lista = dict(a_com_texto); a_so_lista.pop("texto")
+    idx2, _a2, motivo2 = _escolher_solicitacao(
+        [a_so_lista], "MAYSA ANTONIA COELHO JESUS DOS SANTOS", alvo, 1)
+    assert idx2 is None and motivo2 == "NAO_COBRE"
+
+
 def test_amanda_queiroz_maysa_passa_no_escolher_so_com_o_pedido_inteiro():
     """Fim a fim: a guia autoriza documentação ortodôntica COMPLETA ('Doc Orto
     Compl'). Com o pedido inteiro (as duas seções) a solicitação cobre e é aceita;
