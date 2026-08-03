@@ -575,9 +575,15 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
 # regra "na dúvida, pendência". Aqui ele só transcreve; quem reconhece o exame é o
 # canon_exames() do código.
 _RELEITURA_PROMPT = """Este anexo é um PEDIDO/SOLICITAÇÃO de exames odontológicos, possivelmente
-MANUSCRITO (letra cursiva). Transcreva LITERALMENTE o que está escrito no campo dos
-exames/procedimentos pedidos — palavra por palavra, como aparece no papel, mesmo que
+MANUSCRITO (letra cursiva). Transcreva LITERALMENTE tudo que está escrito nos campos
+de exames/procedimentos pedidos — palavra por palavra, como aparece no papel, mesmo que
 esteja abreviado, com grafia imperfeita ou você não reconheça o termo.
+
+O pedido costuma ter MAIS DE UMA SEÇÃO: uma lista numerada de exames radiográficos
+(ex.: "EXAMES RADIOGRÁFICOS: 1-panorâmica, 2-telerradiografia") E, separadamente, um
+bloco de "DOCUMENTAÇÃO", "FOTOS/FOTOGRAFIAS INTRA E EXTRA BUCAIS" ou "MODELOS".
+Transcreva TODAS as seções pedidas — NÃO pare na primeira lista; se houver fotografias
+ou modelos pedidos, inclua-os também.
 
 Se for um FORMULÁRIO COM QUADRADINHOS/CAIXAS de opções pré-impressas, transcreva
 APENAS os exames cuja caixa está MARCADA (X, tique, traço, círculo, rabisco);
@@ -598,12 +604,14 @@ Responda APENAS JSON (sem markdown):
  "paciente_lido": "<nome do paciente escrito no anexo; \"\" se nao houver ou ilegivel>",
  "dentista_lido": "<nome no carimbo/assinatura; \"\" se nao houver>",
  "cro_lido": "<numero do CRO no carimbo, so digitos; \"\" se nao houver>",
- "exames_lidos": ["<cada exame PEDIDO; em formulario de caixas, SO os MARCADOS (X/tique/circulo), ignore as opcoes em branco; em pedido a mao, os escritos>"],
+ "exames_lidos": ["<cada exame PEDIDO, de TODAS as secoes do pedido: a lista numerada de exames radiograficos E os blocos de DOCUMENTACAO / FOTOS INTRA E EXTRA BUCAIS / MODELOS; em formulario de caixas, SO os MARCADOS (X/tique/circulo), ignore as opcoes em branco; em pedido a mao, os escritos>"],
  "data_solicitacao": "<DD/MM/AAAA escrita no anexo, ou null>"}
 
 "solicitacao" e um PEDIDO/REQUISICAO de exames feito por um dentista — costuma
 comecar com "Solicito", trazer o nome do paciente e a lista de exames, e ter
-carimbo/assinatura. Transcreva LITERALMENTE; nao interprete, nao complete, nao
+carimbo/assinatura. O pedido pode ter VARIAS SECOES (exames radiograficos numerados
+E, separadamente, um bloco de DOCUMENTACAO/FOTOS/MODELOS) — transcreva TODAS, nao
+pare na primeira lista. Transcreva LITERALMENTE; nao interprete, nao complete, nao
 deduza. Se nao conseguir ler um trecho, omita em vez de adivinhar."""
 
 
@@ -1301,9 +1309,14 @@ Para CADA anexo, retorne um objeto com:
     padrão. Ex.: se só "Radiografia Periapical" está marcada, retorne ["periapical"]
     mesmo que "Panorâmica" apareça impressa acima em branco.
   * PEDIDO ESCRITO À MÃO / TEXTO LIVRE: liste os exames escritos.
+  * VÁRIAS SEÇÕES: o pedido costuma ter MAIS DE UM BLOCO — uma lista numerada de
+    exames radiográficos (ex.: "EXAMES RADIOGRÁFICOS: 1-panorâmica, 2-telerradiografia")
+    E, separadamente, um bloco de "DOCUMENTAÇÃO", "FOTOS/FOTOGRAFIAS INTRA E EXTRA
+    BUCAIS" ou "MODELOS". Transcreva TODAS as seções pedidas, uma por item — NÃO pare
+    na primeira lista. Se houver fotografias ou modelos pedidos, inclua-os também.
   Regra de ouro: nunca inclua um exame só porque a palavra aparece IMPRESSA; vale o
   que está MARCADO ou ESCRITO como pedido.
-  ex. de tokens: ["panoramica","periapical","interproximal","telerradiografia","documentacao"]
+  ex. de tokens: ["panoramica","periapical","interproximal","telerradiografia","documentacao","fotografias","modelos"]
 - "data_solicitacao": data escrita no anexo, "DD/MM/AAAA" ou null
 - "box_data": [ymin,xmin,ymax,xmax] (valores 0-1000) da data, ou null
 - "box_assinatura": [ymin,xmin,ymax,xmax] (0-1000) da assinatura do dentista, ou null

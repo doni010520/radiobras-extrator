@@ -708,6 +708,69 @@ def test_doc_completa_e_controle_sao_composicoes_diferentes():
     assert "documentacao_completa" not in expande_documentacao(set(_DOC_CONTROLE))
 
 
+# ── Pedido em VÁRIAS SEÇÕES: a seção das FOTOS não pode ser perdida na LEITURA
+#    (caso AMANDA QUEIROZ / MAYSA 195516236 e MIRIAN 195515738, 28/07) ──────────
+# O pedido da Dra. Amanda Queiroz tem DUAS seções: (1) "EXAMES RADIOGRÁFICOS":
+# panorâmica em topo, tele perfil com traçado, Ricketts; e (2) "DOCUMENTAÇÃO /
+# FOTOS INTRA BUCAIS": frontal, perfil D/E, sorriso, arcos. A transcrição do Gemini
+# só capturava a seção 1 e PERDIA a 2 — sem 'fotografia', expande_documentacao não
+# promovia a documentação_completa e a guia (que autoriza doc orto completa) era
+# REPROVADA. O fix é de LEITURA (o prompt passa a transcrever TODAS as seções); a
+# REGRA de decisão não muda. Estes testes travam a LÓGICA que a leitura alimenta.
+#
+# NOTA: o prompt do Gemini em si NÃO é testável por unidade (depende de rede e do
+# modelo). A correção do prompt (_DECISAO_PROMPT / _RELEITURA_PROMPT /
+# _RELEITURA_TIPO_PROMPT em esteira.py) precisa de validação em RUN REAL sobre as
+# guias 195516236 e 195515738. O que se pode travar aqui é: DADO o texto inteiro
+# do pedido, a decisão vira documentação_completa; e dado só a seção 1, NÃO vira
+# (prova de que o fix não afrouxa a regra).
+
+AMANDA_SECAO1 = ("EXAMES RADIOGRAFICOS INTRA BUCAIS 1-PANORAMICA EM TOPO "
+                 "2-TELE PERFIL COM TRACADO ANATOMICO 3-RICKETES FATORE")
+AMANDA_SECAO2 = ("DOCUMENTACAO FOTOS INTRA BUCAIS FRONTAL PERFIL DIREITO E ESQUERDO "
+                 "SORRISO FRONTAL PERFIL DIREITO E ESQUERDO E ARCOS")
+AMANDA_PEDIDO_INTEIRO = AMANDA_SECAO1 + " " + AMANDA_SECAO2
+
+
+def test_amanda_queiroz_pedido_inteiro_vira_documentacao_completa():
+    """Lendo as DUAS seções, o canon vê panorâmica + telerradiografia + fotografia
+    + documentação e expande promove a documentação_completa — a guia de doc orto
+    completa passa a ser coberta (MAYSA/MIRIAN, 28/07)."""
+    ex = expande_documentacao(canon_exames(AMANDA_PEDIDO_INTEIRO))
+    assert {"panoramica", "telerradiografia", "fotografia", "documentacao"} <= ex
+    assert "documentacao_completa" in ex
+
+
+def test_amanda_queiroz_so_a_secao_radiografica_nao_vira_completa():
+    """Documenta o BUG e trava a regra contra falso-positivo: com SÓ a seção 1
+    (sem as fotos) NÃO há 'fotografia' — a documentação_completa NÃO pode ser
+    promovida. Quem promove é a âncora 'fotografia', que só aparece quando o pedido
+    REALMENTE tem fotos. Ler a seção das fotos não afrouxa nada."""
+    ex = expande_documentacao(canon_exames(AMANDA_SECAO1))
+    assert ex == {"panoramica", "telerradiografia"}
+    assert "documentacao_completa" not in ex
+
+
+def test_amanda_queiroz_maysa_passa_no_escolher_so_com_o_pedido_inteiro():
+    """Fim a fim: a guia autoriza documentação ortodôntica COMPLETA ('Doc Orto
+    Compl'). Com o pedido inteiro (as duas seções) a solicitação cobre e é aceita;
+    com só a seção radiográfica a MESMA guia é reprovada por não cobrir — o que
+    dependia unicamente de a leitura capturar a seção das fotos."""
+    alvo = canon_exames("Doc Orto Compl")          # {documentacao, documentacao_completa}
+    assert "documentacao_completa" in alvo
+
+    inteiro = [_leitura(0, "MAYSA ANTONIA COELHO JESUS DOS SANTOS",
+                        [AMANDA_SECAO1, AMANDA_SECAO2])]
+    idx, _a, motivo = _escolher_solicitacao(
+        inteiro, "MAYSA ANTONIA COELHO JESUS DOS SANTOS", alvo, 1)
+    assert idx == 0 and motivo is None
+
+    truncado = [_leitura(0, "MAYSA ANTONIA COELHO JESUS DOS SANTOS", [AMANDA_SECAO1])]
+    idx2, _a2, motivo2 = _escolher_solicitacao(
+        truncado, "MAYSA ANTONIA COELHO JESUS DOS SANTOS", alvo, 1)
+    assert idx2 is None and motivo2 == "NAO_COBRE"
+
+
 def test_motivo_diz_o_que_falta_e_nao_vaza_token_interno():
     """A operadora precisa saber QUAL exame falta no pedido — e 'documentacao_completa'
     é token interno, nao pode aparecer na mensagem."""
