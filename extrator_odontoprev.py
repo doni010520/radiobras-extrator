@@ -481,7 +481,33 @@ def ler_dados_gto(gp) -> dict:
     }
 
 
-def upload_arquivos(gp, arquivos: list, max_antes: int = 1) -> dict:
+def _resolver_contagem(dom_n, dom_nomes, fallback):
+    """Contagem+nomes de anexos com o DOM como fonte PRIMARIA e um fallback
+    AUTORITATIVO (a API /v1/gto/imagens, INJETADA pela esteira) SO quando o DOM
+    falhou (dom_n < 0). fallback() deve devolver (count, nomes). Retorna (n, nomes).
+
+    Existe porque o scrape do DOM (regex 'total de anexos)') falha em algumas guias
+    RedeUna de forma persistente — casos JOSE/LEONARDO/SUELEM/RAFAEL/MARIA SOPHIA
+    (28/07): documentacao OK e mesmo assim -1, presas no ponto de escrita. A API e a
+    MESMA lista que a descoberta ja confia (nomeArquivo + imagemGTO), entao count e
+    idempotencia por nome seguem valendo; NAO sub-conta.
+
+    GUARDRAIL: se o DOM falhou E o fallback tambem (ou e ausente/estoura), devolve o
+    proprio dom_n (< 0) — e as travas de upload_arquivos bloqueiam. NUNCA devolve uma
+    contagem 'chutada': anexar em duplicidade e irreversivel."""
+    if isinstance(dom_n, int) and dom_n >= 0:
+        return dom_n, dom_nomes
+    if callable(fallback):
+        try:
+            api_n, api_nomes = fallback()
+        except Exception:
+            api_n, api_nomes = -1, set()
+        if isinstance(api_n, int) and api_n >= 0:
+            return api_n, (api_nomes if isinstance(api_nomes, set) else set())
+    return dom_n, dom_nomes
+
+
+def upload_arquivos(gp, arquivos: list, max_antes: int = 1, contar_fallback=None) -> dict:
     """Anexa a lista de arquivos na GTO aberta (input[type=file] oculto, multiple).
     O portal envia imediatamente.
 
@@ -495,6 +521,10 @@ def upload_arquivos(gp, arquivos: list, max_antes: int = 1) -> dict:
     contado na descoberta (flag imagemGTO da API) — guia RE-ASSINADA tem 2+
     cópias da GTO sem documentação nenhuma e precisa receber anexo (casos
     PAULO SERGIO/WELLINGHTON/FABIO/PATRICK, 27/07).
+
+    contar_fallback (opcional): callable () -> (count, nomes) com a fonte
+    AUTORITATIVA da API, usada SO se o scrape do DOM falhar. Sem ele (caminhos que
+    nao injetam), o comportamento e exatamente o de antes.
     Retorna {anexos_antes, anexos_depois, ja_anexados, enviados, ok}."""
     # Esperar a seção de anexos RENDERIZAR antes de ler nomes/contador — senão a
     # leitura antecipada faz a idempotência achar que faltam arquivos e procurar
@@ -505,6 +535,10 @@ def upload_arquivos(gp, arquivos: list, max_antes: int = 1) -> dict:
         gp.wait_for_timeout(1000)
     antes = _anexos_count(gp)
     nomes_antes = _anexos_nomes(gp)
+    # DOM falhou (guia cujo 'total de anexos)' nao renderiza)? Usa a fonte
+    # autoritativa da API para count E nomes. Se a API tambem falhar, antes fica
+    # < 0 e as travas abaixo bloqueiam — nada e enviado.
+    antes, nomes_antes = _resolver_contagem(antes, nomes_antes, contar_fallback)
 
     # "Nada para enviar" NÃO é "tudo anexado". Uma lista vazia caía no mesmo
     # `return ok=True` da idempotência, o chamador lia sucesso e registrava a guia

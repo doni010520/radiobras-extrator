@@ -93,6 +93,7 @@ _GEM_FATAL = re.compile(r"RESOURCE_EXHAUSTED|429|quota|prepayment|credit|"
                         r"PERMISSION_DENIED|UNAUTHENTICATED|API[_ ]?key", re.I)
 _gem_estado = {"fatal": None}
 _campos_anexo = {"visto": False}
+_campos_evento = {"visto": False}   # diagnostico 1x dos campos de /v1/gto/eventos/ficha
 
 
 def _gem_fatal(e) -> bool:
@@ -853,6 +854,93 @@ def _baixar_anexo_portal(sess, gto, sequencial=None, _t=None):
             _t(f"[API] download acervo-digital falhou (gto {gto} seq "
                f"{sequencial}): {str(e)[:60]}")
         return None, ""
+
+
+def _anexos_via_api(token, gto):
+    """(count, nomes, err) dos anexos pela API /v1/gto/imagens — a MESMA fonte
+    AUTORITATIVA que a descoberta usa e confia (lista completa, com nomeArquivo e o
+    flag imagemGTO). Serve de fallback quando o scrape do DOM (_anexos_count/
+    _anexos_nomes) falha, tanto na trava da esteira quanto no ponto de escrita
+    (upload_arquivos, via injecao). count = len da lista em HTTP 200; -1 em QUALQUER
+    falha (sem token/gto, status != 200, resposta nao-lista, excecao). nomes = set de
+    nomeArquivo (para a idempotencia por _chave_anexo). err = motivo. Retry 3x com
+    backoff, espelhando o b588936. NUNCA conta por nomes do DOM (que sub-conta e
+    faria duplicar num portal que nao remove anexo)."""
+    if not token or not gto:
+        return -1, set(), "sem token/gto"
+    try:
+        sess = requests.Session()
+        _pxy = _odo_requests_proxies()
+        if _pxy:
+            sess.proxies.update(_pxy)
+        sess.headers.update({"Authorization": token or "", "User-Agent": "Mozilla/5.0",
+                             "Origin": "https://credenciado.odontoprev.com.br",
+                             "Referer": "https://credenciado.odontoprev.com.br/"})
+    except Exception as e:
+        return -1, set(), f"setup: {type(e).__name__}: {str(e)[:80]}"
+    _falha = None
+    for _tent in range(3):
+        try:
+            r = sess.get(f"{_ODO_API}/v1/gto/imagens?numeroFicha={gto}", timeout=25)
+            if r.status_code == 200:
+                imgs = r.json()
+                if isinstance(imgs, list):
+                    nomes = {str(i.get("nomeArquivo", "")) for i in imgs
+                             if isinstance(i, dict)}
+                    return len(imgs), nomes, None
+                _falha = "resposta 200 nao-lista"
+            else:
+                _falha = f"HTTP {r.status_code} {r.text[:80]!r}"
+        except Exception as e:
+            _falha = f"{type(e).__name__}: {str(e)[:100]}"
+        if _tent < 2:
+            time.sleep(1.5 * (_tent + 1))
+    return -1, set(), _falha
+
+
+def _anexos_count_api(token, gto, _t=None):
+    """So a CONTAGEM (para a trava da esteira). Delega em _anexos_via_api. Retorna
+    (n, err); loga o erro real quando falha, para o proximo run ter a pista."""
+    n, _nomes, err = _anexos_via_api(token, gto)
+    if n < 0 and _t:
+        _t(f"[API] recontagem de anexos falhou (gto {gto}): {err}")
+    return n, err
+
+
+def _reconta_anexos(dom_n, api_fn):
+    """Escolhe a contagem AUTORITATIVA de anexos, com o DOM como fonte PRIMARIA e a
+    API (api_fn) SO como fallback quando o DOM falhou. api_fn e chamado apenas se
+    dom_n < 0 — DOM valido (inclusive 0) nunca gasta a chamada. Retorna (n, fonte,
+    err) com fonte em {"DOM","API","nenhuma"}.
+
+    GUARDRAIL (a razao de a funcao existir): se as DUAS fontes falharem, devolve -1
+    — que a trava de anexacao bloqueia. NUNCA devolve uma contagem positiva 'chutada'
+    e NUNCA propaga excecao do fallback: anexar em duplicidade e irreversivel (o
+    portal nao remove anexo)."""
+    if isinstance(dom_n, int) and dom_n >= 0:
+        return dom_n, "DOM", None
+    try:
+        api_n, api_err = api_fn()
+    except Exception as e:
+        return -1, "nenhuma", f"excecao no fallback: {type(e).__name__}: {str(e)[:80]}"
+    if isinstance(api_n, int) and api_n >= 0:
+        return api_n, "API", None
+    return -1, "nenhuma", api_err
+
+
+def _ha_leitura_no_nome(leituras, nome_gto):
+    """True se ALGUM anexo lido (de QUALQUER tipo, inclusive 'documento'/RG, nao so
+    'solicitacao') tem nome compativel com o da guia. Usado SO para a MENSAGEM:
+    quando ha um RG no nome exato do paciente, a headline 'nenhum documento no nome
+    deste paciente' e factualmente FALSA (caso CARINA, 28/07 — RG exato, solicitacao
+    lida garbled). NAO decide anexacao: o casamento que libera upload continua so em
+    _escolher_solicitacao (tipo 'solicitacao'), com as travas de sempre."""
+    if not nome_gto:
+        return False
+    for a in (leituras or []):
+        if isinstance(a, dict) and _nomes_compat(a.get("paciente_lido") or "", nome_gto):
+            return True
+    return False
 
 
 def _ler_gto_por_imagem(gem, blob, mime, gto):
@@ -1681,13 +1769,27 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     # pedido legível que não cobre segue como antes (pedir à clínica).
                     _motivo = _motivo_nao_cobre(_pede, _falta, _cn)
                 elif _motivo == "PACIENTE_INCOMPATIVEL":
-                    _motivo = (
-                        "NÃO FATUROU porque nenhum documento do prontuário está no nome "
-                        "deste paciente. O prontuário tem anexos, mas o nome lido em cada "
-                        "um não confere com o nome da guia — pode ser pedido em nome de "
-                        "outra pessoa (mãe, responsável) ou cadastro divergente. "
-                        "O QUE FAZER: conferir no prontuário se o pedido é mesmo deste "
-                        "paciente e, se for, corrigir o nome no cadastro.")
+                    if _ha_leitura_no_nome(leituras, pac["nome"]):
+                        # CARINA (28/07): HA um RG no nome EXATO do paciente, mas a
+                        # solicitacao veio mal-lida/ilegivel ou pede exame diferente do
+                        # que a guia autoriza — dizer "nenhum documento no nome" era
+                        # mentira. So o TEXTO muda; a guia segue pendencia (a decisao
+                        # e a anexacao nao mudam, dec ja sai com anexar=False).
+                        _motivo = (
+                            "NÃO FATUROU porque a solicitação do dentista não pôde ser "
+                            "confirmada para esta guia — há documento no nome do paciente "
+                            "no prontuário, mas a solicitação encontrada está mal-lida/"
+                            "ilegível ou pede exame diferente do que a guia autoriza. "
+                            "O QUE FAZER: abrir o prontuário, conferir a solicitação e, "
+                            "se ela cobrir o exame da guia, anexar à mão.")
+                    else:
+                        _motivo = (
+                            "NÃO FATUROU porque nenhum documento do prontuário está no nome "
+                            "deste paciente. O prontuário tem anexos, mas o nome lido em cada "
+                            "um não confere com o nome da guia — pode ser pedido em nome de "
+                            "outra pessoa (mãe, responsável) ou cadastro divergente. "
+                            "O QUE FAZER: conferir no prontuário se o pedido é mesmo deste "
+                            "paciente e, se for, corrigir o nome no cadastro.")
                 elif _motivo == "GTO_ILEGIVEL":
                     _motivo = (
                         "NÃO FATUROU porque o sistema não conseguiu ler quais exames a "
@@ -1950,6 +2052,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         _gem_tokens.update({"in": 0, "out": 0, "chamadas": 0})
         _gem_estado["fatal"] = None
         _campos_anexo["visto"] = False
+        _campos_evento["visto"] = False
 
     def _t(m):
         log(f"[{time.monotonic() - t_glob:6.0f}s] {m}")
@@ -2151,6 +2254,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 evs = re_.json() if re_.status_code == 200 else []
                 g["eventos_portal"] = [str(e.get("descricao") or "") for e in evs
                                        if isinstance(e, dict)]
+                # DIAGNOSTICO (classe F, LUIZ/tomografia 28/07): hoje lemos SO o
+                # campo 'descricao'. Guias RedeUna de tomografia cairam em GTO_ILEGIVEL
+                # porque 'descricao' veio vazio — o exame pode estar em OUTRO campo do
+                # evento. Loga 1x os campos e uma amostra pra saber QUAL campo ler antes
+                # de mexer (o fix estrutural exige separar alvo-de-cobertura de alvo-de-
+                # filtro-de-laudo; ate la nao alargamos o alvo). So observabilidade.
+                if evs and isinstance(evs[0], dict) and not _campos_evento["visto"]:
+                    _campos_evento["visto"] = True
+                    _t(f"[API] campos por evento em /v1/gto/eventos/ficha: "
+                       f"{sorted(evs[0].keys())}")
+                    _t("[API] amostra evento: "
+                       + str({k: (str(v)[:60] if v is not None else None)
+                              for k, v in evs[0].items()}))
             except Exception:
                 g["eventos_portal"] = []
             # A GUIA VEM DO PORTAL, NAO DO PRONTUARIO. Ate aqui, dentista e CRO da
@@ -2475,9 +2591,22 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                         _lim = item.get("n_gto_copias")
                         _lim = _lim if isinstance(_lim, int) and _lim >= 1 else 1
                         try:
-                            _n_agora = _anexos_count(gp)
+                            _dom_n = _anexos_count(gp)
                         except Exception:
-                            _n_agora = -1
+                            _dom_n = -1
+                        # DOM falhou (o regex 'total de anexos)' nao casou / render
+                        # diferente)? RECONTA pela API autoritativa /v1/gto/imagens, a
+                        # MESMA fonte que a descoberta confia — casos JOSE/LEONARDO/
+                        # SUELEM/RAFAEL/MARIA SOPHIA (28/07 run 263): doc OK, 6 retries
+                        # do DOM e mesmo assim -1. Guardrail em _reconta_anexos: se a
+                        # API TAMBEM falhar, _n_agora fica -1 e a trava abaixo bloqueia
+                        # (nada enviado). upload_arquivos ainda RE-checa pelo DOM: duas
+                        # fontes independentes antes da escrita irreversivel.
+                        _n_agora, _fonte_cont, _cont_err = _reconta_anexos(
+                            _dom_n, lambda: _anexos_count_api(token, item["gto"], _t))
+                        if _fonte_cont == "API":
+                            _t(f"[ANEX{wid}] GTO {item['gto']}: DOM nao leu os anexos; "
+                               f"recontei pela API autoritativa = {_n_agora}")
                         if _n_agora is None or _n_agora < 0 or _n_agora > _lim:
                             item["anexado"] = "ERRO"
                             item["anexar_erro"] = (
@@ -2487,10 +2616,12 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                 f"permite remover anexo, entao duplicar seria dano "
                                 f"permanente)"
                                 if isinstance(_n_agora, int) and _n_agora > _lim else
-                                "nao consegui ler quantos anexos a guia ja tem — nada "
-                                "foi enviado, por seguranca")
+                                "nao consegui ler quantos anexos a guia ja tem "
+                                f"(DOM e API falharam{': ' + _cont_err if _cont_err else ''})"
+                                " — nada foi enviado, por seguranca")
                             _t(f"[ANEX{wid}] GTO {item['gto']} BLOQUEADO: "
-                               f"{_n_agora} anexo(s) na guia (teto {_lim})")
+                               f"{_n_agora} anexo(s) na guia (teto {_lim})"
+                               + (f" [{_cont_err}]" if _cont_err else ""))
                             try:
                                 gp.close()
                             except Exception:
@@ -2499,7 +2630,15 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                 ativos_an["n"] -= 1
                                 resultados.append(item)
                             continue
-                        res = upload_arquivos(gp, arquivos, max_antes=_lim)
+                        # contar_fallback: se o DOM do ponto de escrita tambem nao
+                        # renderizar o "total de anexos)", upload_arquivos reconta+
+                        # relista pela API autoritativa (a mesma da descoberta) —
+                        # senao as guias de DOM quebrado ficam presas la mesmo com a
+                        # trava ja liberada. Se a API tambem falhar -> antes<0 ->
+                        # upload bloqueia (nada enviado).
+                        res = upload_arquivos(
+                            gp, arquivos, max_antes=_lim,
+                            contar_fallback=lambda: _anexos_via_api(token, item["gto"])[:2])
                         try:
                             gp.close()
                         except Exception:

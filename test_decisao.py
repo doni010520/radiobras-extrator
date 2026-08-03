@@ -1758,3 +1758,148 @@ def test_download_do_portal_sem_id_nao_tenta():
     from esteira import _baixar_anexo_portal
     b, m = _baixar_anexo_portal(None, None)
     assert b is None and m == ""
+
+
+# ── Recontagem de anexos na anexacao (Classe B, 28/07) ───────────────────────
+# JOSE GONCALVES, LEONARDO, SUELEM, RAFAEL, MARIA SOPHIA (run 263): documentacao
+# OK, mas a recontagem de anexos pelo DOM (regex 'total de anexos)') devolveu -1
+# e a trava — corretamente conservadora — recusou o envio. O retry (6x) ja existe
+# e nao resolveu: o DOM renderiza diferente. O conserto e ter uma SEGUNDA fonte
+# autoritativa (a API /v1/gto/imagens que a descoberta ja confia) SO como fallback
+# quando o DOM falha. _reconta_anexos e a decisao pura desse fallback, e a
+# propriedade critica que ela trava: se as DUAS fontes falharem, o resultado e -1
+# (bloqueia), nunca uma contagem frouxa — anexar em duplicidade e irreversivel.
+
+def test_reconta_usa_dom_quando_valido_e_nao_chama_api():
+    from esteira import _reconta_anexos
+    chamou = {"api": False}
+    def api_fn():
+        chamou["api"] = True
+        return (99, None)
+    n, fonte, err = _reconta_anexos(2, api_fn)
+    assert (n, fonte, err) == (2, "DOM", None)
+    assert chamou["api"] is False   # DOM valido nao gasta chamada de API
+
+
+def test_reconta_zero_do_dom_e_valido():
+    """Guia recem-nascida pode ter 0 anexos alem da GTO — 0 e leitura valida,
+    nao falha. Nao pode cair no fallback."""
+    from esteira import _reconta_anexos
+    n, fonte, err = _reconta_anexos(0, lambda: (5, None))
+    assert (n, fonte) == (0, "DOM")
+
+
+def test_reconta_cai_na_api_quando_dom_falha():
+    from esteira import _reconta_anexos
+    n, fonte, err = _reconta_anexos(-1, lambda: (3, None))
+    assert (n, fonte, err) == (3, "API", None)
+
+
+def test_reconta_bloqueia_quando_dom_e_api_falham():
+    """As duas fontes falharam -> -1, que a trava bloqueia. NUNCA devolve uma
+    contagem positiva 'chutada' — duplicar anexo e permanente."""
+    from esteira import _reconta_anexos
+    n, fonte, err = _reconta_anexos(-1, lambda: (-1, "HTTP 500 'erro'"))
+    assert n == -1
+    assert "HTTP 500" in (err or "")
+
+
+def test_reconta_excecao_no_fallback_bloqueia():
+    """Se a chamada de API estourar, o fallback nao pode propagar nem liberar:
+    tem de virar -1 (bloqueia) e registrar o erro."""
+    from esteira import _reconta_anexos
+    def api_fn():
+        raise RuntimeError("timeout")
+    n, fonte, err = _reconta_anexos(-1, api_fn)
+    assert n == -1
+    assert "timeout" in (err or "")
+
+
+# ── Fallback de contagem+nomes no PONTO DE ESCRITA (Classe B, upload_arquivos) ─
+# upload_arquivos (o UNICO ponto de escrita) relia a contagem/nomes de anexos SO
+# pelo DOM e bloqueava em antes<0. As 5 guias de 28/07 tinham o DOM quebrado de
+# forma persistente -> presas aqui mesmo com a trava da esteira ja liberada.
+# _resolver_contagem faz o DOM ser primario e a API (injetada) o fallback
+# autoritativo. GUARDRAIL: se DOM falha E fallback falha (ou ausente), devolve o
+# dom_n<0 -> as travas de upload bloqueiam. Nunca envia sem contagem confirmada.
+
+def test_resolver_usa_dom_quando_valido_e_nao_chama_fallback():
+    from extrator_odontoprev import _resolver_contagem
+    chamou = {"fb": False}
+    def fb():
+        chamou["fb"] = True
+        return (99, {"x"})
+    n, nomes = _resolver_contagem(2, {"a"}, fb)
+    assert (n, nomes) == (2, {"a"})
+    assert chamou["fb"] is False
+
+
+def test_resolver_zero_do_dom_e_valido():
+    from extrator_odontoprev import _resolver_contagem
+    n, nomes = _resolver_contagem(0, set(), lambda: (5, {"y"}))
+    assert n == 0
+
+
+def test_resolver_cai_no_fallback_quando_dom_falha():
+    from extrator_odontoprev import _resolver_contagem
+    n, nomes = _resolver_contagem(-1, set(), lambda: (3, {"LAUDO_X.pdf", "img_ASSINADA.png"}))
+    assert n == 3
+    assert nomes == {"LAUDO_X.pdf", "img_ASSINADA.png"}
+
+
+def test_resolver_bloqueia_quando_dom_e_fallback_falham():
+    from extrator_odontoprev import _resolver_contagem
+    n, nomes = _resolver_contagem(-1, {"dom"}, lambda: (-1, set()))
+    assert n == -1   # <0 -> upload_arquivos bloqueia
+
+
+def test_resolver_excecao_no_fallback_bloqueia():
+    from extrator_odontoprev import _resolver_contagem
+    def fb():
+        raise RuntimeError("timeout API")
+    n, nomes = _resolver_contagem(-1, {"dom"}, fb)
+    assert n == -1
+
+
+def test_resolver_sem_fallback_mantem_bloqueio():
+    from extrator_odontoprev import _resolver_contagem
+    n, nomes = _resolver_contagem(-1, {"dom"}, None)
+    assert n == -1
+
+
+# ── Mensagem "nenhum documento no nome" (Classe C, 28/07) ─────────────────────
+# A headline PACIENTE_INCOMPATIVEL dizia "nenhum documento do prontuario esta no
+# nome deste paciente" mesmo quando havia um RG com o nome IDENTICO da guia — o
+# matcher de nome so olha anexos tipo 'solicitacao', mas a MENSAGEM afirmava sobre
+# TODOS. Caso CARINA (RG exato, solicitacao lida garbled). _ha_leitura_no_nome so
+# conserta o TEXTO: nao muda a escolha nem libera anexo (a guia continua pendencia
+# por cobertura). Distingue CARINA (mensagem falsa) de OSNIR (mensagem correta,
+# cadastro realmente divergente).
+
+def test_ha_leitura_no_nome_pega_documento_identico():
+    from esteira import _ha_leitura_no_nome
+    leituras = [
+        _leitura(0, "Cavina de jesus des Soures", ["periapical"], tipo="solicitacao"),
+        _leitura(1, "CARINA DE JESUS DOS SANTOS", [], tipo="documento"),
+        _leitura(2, "Carina de Jesus dos Santos", [], tipo="documento"),
+    ]
+    assert _ha_leitura_no_nome(leituras, "CARINA DE JESUS DOS SANTOS") is True
+
+
+def test_ha_leitura_no_nome_falso_quando_cadastro_diverge():
+    """OSNIR: nomes lidos 'Osmar'/'OSMAR CORDEIRO DOS SANTOS' — divergencia REAL,
+    nao OCR. A headline 'nenhum documento no nome' esta certa -> helper da False."""
+    from esteira import _ha_leitura_no_nome
+    leituras = [
+        _leitura(0, "Osmar", ["panoramica"], tipo="solicitacao"),
+        _leitura(1, "Osmar Cunha da Silva", ["periapical"], tipo="solicitacao"),
+        _leitura(2, "OSMAR CORDEIRO DOS SANTOS", [], tipo="documento"),
+    ]
+    assert _ha_leitura_no_nome(leituras, "OSNIR COELHO DOS SANTOS") is False
+
+
+def test_ha_leitura_no_nome_sem_nome_guia_ou_sem_leituras():
+    from esteira import _ha_leitura_no_nome
+    assert _ha_leitura_no_nome([_leitura(0, "Fulano de Tal", [])], "") is False
+    assert _ha_leitura_no_nome([], "CARINA DE JESUS DOS SANTOS") is False
+    assert _ha_leitura_no_nome(None, "CARINA DE JESUS DOS SANTOS") is False
