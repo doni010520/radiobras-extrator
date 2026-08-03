@@ -119,7 +119,8 @@ def _injeta_usuario():
                              "nome": session.get("nome"),
                              "role": session.get("role")} if session.get("uid") else None,
             "usuario_atual_id": session.get("uid"),
-            "pendencias_abertas": db.contar_pendencias_abertas() if session.get("uid") else 0}
+            "pendencias_abertas": db.contar_pendencias_abertas() if session.get("uid") else 0,
+            "avisos_sem_guia": db.contar_avisos_nao_vistos() if session.get("uid") else 0}
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -1220,6 +1221,36 @@ def revisao_reabrir(pid):
     if request.is_json or request.headers.get("X-Requested-With") == "fetch":
         return jsonify({"ok": True, "abertas": db.contar_pendencias_abertas()})
     return redirect(url_for("revisao_page", status=request.args.get("status", "abertas")))
+
+
+# ── Avisos "exame sem guia" (laudo pronto sem GTO) — aviso, não pendência ──────
+@app.route("/api/avisos")
+def api_avisos():
+    """Avisos NÃO vistos, para o modal + banner. Qualquer usuário logado."""
+    if not session.get("uid"):
+        return jsonify({"total": 0, "avisos": []})
+    itens = db.listar_avisos("nao_vistos")
+    for a in itens:
+        a["unidade"] = _plano_nome(a.get("conta")) or (a.get("conta") or "—")
+    return jsonify({"total": len(itens), "avisos": itens})
+
+
+@app.route("/avisos/<int:aid>/ciente", methods=["POST"])
+def aviso_ciente(aid):
+    """Marca UM aviso como visto (Ciente). Grava quem/quando."""
+    if not session.get("uid"):
+        return jsonify({"ok": False}), 403
+    n = db.marcar_aviso_visto(aid, session.get("username") or session.get("nome") or "?")
+    return jsonify({"ok": True, "restantes": n})
+
+
+@app.route("/avisos/ciente-todos", methods=["POST"])
+def avisos_ciente_todos():
+    """Marca TODOS os avisos abertos como vistos."""
+    if not session.get("uid"):
+        return jsonify({"ok": False}), 403
+    db.marcar_todos_avisos_vistos(session.get("username") or session.get("nome") or "?")
+    return jsonify({"ok": True, "restantes": 0})
 
 
 # ── Senha do portal RedeUna/OdontoPrev (por código) ────────────────────────────

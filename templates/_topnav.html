@@ -105,6 +105,86 @@
     <a class="rbnav-logout" href="/logout" title="Sair"><svg class="rb-ico"><use href="#i-log-out"/></svg> Sair</a>{% endif %}
   </div>
 </nav>
+
+<!-- ── AVISO "exame sem guia": banner fixo + modal ao entrar (Ciente p/ sumir) ── -->
+<style>
+  .rb-aviso-banner{position:sticky;top:0;z-index:40;display:flex;align-items:center;gap:8px;
+    background:var(--rb-danger,#b3261e);color:#fff;padding:9px 18px;font-size:14px;font-weight:600}
+  .rb-aviso-banner .t{font-weight:400;opacity:.92}
+  .rb-aviso-ver{margin-left:auto;background:#fff;color:var(--rb-danger,#b3261e);border:0;
+    font-weight:700;font-size:13px;padding:5px 13px;border-radius:8px;cursor:pointer}
+  .rb-aviso-modal{display:none;position:fixed;inset:0;z-index:100;background:rgba(8,12,10,.55);
+    align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto}
+  .rb-aviso-modal.show{display:flex}
+  .rb-aviso-card{background:var(--rb-surface,#fff);color:var(--rb-fg,#16211c);max-width:560px;width:100%;
+    border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.35);padding:22px 24px;
+    border-top:5px solid var(--rb-danger,#b3261e)}
+  .rb-aviso-head{font-size:19px;font-weight:800;display:flex;align-items:center;gap:9px}
+  .rb-aviso-sub{color:var(--rb-fg-muted,#5b6b63);font-size:13.5px;margin:6px 0 14px;line-height:1.5}
+  .rb-aviso-lista{display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow-y:auto}
+  .rb-aviso-item{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    border:1px solid var(--rb-border,#e4e9e6);border-radius:10px;padding:11px 13px}
+  .rb-aviso-pac{font-weight:700;font-size:14.5px}
+  .rb-aviso-meta{color:var(--rb-fg-muted,#5b6b63);font-size:12.5px;width:100%;
+    font-variant-numeric:tabular-nums}
+  .rb-aviso-ciente{margin-left:auto;background:var(--rb-primary,#0c6a44);color:#fff;border:0;
+    font-weight:700;font-size:13px;padding:6px 13px;border-radius:8px;cursor:pointer;white-space:nowrap}
+  .rb-aviso-foot{margin-top:16px;text-align:right}
+  .rb-aviso-todos{background:none;border:1px solid var(--rb-border,#ccc);color:var(--rb-fg,#16211c);
+    font-weight:600;font-size:13px;padding:8px 15px;border-radius:9px;cursor:pointer}
+</style>
+{% if avisos_sem_guia and avisos_sem_guia > 0 %}
+<div id="rbAvisoBanner" class="rb-aviso-banner">
+  <span>⚠</span><b><span id="rbAvisoCount">{{ avisos_sem_guia }}</span> exame(s) pronto(s) SEM GUIA</b>
+  <span class="t">— confirme que você viu</span>
+  <button class="rb-aviso-ver" onclick="rbAvisoAbrir()">Ver</button>
+</div>
+{% endif %}
+<div id="rbAvisoModal" class="rb-aviso-modal" role="dialog" aria-modal="true" aria-label="Exames sem guia">
+  <div class="rb-aviso-card">
+    <div class="rb-aviso-head"><span>⚠</span> Exames prontos SEM GUIA</div>
+    <div class="rb-aviso-sub">Laudo pronto no PRORADIS que não bate com nenhuma guia — confira se
+      falta emitir uma guia (dinheiro na mesa) ou se é exame particular. Marque <b>Ciente</b> pra sumir.</div>
+    <div id="rbAvisoLista" class="rb-aviso-lista"></div>
+    <div class="rb-aviso-foot"><button class="rb-aviso-todos" onclick="rbAvisoCienteTodos()">Ciente de todos</button></div>
+  </div>
+</div>
+<script>
+(function(){
+  var banner=document.getElementById('rbAvisoBanner'), modal=document.getElementById('rbAvisoModal');
+  function item(a){
+    var d=document.createElement('div'); d.className='rb-aviso-item'; d.dataset.id=a.id;
+    var pac=document.createElement('div'); pac.className='rb-aviso-pac'; pac.textContent=a.paciente||'—';
+    var b=document.createElement('button'); b.className='rb-aviso-ciente'; b.textContent='✓ Ciente';
+    b.onclick=function(){ rbAvisoCiente(a.id,d); };
+    var m=document.createElement('div'); m.className='rb-aviso-meta';
+    m.textContent=(a.exame||'?')+' · '+(a.unidade||'')+' · dia '+(a.dia||'')+' · acc '+(a.accession||'');
+    d.appendChild(pac); d.appendChild(b); d.appendChild(m); return d;
+  }
+  function atualiza(n){
+    var c=document.getElementById('rbAvisoCount'); if(c)c.textContent=n;
+    if(n<=0){ if(banner)banner.style.display='none'; if(modal)modal.classList.remove('show'); }
+  }
+  window.rbAvisoAbrir=function(){ if(modal)modal.classList.add('show'); };
+  window.rbAvisoCiente=function(id,el){
+    fetch('/avisos/'+id+'/ciente',{method:'POST',headers:{'X-Requested-With':'fetch'}})
+      .then(function(r){return r.json();}).then(function(j){ if(el)el.remove(); atualiza(j.restantes); })
+      .catch(function(){ alert('Falha ao marcar. Tente de novo.'); });
+  };
+  window.rbAvisoCienteTodos=function(){
+    fetch('/avisos/ciente-todos',{method:'POST',headers:{'X-Requested-With':'fetch'}})
+      .then(function(r){return r.json();}).then(function(){ atualiza(0); }).catch(function(){});
+  };
+  if(({{ (avisos_sem_guia or 0)|int }})>0){
+    fetch('/api/avisos').then(function(r){return r.json();}).then(function(j){
+      var l=document.getElementById('rbAvisoLista'); if(!l)return; l.innerHTML='';
+      (j.avisos||[]).forEach(function(a){ l.appendChild(item(a)); });
+      if((j.avisos||[]).length && modal) modal.classList.add('show');
+    }).catch(function(){});
+  }
+})();
+</script>
+
 <script>
   function rbTheme(){var el=document.documentElement;var t=(el.getAttribute('data-theme')==='dark')?'light':'dark';
     el.setAttribute('data-theme',t);try{localStorage.setItem('rb-theme',t);}catch(e){}

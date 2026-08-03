@@ -2358,6 +2358,10 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 if excluidos:
                     item["laudos_excluidos"] = excluidos
                     item["exames_particulares"] = exames_fora
+                    # LAUDO PRONTO SEM GUIA: dos excluídos, os de PROCEDÊNCIA
+                    # (accession fora do convênio) — vira AVISO ao dono (não pendência).
+                    item["laudos_sem_guia"] = _laudos_sem_guia(excluidos,
+                                                               item.get("extras_acc"))
                     _t(f"[ANEX{wid}] GTO {item['gto']} EXAMES MISTOS — não anexados "
                        f"(fora da guia): {exames_fora} | {excluidos}")
                 nomes = [os.path.basename(a) for a in arquivos]

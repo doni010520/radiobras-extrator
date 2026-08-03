@@ -301,6 +301,86 @@ class Pendencia(Base):
     obs = Column(Text)
 
 
+class AvisoSemGuia(Base):
+    """Exame com laudo PRONTO no PRORADIS que NÃO corresponde a nenhuma guia do
+    convênio (particular, ou guia esquecida). NÃO é pendência (não é 'corrigir pra
+    faturar'): é AVISO ao dono, que confirma com 'Ciente'. Dedupe por
+    (conta, dia, accession) — re-run não duplica; um Ciente não reabre."""
+    __tablename__ = "avisos_sem_guia"
+    id = Column(Integer, primary_key=True)
+    execucao_id = Column(Integer, ForeignKey("execucoes.id", ondelete="SET NULL"))
+    conta = Column(String(20), index=True)
+    dia = Column(String(10), index=True)
+    gto = Column(String(30))                 # a guia sob a qual apareceu (contexto)
+    paciente = Column(String(200))
+    exame = Column(String(200))
+    accession = Column(String(30), index=True)
+    criado_em = Column(DateTime(timezone=True), default=_now, index=True)
+    visto = Column(Boolean, default=False, index=True)
+    visto_em = Column(DateTime(timezone=True))
+    visto_por = Column(String(60))           # username
+
+
+def _sync_avisos(s, conta, dia, exec_id, avisos_info):
+    """Cria avisos 'exame sem guia' a partir dos itens de uma execução real.
+    avisos_info: lista de dict {accession, exame, gto, paciente}. Dedupe por
+    (conta, dia, accession); NÃO reabre um aviso já criado (visto ou não)."""
+    for a in avisos_info:
+        acc = str(a.get("accession") or "")
+        if not acc:
+            continue
+        try:
+            with s.begin_nested():
+                ja = (s.query(AvisoSemGuia)
+                      .filter(AvisoSemGuia.conta == conta, AvisoSemGuia.dia == dia,
+                              AvisoSemGuia.accession == acc).first())
+                if ja:
+                    continue                 # já existe -> não duplica
+                s.add(AvisoSemGuia(
+                    execucao_id=exec_id, conta=conta, dia=dia,
+                    gto=str(a.get("gto") or ""), paciente=a.get("paciente"),
+                    exame=a.get("exame"), accession=acc))
+        except Exception as e:
+            print(f"[db] aviso sem guia {acc} falhou: {str(e)[:80]}", flush=True)
+    s.commit()
+
+
+def contar_avisos_nao_vistos():
+    with SessionLocal() as s:
+        return s.query(AvisoSemGuia).filter(AvisoSemGuia.visto == False).count()
+
+
+def listar_avisos(status="nao_vistos", limit=3000):
+    with SessionLocal() as s:
+        q = s.query(AvisoSemGuia)
+        if status == "nao_vistos":
+            q = q.filter(AvisoSemGuia.visto == False)
+        elif status == "vistos":
+            q = q.filter(AvisoSemGuia.visto == True)
+        rows = q.order_by(AvisoSemGuia.criado_em.desc()).limit(limit).all()
+        return [{"id": r.id, "conta": r.conta, "dia": r.dia, "gto": r.gto,
+                 "paciente": r.paciente, "exame": r.exame, "accession": r.accession,
+                 "criado_em": r.criado_em, "visto": r.visto,
+                 "visto_em": r.visto_em, "visto_por": r.visto_por} for r in rows]
+
+
+def marcar_aviso_visto(aviso_id, quem):
+    with SessionLocal() as s:
+        r = s.get(AvisoSemGuia, aviso_id)
+        if r and not r.visto:
+            r.visto = True; r.visto_em = _now(); r.visto_por = (quem or "?")[:60]
+            s.commit()
+        return s.query(AvisoSemGuia).filter(AvisoSemGuia.visto == False).count()
+
+
+def marcar_todos_avisos_vistos(quem):
+    with SessionLocal() as s:
+        for r in s.query(AvisoSemGuia).filter(AvisoSemGuia.visto == False).all():
+            r.visto = True; r.visto_em = _now(); r.visto_por = (quem or "?")[:60]
+        s.commit()
+    return 0
+
+
 def _sync_pendencias(s, conta, dia, exec_id, itens_info):
     """Cria/atualiza o backlog de revisão a partir dos itens de uma execução real.
     itens_info: lista de (gto, paciente, categoria, motivo, faturado)."""
@@ -672,6 +752,18 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
                 _sync_pendencias(s, resumo.get("conta"), resumo.get("data"), ex.id, itens_info)
             except Exception as e:
                 print(f"[db] sync pendencias falhou: {e}", flush=True)
+            # AVISOS 'exame sem guia' — laudo pronto sem GTO (particular/esquecido)
+            try:
+                avisos_info = []
+                for x in resumo.get("decisoes", []):
+                    for lg in (x.get("laudos_sem_guia") or []):
+                        avisos_info.append({
+                            "accession": lg.get("accession"), "exame": lg.get("exame"),
+                            "gto": x.get("gto"), "paciente": x.get("paciente")})
+                if avisos_info:
+                    _sync_avisos(s, resumo.get("conta"), resumo.get("data"), ex.id, avisos_info)
+            except Exception as e:
+                print(f"[db] sync avisos falhou: {e}", flush=True)
         return ex.id
 
 
