@@ -429,6 +429,34 @@ def test_pedido_ilegivel_nao_e_classificado_como_clinica():
     assert resp2 == "Clínica"
 
 
+# ── Recuperação de exame mal lido por prefixo (caso MARIA CLARA) ─────────────
+# O Gemini garbleou 'periapical' -> 'perigeed'. Recuperação SÓ na solicitação
+# (recuperar=True): palavra >=6 letras, não reconhecida, cujo início (4 letras)
+# bate EXATAMENTE um exame. NUNCA no laudo/GTO (recuperar=False) — lá matching
+# errado anexaria laudo errado.
+
+def test_canon_recupera_exame_mal_lido_com_recuperar():
+    from solicitacao_utils import canon_exames
+    assert "periapical" not in canon_exames("Rx perigeed de unibale 21")            # sem recuperar
+    assert "periapical" in canon_exames("Rx perigeed de unibale 21", recuperar=True)  # com recuperar
+
+
+def test_canon_sem_recuperar_e_o_default_seguro_do_laudo_gto():
+    from solicitacao_utils import canon_exames
+    # default (laudo/GTO) NÃO recupera -> o matching seguro fica intacto
+    assert canon_exames("perigeed") == set()
+    # exame legível é idêntico com/sem recuperar (não muda nada do que já funciona)
+    assert canon_exames("periapical") == canon_exames("periapical", recuperar=True) == {"periapical"}
+
+
+def test_canon_recuperar_nao_inventa_de_palavra_desconhecida_ou_curta():
+    from solicitacao_utils import canon_exames
+    # 'unibale' (garble de 'unidade') não é exame -> não recupera nada
+    assert canon_exames("unibale coisa xyzabc", recuperar=True) == set()
+    # prefixo ambíguo/curto não inventa
+    assert "periapical" not in canon_exames("peri", recuperar=True)       # <6 letras
+
+
 # ── Cifra da senha do portal (item 7) ────────────────────────────────────────
 
 def test_senha_do_portal_cifra_e_decifra(monkeypatch):

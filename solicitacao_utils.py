@@ -153,13 +153,48 @@ def _fuzzy_exames(n: str) -> set:
     return out
 
 
-def canon_exames(texto: str) -> set:
+# Recuperação de exame MAL LIDO pelo INÍCIO da palavra (só na SOLICITAÇÃO — ver o
+# param `recuperar` de canon_exames). Stems = as 4 primeiras letras de cada exame
+# canônico, MAS só quando ÚNICO: 'docu' bate documentacao E documentacao_completa
+# -> ambíguo -> fica de fora. Resultado: peri->periapical, pano->panoramica,
+# inte->interproximal, tele->telerradiografia, tomo->tomografia, foto->fotografia,
+# mode->modelo, carp->carpal, oclu->oclusal, seio->seios_da_face.
+_STEMS_EXAME = {}
+for _p, _t in _CANON:
+    _STEMS_EXAME.setdefault(_strip(_t)[:4], set()).add(_t)
+_STEMS_EXAME = {p: next(iter(s)) for p, s in _STEMS_EXAME.items()
+                if len(s) == 1 and len(p) == 4}
+
+
+def _recupera_exame_por_prefixo(n: str) -> set:
+    """Exame mal lido recuperado pelo INÍCIO da palavra — ÚLTIMO recurso, só na
+    solicitação manuscrita. Palavra >=6 letras que NÃO foi reconhecida por
+    _CANON/fuzzy e cujo início (4 letras) bate EXATAMENTE UM exame conhecido.
+    Ex.: 'perigeed' -> 'peri' -> periapical (caso MARIA CLARA, 02/08). Prefixo
+    ambíguo/curto ou palavra já reconhecida -> nada."""
+    out = set()
+    for w in re.findall(r"[a-z]{6,}", n):
+        if any(re.search(pat, w) for pat, _ in _CANON) or _fuzzy_exames(w):
+            continue                       # já reconhecido -> não é garble
+        tok = _STEMS_EXAME.get(w[:4])
+        if tok:
+            out.add(tok)
+    return out
+
+
+def canon_exames(texto: str, recuperar: bool = False) -> set:
+    """Conjunto de exames canônicos num texto. `recuperar=True` liga a recuperação
+    de exame mal lido por prefixo — use SÓ na leitura da SOLICITAÇÃO manuscrita.
+    No laudo e na GTO (texto digitado) deixe False: um match recuperado errado ali
+    anexaria o LAUDO errado na guia. Preferência do dono (02/08, caso MARIA CLARA)."""
     n = _strip(texto)
     out = set()
     for pat, canon in _CANON:
         if re.search(pat, n):
             out.add(canon)
     out |= _fuzzy_exames(n)
+    if recuperar:
+        out |= _recupera_exame_por_prefixo(n)
     return out
 
 

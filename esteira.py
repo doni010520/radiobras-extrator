@@ -473,7 +473,8 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         # expande SÓ o lado da solicitação: quem pede os componentes (panorâmica +
         # telerradiografia + ...) está pedindo uma documentação. A recíproca não vale.
         ex = expande_documentacao(
-            canon_exames(" ".join(str(e) for e in (a.get("exames_lidos") or []))))
+            canon_exames(" ".join(str(e) for e in (a.get("exames_lidos") or [])),
+                         recuperar=True))   # PEDIDO manuscrito: recupera exame mal lido
         # QUASE-ACERTO: candidato que passou em tipo/legivel/paciente mas falhou na
         # cobertura. A mensagem PRECISA descrever ESTE, com o MESMO conjunto que a
         # decisao usou (ja expandido). Antes ela recalculava por fora, pegando o
@@ -1653,7 +1654,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     _cn = _det.get("lidos")
                     if _cn is None:
                         _cn = sorted(expande_documentacao(
-                            canon_exames(" ".join(str(e) for e in _lidos))))
+                            canon_exames(" ".join(str(e) for e in _lidos),
+                                         recuperar=True)))   # PEDIDO: mesma recuperação da decisão
                     # MESMO conjunto usado no critério (_alvo_ex). Mensagem e regra
                     # têm de ser a mesma coisa: quando divergiam, a pendência saía
                     # com as duas listas idênticas e parecia um absurdo lógico.
