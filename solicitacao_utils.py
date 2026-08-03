@@ -13,7 +13,7 @@ import unicodedata
 
 import fitz
 
-from ocr_utils import ocr_arquivo, EXAMES_LEX, PEDIDO_LEX, _strip
+from ocr_utils import ocr_arquivo, EXAMES_LEX, PEDIDO_LEX, _strip, _DICT
 from gto_utils import is_gto_text
 from extrator_arquivos import tem_logo_radiobras
 
@@ -176,8 +176,15 @@ def _recupera_exame_por_prefixo(n: str) -> set:
     for w in re.findall(r"[a-z]{6,}", n):
         if any(re.search(pat, w) for pat, _ in _CANON) or _fuzzy_exames(w):
             continue                       # já reconhecido -> não é garble
+        # GUARDAS (achado do code review adversarial):
+        # (a) palavra REAL do português NÃO é garble — mata 'periodontal', 'interno',
+        #     'telefone', 'modelagem', 'perimetria' etc. (colidiam pelo prefixo);
+        # (b) proximidade de comprimento com o exame — um garble tem tamanho parecido;
+        #     mata 'inteiro'/'telefone' (longe demais de interproximal/telerradiografia).
+        if w in _DICT:
+            continue
         tok = _STEMS_EXAME.get(w[:4])
-        if tok:
+        if tok and abs(len(w) - len(tok)) <= 3:
             out.add(tok)
     return out
 

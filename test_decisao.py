@@ -457,6 +457,28 @@ def test_canon_recuperar_nao_inventa_de_palavra_desconhecida_ou_curta():
     assert "periapical" not in canon_exames("peri", recuperar=True)       # <6 letras
 
 
+def test_canon_recuperar_barra_furos_do_review():
+    """Achados do code review adversarial: palavra REAL do português ou de outro
+    exame que colide pelo prefixo NÃO pode recuperar (cobriria falso, irreversível)."""
+    from solicitacao_utils import canon_exames, expande_documentacao
+    # periodontal/periodontia (palavra real) -> NÃO vira periapical
+    assert canon_exames("TRATAMENTO PERIODONTAL", recuperar=True) == set()
+    assert canon_exames("avaliacao periodontia", recuperar=True) == set()
+    # inteiro/interno -> NÃO vira interproximal
+    assert "interproximal" not in canon_exames("Rx da arcada inteira", recuperar=True)
+    assert "interproximal" not in canon_exames("Rx da face interna", recuperar=True)
+    # telefone/televisao -> NÃO vira telerradiografia
+    assert "telerradiografia" not in canon_exames("contato telefone", recuperar=True)
+    assert "telerradiografia" not in canon_exames("televisao aqui", recuperar=True)
+    # fotopolimerizacao -> NÃO vira fotografia
+    assert "fotografia" not in canon_exames("fotopolimerizacao da resina", recuperar=True)
+    # escalada de doc: 'telefone' não completa o pacote doc-orto
+    r = expande_documentacao(canon_exames("FOTOGRAFIAS MODELOS TELEFONE", recuperar=True))
+    assert "documentacao_completa" not in r and "telerradiografia" not in r
+    # o garble INTENCIONAL continua recuperando
+    assert canon_exames("Rx perigeed de 21", recuperar=True) == {"periapical"}
+
+
 # ── Cifra da senha do portal (item 7) ────────────────────────────────────────
 
 def test_senha_do_portal_cifra_e_decifra(monkeypatch):
