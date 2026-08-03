@@ -363,8 +363,6 @@ function renderPlanoSelect(lista){
 function renderBars(lista){
   const comDados=lista.filter(p=>p.total>0);
   const totGeral=comDados.reduce((s,p)=>s+p.total,0);
-  const totRev=comDados.reduce((s,p)=>s+(p.revisao||0),0);
-  var _nr=$('rbNavRev');if(_nr)_nr.textContent=totRev;
   $('subtitle').textContent=totGeral
     ?`${totGeral} GTO(s) processada(s) no período · ${comDados.length} plano(s) com atividade`
     :'Nenhuma GTO processada no período selecionado.';

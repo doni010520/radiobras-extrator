@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Revisão</title>
+<title>Pendências</title>
 {% include '_head.html' %}
 <style>
   :root{--verde:var(--rb-primary);--bg:var(--rb-bg);--card:var(--rb-surface);--linha:var(--rb-border);--txt:var(--rb-fg);--sub:var(--rb-fg-muted)}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt)}
-  .wrap{max-width:1000px;margin:0 auto;padding:24px 16px}
+  .wrap{max-width:1040px;margin:0 auto;padding:24px 16px}
   h1{margin:6px 0 4px}
   .tabs{display:flex;gap:6px;margin:6px 0 18px;flex-wrap:wrap}
   .tab{display:inline-flex;align-items:center;gap:7px;text-decoration:none;font-size:13.5px;font-weight:600;
@@ -43,22 +43,20 @@
   tr:last-child td{border-bottom:0}
   tr:hover td{background:var(--rb-surface-2)}
   td.gto{font-weight:700;white-space:nowrap}
-  td.mut{color:var(--rb-fg-muted)}
+  td.mut{color:var(--rb-fg-muted);white-space:nowrap}
   .chk{width:20px;height:20px;cursor:pointer;accent-color:var(--rb-primary);margin:0}
-  .cat{display:inline-flex;align-items:center;font-size:11px;font-weight:700;padding:2px 8px;border-radius:var(--rb-r-pill);
-    line-height:1.6;white-space:nowrap;text-transform:uppercase;letter-spacing:.03em}
-  .cat.revisao{background:var(--rb-warning-bg,#fff4e0);color:var(--rb-warning,#9a6400)}
-  .cat.sem_solicitacao{background:var(--rb-danger-bg);color:var(--rb-danger)}
-  .cat.justificativa,.cat.outro{background:var(--rb-info-bg);color:var(--rb-info)}
   tr.done td{opacity:.5}
   tr.done td.motivo{text-decoration:line-through}
-  .who{font-size:12px;color:var(--rb-fg-muted)}
-  .reab{color:var(--rb-primary);cursor:pointer;font-weight:600;font-size:12.5px}
-  .reab:hover{text-decoration:underline}
+  /* "quem age" — responsável por item */
+  .who-pill{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:700;
+    padding:3px 10px;border-radius:var(--rb-r-pill);line-height:1.6;white-space:nowrap;
+    background:var(--rb-surface-2);color:var(--rb-fg);border:1px solid var(--rb-border)}
+  .who-pill.reproc{background:var(--rb-info-bg);color:var(--rb-info);border-color:transparent}
   .empty{background:var(--card);border:1px solid var(--linha);border-radius:var(--rb-r-lg);padding:44px 20px;
     text-align:center;color:var(--rb-fg-muted)}
   .empty svg{width:40px;height:40px;color:var(--rb-success);margin-bottom:10px}
   .empty b{display:block;color:var(--rb-fg);font-size:16px;margin-bottom:4px}
+  .who{font-size:12px;color:var(--rb-fg-muted)}
 </style>
 </head>
 <body>
@@ -68,18 +66,18 @@
     <div class="ttl">
       <span class="badge"><svg class="rb-ico rb-ico--lg"><use href="#i-alert"/></svg></span>
       <div>
-        <h1>Revisão humana</h1>
-        <div class="sub">Itens que uma execução não conseguiu faturar sozinha. Resolva e marque como concluído.</div>
+        <h1>Pendências</h1>
+        <div class="sub">Guias que uma execução não conseguiu faturar sozinha, do prazo mais urgente ao menos. Resolva, marque o checkbox e veja quem precisa agir em cada uma.</div>
       </div>
     </div>
   </div>
 
   <div class="tabs">
-    <a class="tab {{ 'on' if status=='abertas' }}" href="/revisao?status=abertas">
+    <a class="tab {{ 'on' if status=='abertas' }}" href="/pendencias?status=abertas">
       <svg class="rb-ico"><use href="#i-alert"/></svg> Abertas <span class="n" id="cAb">{{ n_abertas }}</span></a>
-    <a class="tab {{ 'on' if status=='resolvidas' }}" href="/revisao?status=resolvidas">
+    <a class="tab {{ 'on' if status=='resolvidas' }}" href="/pendencias?status=resolvidas">
       <svg class="rb-ico"><use href="#i-check-circle"/></svg> Resolvidas</a>
-    <a class="tab {{ 'on' if status=='todas' }}" href="/revisao?status=todas">
+    <a class="tab {{ 'on' if status=='todas' }}" href="/pendencias?status=todas">
       <svg class="rb-ico"><use href="#i-grid"/></svg> Todas</a>
   </div>
 
@@ -130,31 +128,27 @@
   </script>
   {% endif %}
 
-  {% if not itens %}
+  {% if not grupos %}
     <div class="empty">
       <svg><use href="#i-check-circle"/></svg>
-      {% if status=='abertas' %}<b>Nenhuma pendência aberta</b>Tudo em dia — nada aguardando revisão.
+      {% if status=='abertas' %}<b>Nenhuma pendência aberta</b>Tudo em dia — nada aguardando ação.
       {% else %}<b>Nada por aqui</b>Nenhum item neste filtro.{% endif %}
     </div>
   {% else %}
-    {% for grupo in itens|groupby('grupo') %}
-    <div class="grp">
+    {% for g in grupos %}
+    <div class="grp" data-grp="{{ g.chave }}">
       <div class="grp-h">
-        <svg class="rb-ico"><use href="#i-calendar"/></svg>
-        <span class="u">{{ grupo.grouper }}</span>
-        <span class="c">{{ grupo.list|selectattr('resolvido','equalto',false)|list|length }} aberta(s) · {{ grupo.list|length }} no total</span>
-        {% set sla = grupo.list[0].sla %}
-        {% if sla is not none %}
-          {% if sla <= 0 %}<span class="sla venc">⚠ prazo vencido</span>
-          {% elif sla == 1 %}<span class="sla d1">⚠ vence amanhã</span>
-          {% elif sla == 2 %}<span class="sla d2">faltam 2 dias</span>
-          {% elif sla == 3 %}<span class="sla d3">faltam 3 dias</span>
-          {% else %}<span class="sla ok">no prazo · {{ sla }}d</span>{% endif %}
-        {% endif %}
+        {% if g.chave == 'venc' %}<span class="sla venc">⚠ vencidas</span>
+        {% elif g.chave == 'd1' %}<span class="sla d1">⚠ vence amanhã</span>
+        {% elif g.chave == 'd2' %}<span class="sla d2">faltam 2 dias</span>
+        {% elif g.chave == 'd3' %}<span class="sla d3">faltam 3 dias</span>
+        {% else %}<span class="sla ok">no prazo</span>{% endif %}
+        <span class="u">{{ g.titulo }}</span>
+        <span class="c">{{ g.abertas }} aberta(s) · {{ g.total }} no total</span>
       </div>
       <table>
-        <tr><th style="width:36px"></th><th>GTO</th><th>Paciente</th><th>Motivo</th><th>Tipo</th><th>Status</th></tr>
-        {% for p in grupo.list %}
+        <tr><th style="width:36px"></th><th>GTO</th><th>Paciente</th><th>Unidade</th><th>Dia</th><th>Motivo</th><th>Quem age</th></tr>
+        {% for p in g.itens %}
         <tr data-id="{{ p.id }}" class="{{ 'done' if p.resolvido }}">
           <td>
             <input type="checkbox" class="chk" {{ 'checked' if p.resolvido }}
@@ -162,14 +156,13 @@
           </td>
           <td class="gto">{{ p.gto }}</td>
           <td>{{ p.paciente or '—' }}</td>
+          <td class="mut">{{ p.unidade }}</td>
+          <td class="mut">{{ p.dia or '—' }}</td>
           <td class="motivo">{{ p.motivo or '—' }}</td>
-          <td><span class="cat {{ p.categoria or 'outro' }}">{{ (p.categoria or 'revisão')|replace('_',' ') }}</span></td>
-          <td class="stat">
-            {% if p.resolvido %}
-              <span class="who">✓ {{ p.resolvido_por }}{% if p.resolvido_em %} · {{ p.resolvido_em.strftime('%d/%m %H:%M') }}{% endif %}</span>
-            {% else %}
-              <span class="who">aguardando</span>
-            {% endif %}
+          <td>
+            <span class="who-pill {{ 'reproc' if p.responsavel == 'Reprocessar' }}"
+                  title="{{ p.acao }}">→ {{ p.responsavel }}</span>
+            {% if p.resolvido %}<div class="who">✓ {{ p.resolvido_por }}{% if p.resolvido_em %} · {{ p.resolvido_em.strftime('%d/%m %H:%M') }}{% endif %}</div>{% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -181,23 +174,25 @@
 <script>
 async function marcar(id, el){
   const resolver = el.checked;
-  const url = '/revisao/'+id+(resolver?'/resolver':'/reabrir');
+  const url = '/pendencias/'+id+(resolver?'/resolver':'/reabrir');
   el.disabled = true;
   try{
     const r = await fetch(url, {method:'POST', headers:{'X-Requested-With':'fetch'}});
     const j = await r.json();
     const tr = el.closest('tr');
     tr.classList.toggle('done', resolver);
-    // atualiza contadores
+    // atualiza contadores: aba "Abertas" + badge do topo (renomeado p/ rbNavPend)
     var c = document.getElementById('cAb'); if(c && typeof j.abertas!=='undefined') c.textContent = j.abertas;
-    var badge = document.getElementById('rbNavRev'); if(badge && typeof j.abertas!=='undefined') badge.textContent = j.abertas;
-    // atualiza a coluna de status
-    var stat = tr.querySelector('.stat .who');
-    if(stat) stat.textContent = resolver ? '✓ agora' : 'aguardando';
-    // se estamos na aba "Abertas", some com a linha resolvida
+    var badge = document.getElementById('rbNavPend');
+    if(badge && typeof j.abertas!=='undefined'){ badge.textContent = j.abertas; badge.style.display = (j.abertas>0?'':'none'); }
+    // na aba "Abertas", some com a linha resolvida (e o grupo, se esvaziar)
     if(resolver && location.search.indexOf('resolvidas')<0 && location.search.indexOf('todas')<0){
+      var grp = tr.closest('.grp');
       tr.style.transition='opacity .4s'; tr.style.opacity='0';
-      setTimeout(()=>{ tr.remove(); }, 420);
+      setTimeout(function(){
+        tr.remove();
+        if(grp && grp.querySelectorAll('tr[data-id]').length===0) grp.remove();
+      }, 420);
     }
   }catch(e){
     el.checked = !resolver; alert('Falha ao atualizar. Tente de novo.');

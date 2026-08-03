@@ -75,6 +75,7 @@
   <div class="rbnav-menu">
     <a class="rbnav-link" href="/" data-path="/">Dashboard</a>
     <a class="rbnav-link" href="/faturar" data-path="/faturar">Faturar dia</a>
+    <a class="rbnav-link" href="/pendencias" data-path="/pendencias">Pendências{% if pendencias_abertas and pendencias_abertas > 0 %} <span class="rbnav-badge" id="rbNavPend">{{ pendencias_abertas }}</span>{% else %}<span class="rbnav-badge" id="rbNavPend" style="display:none">0</span>{% endif %}</a>
     <div class="rbnav-drop" data-drop>
       <button class="rbnav-link" type="button" aria-haspopup="true" aria-expanded="false"
               data-path="/relatorios">Relatórios
@@ -86,9 +87,6 @@
           <small>Faturadas e não faturadas de uma data</small></a>
         <a href="/relatorios/pendencias" data-path="/relatorios/pendencias">Pendências por data
           <small>O que falta num dia ou período, por quem resolve</small></a>
-        <a href="/revisao" data-path="/revisao">
-          <span class="rbnav-subtit">Revisão{% if pendencias_abertas and pendencias_abertas > 0 %} <span class="rbnav-badge" id="rbNavRev">{{ pendencias_abertas }}</span>{% else %}<span class="rbnav-badge" id="rbNavRev" style="display:none">0</span>{% endif %}</span>
-          <small>Fila de guias que esperam conferência humana</small></a>
         <a href="/glosas" data-path="/glosas">Glosas e recursos
           <small>O que a operadora recusou</small></a>
         <a href="/relatorios" data-path="/relatorios">Execuções
@@ -206,8 +204,7 @@
     // O pai acende para qualquer tela de relatorio, inclusive Glosas.
     document.querySelectorAll('.rbnav-drop').forEach(function(d){
       var b=d.querySelector('.rbnav-link');
-      if(b&&(p.indexOf('/relatorios')===0||p.indexOf('/glosas')===0
-          ||p.indexOf('/revisao')===0))b.classList.add('active');
+      if(b&&(p.indexOf('/relatorios')===0||p.indexOf('/glosas')===0))b.classList.add('active');
     });
     // Abrir/fechar: clique no botao, fecha ao clicar fora ou com Esc.
     document.querySelectorAll('[data-drop]').forEach(function(d){

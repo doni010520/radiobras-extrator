@@ -699,7 +699,7 @@ def _enviar_alertas_sla():
     txt = (f"ATENÇÃO: {len(urgentes)} GTO(s) NÃO FATURADA(S) no limite do prazo "
            f"(prazo de {_prazo_dias()} dias da OdontoPrev): {resumo}.\n\n{linhas}\n\n"
            f"Resolva no PRORADIS ou faça a correção na origem hoje, senão o prazo estoura.\n"
-           f"Painel de pendências: /revisao")
+           f"Painel de pendências: /pendencias")
     rows = "".join(
         f"<tr><td style='padding:6px 10px;color:{_sla_status(p['sla'])[1]};font-weight:700'>"
         f"{_sla_status(p['sla'])[0]}</td>"
@@ -946,12 +946,12 @@ def _email_resumo_semana():
          "Una e reprocessa pendências ainda dentro do prazo. Idempotente (não duplica "
          "anexo) e já ligado em produção. Prazo da OdontoPrev confirmado em 7 dias."),
         ("Alerta de prazo / SLA (05/07, ampliado 09/07)",
-         "Painel /revisao mostra cada pendência com selo de urgência (vencida / vence "
+         "Painel /pendencias mostra cada pendência com selo de urgência (vencida / vence "
          "amanhã / 2 / 3 dias). O e-mail de alerta agora cobre vencidas + vence amanhã + "
          "faltam 2 dias (antes só 'amanhã'), ordenado por urgência — reduz o risco de "
          "perder um prazo."),
         ("Backlog de revisão humana (03/07)",
-         "Toda GTO não faturada vira uma tarefa com checkbox no painel /revisao, "
+         "Toda GTO não faturada vira uma tarefa com checkbox no painel /pendencias, "
          "guardada no banco durável (Supabase)."),
         ("Login do portal mais seguro (03/07)",
          "Login que falha aborta com erro claro (fim do 'sucesso' silencioso); a senha "
@@ -1024,7 +1024,7 @@ def _email_resumo_faturamentos(dias: int = 7):
         f"  • {e['quando'].strftime('%d/%m')} · {e['unidade']} · dia do exame {e.get('dia') or '—'} "
         f"— {e.get('faturadas', 0)} faturada(s), {e.get('pendentes', 0)} pendente(s)"
         for e in execs)
-    txt = f"{intro}\n\n{total}\n\n{linhas}\n\nPainel: /relatorios · Pendências: /revisao"
+    txt = f"{intro}\n\n{total}\n\n{linhas}\n\nPainel: /relatorios · Pendências: /pendencias"
     rows = "".join(
         f"<tr><td style='padding:6px 10px'>{e['quando'].strftime('%d/%m')}</td>"
         f"<td style='padding:6px 10px'>{e['unidade']}</td>"
@@ -1106,7 +1106,7 @@ def _email_pendencias_abertas():
         f"  • [{_rotulo_sla(p['sla'])[0]}] {p['unidade']} · dia {p.get('dia') or '—'} · GTO {p.get('gto')} "
         f"· {p.get('paciente') or '—'} — {p.get('motivo') or 'revisão'}" for p in itens)
     txt = (f"Todas as pendências abertas agora: {total} ({n_venc} vencidas). "
-           f"Prazo OdontoPrev {_prazo_dias()} dias.\n\n{linhas}\n\nPainel: /revisao")
+           f"Prazo OdontoPrev {_prazo_dias()} dias.\n\n{linhas}\n\nPainel: /pendencias")
     rows = "".join(
         f"<tr><td style='padding:5px 9px;color:{_rotulo_sla(p['sla'])[1]};font-weight:700'>{_rotulo_sla(p['sla'])[0]}</td>"
         f"<td style='padding:5px 9px'>{p['unidade']}</td>"
@@ -1116,7 +1116,7 @@ def _email_pendencias_abertas():
         f"<td style='padding:5px 9px'>{p.get('motivo') or 'revisão'}</td></tr>" for p in itens)
     html = (f"<div style='font-family:Arial,sans-serif'>"
             f"<h2 style='color:#b3261e'>{total} pendência(s) aberta(s) · {n_venc} vencida(s)</h2>"
-            f"<p>Prazo de faturamento OdontoPrev: <b>{_prazo_dias()} dias</b>. Painel: /revisao</p>"
+            f"<p>Prazo de faturamento OdontoPrev: <b>{_prazo_dias()} dias</b>. Painel: /pendencias</p>"
             f"<table style='border-collapse:collapse;font-size:12px' border='1'>"
             f"<tr style='background:#f0f0f0'><th style='padding:5px 9px'>Prazo</th>"
             f"<th style='padding:5px 9px'>Unidade</th><th style='padding:5px 9px'>Dia</th>"
@@ -1174,18 +1174,51 @@ def gtos_page():
     return render_template("gtos.html")
 
 
-# ── Revisão humana (backlog de pendências) ─────────────────────────────────────
-@app.route("/revisao")
-def revisao_page():
-    """Backlog: itens não faturados que precisam de ação humana."""
+# ── Pendências (worklist por urgência) ─────────────────────────────────────────
+# Substitui a antiga "Revisão humana": mesma fila, mas agrupada por bucket de SLA
+# (do mais urgente ao menos) e com a coluna "quem age" (responsável por item).
+_BUCKETS_SLA = [
+    ("venc", "Vencidas"),
+    ("d1", "Vence amanhã"),
+    ("d2", "Em 2 dias"),
+    ("d3", "Em 3 dias"),
+    ("no_prazo", "No prazo"),
+]
+
+
+def _sla_bucket(sla):
+    """Bucket de urgência a partir do SLA (dias restantes). Sem data cai em 'no_prazo'."""
+    if sla is None:
+        return "no_prazo"
+    if sla <= 0:
+        return "venc"
+    if sla == 1:
+        return "d1"
+    if sla == 2:
+        return "d2"
+    if sla == 3:
+        return "d3"
+    return "no_prazo"
+
+
+@app.route("/pendencias")
+def pendencias_page():
+    """Worklist: itens não faturados que precisam de ação humana, por urgência."""
+    import datetime as _dt
     status = request.args.get("status", "abertas")
     if status not in ("abertas", "resolvidas", "todas"):
         status = "abertas"
     itens = db.listar_pendencias(status=status)
     for p in itens:
         p["unidade"] = _plano_nome(p.get("conta")) or (p.get("conta") or "—")
-        p["grupo"] = "%s · dia %s" % (p["unidade"], p.get("dia") or "—")
         p["sla"] = _sla_dias_restantes(p.get("dia"))   # dias p/ o prazo (None/negativo=vencido)
+        p["bucket"] = _sla_bucket(p["sla"])
+        # responsável / ação — reaproveita a classificação do relatório de pendências.
+        _chave, _quem, _acao = db.classificar_pendencia(p.get("motivo"), p.get("categoria") or "")
+        p["acao"] = _acao
+        # "Nós" = fila técnica que o cron reprocessa sozinho → rótulo "Reprocessar".
+        p["responsavel"] = "Reprocessar" if _quem == getattr(db, "_NOSSO", "Nós") else _quem
+    # barra-resumo de SLA (só as abertas contam)
     sla_ct = {"venc": 0, "d1": 0, "d2": 0, "d3": 0}
     for p in itens:
         if p.get("resolvido"):
@@ -1201,26 +1234,37 @@ def revisao_page():
             sla_ct["d2"] += 1
         elif s == 3:
             sla_ct["d3"] += 1
-    return render_template("revisao.html", itens=itens, status=status,
+    # grupos por urgência (mais urgente → menos); dentro de cada um, por unidade/dia.
+    grupos = []
+    for chave, titulo in _BUCKETS_SLA:
+        lst = [p for p in itens if p["bucket"] == chave]
+        if not lst:
+            continue
+        lst.sort(key=lambda p: ((p.get("unidade") or "").lower(),
+                                db._parse_ddmmaaaa(p.get("dia")) or _dt.date.max))
+        grupos.append({"chave": chave, "titulo": titulo, "itens": lst,
+                       "abertas": sum(1 for p in lst if not p.get("resolvido")),
+                       "total": len(lst)})
+    return render_template("pendencias.html", grupos=grupos, itens=itens, status=status,
                            prazo=_prazo_dias(), sla_ct=sla_ct,
                            n_abertas=db.contar_pendencias_abertas())
 
 
-@app.route("/revisao/<int:pid>/resolver", methods=["POST"])
-def revisao_resolver(pid):
+@app.route("/pendencias/<int:pid>/resolver", methods=["POST"])
+def pendencias_resolver(pid):
     obs = (request.form.get("obs") or (request.json.get("obs") if request.is_json else None)) if (request.form or request.is_json) else None
     db.resolver_pendencia(pid, session.get("username") or session.get("nome") or "?", obs=obs)
     if request.is_json or request.headers.get("X-Requested-With") == "fetch":
         return jsonify({"ok": True, "abertas": db.contar_pendencias_abertas()})
-    return redirect(url_for("revisao_page", status=request.args.get("status", "abertas")))
+    return redirect(url_for("pendencias_page", status=request.args.get("status", "abertas")))
 
 
-@app.route("/revisao/<int:pid>/reabrir", methods=["POST"])
-def revisao_reabrir(pid):
+@app.route("/pendencias/<int:pid>/reabrir", methods=["POST"])
+def pendencias_reabrir(pid):
     db.reabrir_pendencia(pid)
     if request.is_json or request.headers.get("X-Requested-With") == "fetch":
         return jsonify({"ok": True, "abertas": db.contar_pendencias_abertas()})
-    return redirect(url_for("revisao_page", status=request.args.get("status", "abertas")))
+    return redirect(url_for("pendencias_page", status=request.args.get("status", "abertas")))
 
 
 # ── Avisos "exame sem guia" (laudo pronto sem GTO) — aviso, não pendência ──────
@@ -2624,7 +2668,7 @@ def ciclo_dia_status(job_id: str):
 # rodar_esteira passou a rejeitar com ValueError.
 # A tela de revisão que vivia ali servia documento de paciente autenticado por
 # chave na URL (vaza em log de proxy, histórico e print). Tudo que faziam tem
-# substituto: /faturar dispara, /revisao mostra o backlog, /faturar/log/<jid> traz
+# substituto: /faturar dispara, /pendencias mostra o backlog, /faturar/log/<jid> traz
 # o log técnico.
 _esteira_jobs: dict = {}
 
