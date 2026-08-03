@@ -1871,6 +1871,30 @@ def test_download_do_portal_sem_id_nao_tenta():
     assert b is None and m == ""
 
 
+# ── Renovacao da sessao sticky do proxy (03/08) ──────────────────────────────
+# A sessao sticky do FlameProxies ('-session-<x>-time-<n>') EXPIRA em <n> min. O
+# _fresh_sessid so renovava o formato do DataImpulse (';sessid.<x>') — a sessao do
+# FlameProxies ficava fixa e, apos <n> min, TODO run falhava com ERR_TUNNEL,
+# obrigando a regerar o proxy a mao. Agora renova os dois formatos: cada run pega
+# uma sessao nova, com sua propria janela (set-once-esquece).
+
+def test_fresh_sessid_renova_flameproxies():
+    from extrator_odontoprev import _fresh_sessid
+    u = ("flma75147f1-package-standard-country-br-city-salvador-"
+         "session-278kto37sf-time-50")
+    a = _fresh_sessid(u)
+    assert a != u and "278kto37sf" not in a         # trocou a sessao
+    assert "-session-" in a and "-time-50" in a      # manteve a estrutura
+    assert _fresh_sessid(u) != _fresh_sessid(u)      # nova a cada chamada
+
+
+def test_fresh_sessid_renova_dataimpulse_e_ignora_o_resto():
+    from extrator_odontoprev import _fresh_sessid
+    d = _fresh_sessid("user;sessid.velho")
+    assert d.startswith("user;sessid.") and "velho" not in d
+    assert _fresh_sessid("sem_token_de_sessao") == "sem_token_de_sessao"
+
+
 # ── Recontagem de anexos na anexacao (Classe B, 28/07) ───────────────────────
 # JOSE GONCALVES, LEONARDO, SUELEM, RAFAEL, MARIA SOPHIA (run 263): documentacao
 # OK, mas a recontagem de anexos pelo DOM (regex 'total de anexos)') devolveu -1

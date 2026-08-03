@@ -46,14 +46,22 @@ def _odo_proxy_url() -> str:
 
 
 def _fresh_sessid(username: str) -> str:
-    """Se o proxy usa ';sessid.<x>' (sticky DataImpulse), troca <x> por um token
-    NOVO a cada chamada -> um IP residencial BR diferente por sessao, porém ESTAVEL
-    durante ela. Espalha a carga entre varios IPs e evita re-bloqueio no mesmo IP."""
+    """Troca o TOKEN da sessao sticky por um NOVO a cada chamada -> um IP residencial
+    BR diferente por sessao, porém ESTAVEL durante ela. Espalha a carga e evita
+    re-bloqueio no mesmo IP. Cobre os DOIS formatos de proxy que ja usamos:
+      - DataImpulse:  ';sessid.<x>'
+      - FlameProxies: '-session-<x>-time-<n>'  (o <x> e a sessao sticky; sem renovar,
+        ela EXPIRA em <n> minutos -> ERR_TUNNEL em TODO run seguinte, obrigando a
+        regerar o proxy a mao. Renovando aqui, vira set-once-esquece: cada run pega
+        uma sessao nova, com sua propria janela.)"""
     import binascii
-    if ";sessid." not in (username or ""):
-        return username
+    u = username or ""
     tok = binascii.hexlify(os.urandom(4)).decode()
-    return re.sub(r";sessid\.[^;]*", f";sessid.{tok}", username)
+    if ";sessid." in u:                       # DataImpulse
+        return re.sub(r";sessid\.[^;]*", f";sessid.{tok}", u)
+    if "-session-" in u:                       # FlameProxies (-session-<x>-time-<n>)
+        return re.sub(r"(-session-)[^-]+", lambda m: m.group(1) + tok, u, count=1)
+    return u
 
 
 def _odo_playwright_proxy():
