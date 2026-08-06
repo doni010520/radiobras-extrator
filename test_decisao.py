@@ -60,6 +60,40 @@ def test_a_uniao_reprovaria_a_mesma_solicitacao():
     assert motivo == "NAO_COBRE"
 
 
+def _solk(idx, ex, cro="2556", data=None, pac="KAEL LIMA FONSECA MACEDO"):
+    return {"idx": idx, "tipo": "solicitacao", "legivel": True, "paciente_lido": pac,
+            "cro_lido": cro, "data_solicitacao": data, "exames_lidos": ex}
+
+
+# LIMITAÇÃO CONHECIDA — folhas SEM DATA não são unidas automaticamente.
+# Tentamos (29/07, caso KAEL: 2 folhas do mesmo pedido sem data) um fallback que
+# tratava "sem data" como hoje e unia por CRO. Review adversarial provou que o
+# gatilho do acerto (2 folhas sem data, mesma dentista, cobrem juntas) é IDÊNTICO
+# ao gatilho do erro (2 PEDIDOS de episódios diferentes, sem data, mesma dentista)
+# — sem um sinal de recência confiável não dá pra separar, e anexar o pedido errado
+# é irreversível (reabre o buraco anti-2023 que o dono mandou fechar). Além disso o
+# CRO "só dígitos" colide entre dentistas de UFs diferentes. Então: sem data ->
+# PENDÊNCIA (conferência manual). Melhor pendência que anexação errada.
+
+def test_folhas_sem_data_nao_unem_ficam_pendencia():
+    # Duas folhas sem data (mesma dentista) NÃO unem sozinhas — vira pendência.
+    leituras = [_solk(0, ["panoramica"]), _solk(1, ["periapical"])]
+    idx, _a, motivo = _escolher_solicitacao(leituras, "KAEL LIMA FONSECA MACEDO",
+                                            {"periapical"}, 2)
+    assert idx is None
+
+
+def test_pedido_velho_datado_nao_e_puxado_pela_recente_sem_data():
+    # REGRA DO DONO (anti-2023): a periapical que cobre é de 20/09/2023 (data lida);
+    # a mais recente (panorâmica, sem data) não cobre. A recente sem data não dispara
+    # união/pareamento — continua pendência, sem puxar o pedido de 2023.
+    leituras = [_solk(0, ["panoramica"], data=None),
+                _solk(1, ["periapical"], data="20/09/2023")]
+    idx, _a, motivo = _escolher_solicitacao(leituras, "KAEL LIMA FONSECA MACEDO",
+                                            {"periapical"}, 2)
+    assert idx is None
+
+
 # ── Documentação x componentes (Bug 2) ───────────────────────────────────────
 # GTO pede "Doc Orto Compl" -> {documentacao}. A solicitação escreve os
 # componentes. O issubset falhava e reprovava pedido CORRETO e mais completo que
@@ -112,6 +146,29 @@ def test_erro_de_grafia_casa():
 
 def test_pai_e_filho_nao_casam_por_um_token():
     assert not _nomes_compat("JOSE CARLOS SOUZA LIMA", "JOSE CARLOS SOUZA JUNIOR")
+
+
+def test_ocr_grudou_dois_tokens_casa():
+    # IAN SACRAMENTO RODRIGUES (30/07 Tancredo): o OCR leu 'IANSACRAMENTO RODRIGUES'
+    # (perdeu o espaço). É a MESMA pessoa — o token grudado são dois tokens
+    # ADJACENTES do outro lado. Antes morria no "< 2 tokens em comum".
+    assert _nomes_compat("IANSACRAMENTO RODRIGUES", "IAN SACRAMENTO RODRIGUES")
+
+
+def test_ocr_grudado_nao_abre_porta_pra_irmao():
+    # A concatenação só casa a MESMA sequência de letras: 'PEDROSILVA' nunca vira
+    # 'JOAO SILVA' — o irmão continua barrado.
+    assert not _nomes_compat("PEDROSILVA SANTOS", "JOAO SILVA SANTOS")
+    # E um token grudado que não corresponde a tokens adjacentes do alvo não casa.
+    assert not _nomes_compat("MARIACLARA SOUZA", "ANA PAULA SOUZA")
+
+
+def test_ocr_grudado_tokens_repetidos_nao_quebra():
+    # Nome com dois tokens IDÊNTICOS adjacentes ('MARIA MARIA SILVA') grudado em
+    # 'MARIAMARIA SILVA': o par concatenado vinha (a, a) e o remove duplicado
+    # estourava ValueError. Não pode quebrar — e ainda casa (mesma pessoa).
+    assert _nomes_compat("MARIAMARIA SILVA", "MARIA MARIA SILVA")
+    assert _nomes_compat("ANAANA SOUZA", "ANA ANA SOUZA")
 
 
 # ── Exame particular / procedência do accession (item 3) ────────────────────
@@ -934,6 +991,37 @@ def test_interproximal_esta_no_vocabulario_de_fallback():
     from extrator_arquivos import EXAME_KEYWORDS
     for kw in ("INTERPROXIMAL", "OCLUSAL", "MODELO", "TOMOGRAFIA"):
         assert kw in EXAME_KEYWORDS, kw
+
+
+# ── Token do laudo pan com DOIS args (mudanca do SmartRIS ~05/08/26) ─────────
+# O SmartRIS passou a chamar openReportPDF(event, '<token>', '<x>') com DOIS
+# argumentos (antes era so um). O regex exigia ')' logo apos o 1o token
+# (…'([^']+)'\)) e, com o 2o arg, casava ZERO — o laudo PRONTO (Validado/Impresso)
+# era lido como FALTA LAUDO e a guia virava pendencia. Medido no dia 31/07: ~22
+# panoramicas laudadas por dia lidas como sem laudo. arg1 e o token de studies
+# (fetch de report/pdf?studies=arg1 devolveu 93KB; arg2 devolveu 0). O ceph
+# continua com 1 arg e ja funcionava.
+
+def test_pan_com_dois_args_extrai_o_primeiro():
+    from extrator_arquivos import extrair_tokens
+    h = ('<td onclick="openReportPDF(event, \'TOKENPAN123\', \'REPORTTYPE\')">'
+         '<span class="wrap-exam">PANORAMICA</span></td>')
+    assert extrair_tokens(h)["pan"] == ["TOKENPAN123"]
+
+
+def test_pan_com_um_arg_ainda_extrai():
+    # robustez: se o SmartRIS voltar ao formato de 1 arg, continua funcionando
+    from extrator_arquivos import extrair_tokens
+    h = '<td onclick="openReportPDF(event, \'SOZINHO\')">x</td>'
+    assert extrair_tokens(h)["pan"] == ["SOZINHO"]
+
+
+def test_pan_nao_captura_token_de_ceph():
+    # openReportPDF NAO pode casar dentro de openReportPDFCeph (prefixo)
+    from extrator_arquivos import extrair_tokens
+    h = '<td onclick="openReportPDFCeph(event, \'CEPHTOK\')">x</td>'
+    tk = extrair_tokens(h)
+    assert tk["pan"] == [] and tk["ceph"] == ["CEPHTOK"]
 
 
 # ── Trava de duplicidade no UNICO ponto de escrita (regra do dono, 29/07) ───

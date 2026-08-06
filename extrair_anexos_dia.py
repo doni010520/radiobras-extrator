@@ -113,6 +113,127 @@ def _record_href(page, cod: str):
     }""", cod)
 
 
+def _parse_cards_cpf(html: str) -> list:
+    """Cards do resultado de search_patient_list -> [{cod, pid}].
+
+    cod = data-pat-id (numero do prontuario). pid = argumento de
+    load_patient_profile(...) — o mesmo patient_id que view_attachments usa
+    (comprovado por baixar_solicitacoes._patient_id, em producao).
+
+    Um CPF pode devolver 2+ cards: prontuarios DUPLICADOS do mesmo paciente.
+    Caso ADAILDES FIUZA DOS SANTOS (29/07): CPF -> 20040659 + 20040640."""
+    out = []
+    for el in BeautifulSoup(html or "", "lxml").select("[data-pat-id]"):
+        cod = (el.get("data-pat-id") or "").strip()
+        if not cod:
+            continue
+        m = re.search(r"load_patient_profile\('([^']+)'\)", str(el))
+        out.append({"cod": cod, "pid": m.group(1) if m else None})
+    return out
+
+
+def _norm_nasc(s) -> str:
+    """Normaliza nascimento p/ DD/MM/AAAA. Aceita AAAA-MM-DD (OdontoPrev,
+    beneficiario.dataNascimento) e DD/MM/AAAA (card do PRORADIS). Vazio se nao
+    reconhecer."""
+    s = str(s or "").strip()[:10]
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", s)
+    if m:
+        return f"{m.group(3)}/{m.group(2)}/{m.group(1)}"
+    if re.match(r"^(\d{2})/(\d{2})/(\d{4})$", s):
+        return s
+    return ""
+
+
+def _cards_por_nascimento(cards, nasc_guia) -> list:
+    """Filtra os cards cujo nascimento BATE com o da guia — desempate de homonimo
+    (caso FILIPE: dois "Felipe" com nascimentos diferentes). Guia SEM nascimento
+    -> devolve TODOS (sem data nao ha desempate seguro; quem chama cai na logica
+    anterior). Card sem nascimento nunca casa. NAO inventa desempate."""
+    alvo = _norm_nasc(nasc_guia)
+    if not alvo:
+        return list(cards or [])
+    return [c for c in (cards or []) if _norm_nasc(c.get("nascimento")) == alvo]
+
+
+def _parse_anexos_view(html: str, cod: str) -> list:
+    """HTML do view_attachments -> [{id, filename, url}]. Mesma leitura de
+    _abrir_anexos: .attachment-item com data-id/data-filename; a url vem do
+    <a download_attachment> ou e montada a partir de id+cod."""
+    itens = []
+    for div in BeautifulSoup(html or "", "lxml").select(".attachment-item"):
+        aid = div.get("data-id", "")
+        fn = div.get("data-filename", "")
+        a = div.select_one("a[href*='download_attachment']")
+        url = a["href"] if a else f"{BASE}/patients/download_attachment/{aid}/{cod}"
+        itens.append({"id": aid, "filename": fn, "url": url})
+    return itens
+
+
+def buscar_prontuarios_por_cpf(sess, cpf) -> list:
+    """CPF -> prontuarios [{cod, pid}] via search_patient_list (o endpoint
+    INDEXA CPF; descoberta 05/08). Normaliza p/ digitos e so bate no servidor
+    com 11 digitos: CPF vazio/malformado nao pode virar uma busca ampla que
+    casaria com paciente errado."""
+    dig = re.sub(r"\D", "", cpf or "")
+    if len(dig) != 11:
+        return []
+    # Falha de rede na busca por CPF NAO pode bloquear a guia: degrada p/ [] e
+    # quem chama cai no fallback por nome — mesmo tratamento do nao-200 (M1).
+    try:
+        r = sess.get(f"{BASE}/patients/search_patient_list/search_patient_list/",
+                     params={"limit": 24, "input": dig}, timeout=30)
+    except Exception:
+        return []
+    if getattr(r, "status_code", 0) != 200:
+        return []
+    return _parse_cards_cpf(r.text)
+
+
+def _listar_anexos_http(sess, pid, cod) -> list:
+    """Anexos de UM prontuario via view_attachments (HTTP puro)."""
+    r = sess.post(f"{BASE}/patients/view_attachments",
+                  data={"patient_id": pid}, timeout=30)
+    if getattr(r, "status_code", 0) != 200:
+        return []
+    return _parse_anexos_view(r.text, cod)
+
+
+def anexos_por_cpf(sess, cpf):
+    """Anexos de TODOS os prontuarios que o CPF retornar — uniao com dedupe por
+    (id, filename). Devolve (itens, prontuarios). CPF sem match -> ([], []), e
+    quem chama cai no fallback por nome. A uniao substitui o _gemeos_de: o CPF
+    ja junta os prontuarios duplicados (caso ADAILDES / IRAMAIA)."""
+    pronts = buscar_prontuarios_por_cpf(sess, cpf)
+    if not pronts:
+        return [], []
+    vistos, itens = set(), []
+    for p in pronts:
+        if not p.get("pid"):
+            continue
+        for it in _listar_anexos_http(sess, p["pid"], p.get("cod", "")):
+            k = (it.get("id"), it.get("filename"))
+            if k in vistos:
+                continue
+            vistos.add(k); itens.append(it)
+    return itens, pronts
+
+
+def resolver_anexos(cpf, buscar_cpf_fn, buscar_nome_fn):
+    """CPF-first, nome-fallback. Devolve (itens, fonte), fonte in {'cpf','nome'}.
+
+    Se o CPF achou prontuario(s), CONFIA nele mesmo com zero anexos — nao cai no
+    nome (o fallback por nome poderia abrir prontuario de homonimo). So o caso
+    'CPF nao achou ninguem' (cadastro do PRORADIS sem CPF) usa o nome, como
+    antes: NUNCA regride. `fonte` sobe pro log e mede a taxa real de acerto por
+    CPF ja na 1a rodada — sem scraping extra."""
+    if cpf:
+        itens, pronts = buscar_cpf_fn()
+        if pronts:
+            return itens, "cpf"
+    return buscar_nome_fn(), "nome"
+
+
 class ProntuarioAmbiguo(Exception):
     """A busca por nome nao permitiu identificar UM prontuario com seguranca.
     Melhor parar do que ler o prontuario de outra pessoa."""
@@ -175,7 +296,7 @@ def _gemeos_de(cards, href_principal):
     return out[:2]
 
 
-def anexos_do_paciente(page, nome: str, cod: str) -> list:
+def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
     """Busca o paciente, abre prontuario + anexos, retorna [{id, filename, url}].
 
     A busca colapsa espacos duplicados (caso ANGELICA OLIVEIRA  LEAHY, 27/07:
@@ -189,6 +310,7 @@ def anexos_do_paciente(page, nome: str, cod: str) -> list:
     tentativas = [nome_limpo]
     toks = nome_limpo.split(" ")
     cod_s = str(cod or "").strip()
+    cod_efetivo = cod    # cod usado p/ abrir anexos; vira o cod REAL se o nascimento desempatar
     # Encurtar exige codigo REAL e nao-vazio: com cod vazio, o ''.includes()
     # do _record_href e true para QUALQUER card, e a busca cada vez mais larga
     # aceitaria o primeiro paciente que aparecesse (achado do code review 31/07)
@@ -208,6 +330,18 @@ def anexos_do_paciente(page, nome: str, cod: str) -> list:
         href, n_cards = r.get("href"), r.get("n", 0)
         if href:
             break
+
+    # DESEMPATE POR NASCIMENTO (caso FILIPE: dois "Felipe Silva dos Santos") — SO
+    # quando a busca por nome ficou AMBIGUA (2+ cards, nenhum resolvido por codigo)
+    # e a guia trouxe o nascimento. Escolhe o card cujo nascimento BATE; so aceita
+    # se sobrar UM. Sem nascimento, empate ou nenhum: cai no erro de sempre — NAO
+    # inventa desempate. Nascimento vem do /v1/gto/detalhada (OdontoPrev).
+    if not href and (n_cards or 0) >= 2 and _norm_nasc(nascimento):
+        casam_nasc = _cards_por_nascimento(_cards_da_busca(page), nascimento)
+        if len(casam_nasc) == 1:
+            href = casam_nasc[0].get("href")
+            cod_efetivo = casam_nasc[0].get("cod") or cod
+            cod_s = str(cod_efetivo or "").strip()
 
     if not href:
         # O motivo tem que dizer a VERDADE: 0 cards e 2+ cards sao problemas
@@ -229,12 +363,12 @@ def anexos_do_paciente(page, nome: str, cod: str) -> list:
         except Exception:
             gemeos = []
 
-    itens = _abrir_anexos(page, href, cod)
+    itens = _abrir_anexos(page, href, cod_efetivo)
     if gemeos:
         vistos = {(i.get("id"), i.get("filename")) for i in itens}
         for g in gemeos:
             try:
-                extras = _abrir_anexos(page, g["href"], g.get("cod") or cod)
+                extras = _abrir_anexos(page, g["href"], g.get("cod") or cod_efetivo)
             except Exception:
                 continue
             for it in extras:

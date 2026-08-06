@@ -417,8 +417,14 @@ def extrair_tokens(row_html: str) -> dict:
     Retorna: {pan, ceph, doc, exame}
     """
     h = row_html
-    pan = re.findall(r"openReportPDF\(event,\s*'([^']+)'\)", h)
-    ceph = re.findall(r"openReportPDFCeph\(event,\s*'([^']+)'\)", h)
+    # O 1o arg apos 'event' e o token de studies (report/pdf?studies=<token>).
+    # NAO exigir ')' logo apos: o SmartRIS passou a chamar com DOIS args (~05/08/26)
+    # — openReportPDF(event, '<token>', '<x>') — e a versao com '\)' casava ZERO,
+    # lendo laudo PRONTO como FALTA LAUDO (dia 31/07: ~22 panoramicas/dia perdidas).
+    # Capturamos so o 1o arg, robusto a 1 OU 2 args. 'openReportPDF\(' nao casa
+    # dentro de 'openReportPDFCeph(' (prefixo seguido de 'Ceph', nao de '(').
+    pan = re.findall(r"openReportPDF\(event,\s*'([^']+)'", h)
+    ceph = re.findall(r"openReportPDFCeph\(event,\s*'([^']+)'", h)
     doc_m = re.search(
         r"base_url\('reports_doc'\),\s*'reports_doc',\s*"
         r"\{study_id\s*:\s*'([^']+)',\s*schedule_id:\s*'([^']+)'",

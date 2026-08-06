@@ -39,7 +39,7 @@ from extrator_odontoprev import (
     normaliza_nome, upload_arquivos, _odo_requests_proxies, ler_dados_gto,
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
-from extrair_anexos_dia import anexos_do_paciente
+from extrair_anexos_dia import anexos_do_paciente, anexos_por_cpf, resolver_anexos
 from gto_utils import (is_gto_pdf, extrair_observacao, gto_e_desta_guia,
                        _BOILER_49)
 from solicitacao_utils import (gto_exames, canon_exames, gto_dispensa_laudo,
@@ -195,6 +195,20 @@ def _casa_por_concatenacao(tok: str, outros: list) -> bool:
     return False
 
 
+def _par_concatenado(tok: str, ordenados: list, livres) -> tuple:
+    """Se `tok` e a concatenacao de DOIS tokens ADJACENTES de `ordenados` (ambos
+    ainda em `livres`), devolve o par; senao (). Ex.: 'IANSACRAMENTO' ->
+    ('IAN','SACRAMENTO'). Mesma seguranca do _casa_por_concatenacao: preserva a
+    sequencia de letras, so tira o espaco — 'PEDROSILVA' nunca vira 'JOAO SILVA'."""
+    for i in range(len(ordenados) - 1):
+        a, b = ordenados[i], ordenados[i + 1]
+        if a in livres and b in livres:
+            junto = a + b
+            if junto == tok or _dist_edicao(junto, tok, 1) <= 1:
+                return (a, b)
+    return ()
+
+
 def _nomes_compat(lido: str, alvo: str) -> bool:
     """Casa o nome LIDO na solicitação com o nome-ALVO (da GTO) por TOKENS, não por
     substring (evita 'ANA' casar 'ANA PAULA'). Exige >=2 tokens significativos em
@@ -233,6 +247,17 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
                 livres.remove(cand)
                 pareados.add(tok)
                 break
+        else:
+            # OCR grudou dois tokens do outro lado (IAN SACRAMENTO -> IANSACRAMENTO,
+            # caso IAN SACRAMENTO RODRIGUES 30/07): casa 'tok' com dois tokens
+            # ADJACENTES do maior e consome ambos. So concatenacao EXATA (<=1 erro) —
+            # nao afrouxa a trava anti-irmao.
+            _par = _par_concatenado(tok, lista_maior, livres)
+            if _par:
+                for _c in _par:
+                    if _c in livres:        # tokens iguais adjacentes (MARIA MARIA):
+                        livres.remove(_c)   # o par vem (a, a); nao remove duas vezes
+                pareados.add(tok)
     if len(comuns) + len(pareados) < 2:
         return False
     se_falta = menor - comuns - pareados
@@ -493,8 +518,8 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         # Recencia = ordem do anexo no prontuario (a lista chega ordenada por id
         # decrescente, entao idx MENOR = mais novo). A data escrita no papel entra
         # so como desempate, porque e lida por IA e as vezes falha.
-        _dt = _parse_br_date(a.get("data_solicitacao"))
-        cands_ok.append({"idx": ai, "a": a, "ex": ex, "data": _dt,
+        cands_ok.append({"idx": ai, "a": a, "ex": ex,
+                         "data": _parse_br_date(a.get("data_solicitacao")),
                          "cobre": bool(gto_ex and gto_ex.issubset(ex))})
     # ESCOLHA: a mais recente entre as candidatas — e SO ela e avaliada na cobertura.
     if cands_ok:
@@ -1276,6 +1301,9 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
             return {"gto": g["gto"], "nome": g["nome"], "status": "SEM_MATCH",
                     "janela": _JANELA_DIAS, "dt_dl": time.monotonic() - t0}
         pac = {"nome": g["nome"], "cod_pac": "WL" + accs[0], "accessions": accs}
+    # NASCIMENTO da guia (OdontoPrev /v1/gto/detalhada) -> desempata homonimo no
+    # matching (anexos_do_paciente). Vale nos dois caminhos (analitico e fallback).
+    pac["nascimento"] = g.get("nascimento", "")
     _data_exame = g.get("data_exame_real") or data
     res = _processar_paciente(pg, ctx, pac, wl, tmp, _data_exame)
     pasta = os.path.join(tmp, res["pasta"])
@@ -1476,8 +1504,27 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
            "candidatos": [], "solic_idx": None, "justificativa": None}
     if pasta_dl and os.path.isdir(pasta_dl):
         out["plano_laudo_imgs"] = sorted(os.listdir(pasta_dl))
+    # CHAVE DE BUSCA DO PACIENTE: CPF (exato, indexado no PRORADIS) com FALLBACK
+    # por nome quando o cadastro do PRORADIS nao tem CPF. resolver_anexos garante
+    # que sem CPF o caminho e IDENTICO ao anterior (busca por nome) — a sessao
+    # HTTP de CPF nem chega a ser criada. O CPF vem da descoberta (pac["cpf"],
+    # lado OdontoPrev); enquanto nao vier, cpf="" e cai direto no nome.
+    # SEGURANCA (quando o CPF ligar): a trava final continua sendo o NOME impresso
+    # no documento escolhido (_escolher_solicitacao/_nomes_compat) — um card de
+    # CPF de outra pessoa e barrado la, nunca vira anexo errado.
+    # fonte_match ('cpf'|'nome') sobe pro log -> mede o acerto por CPF na 1a rodada.
+    cpf = (pac.get("cpf") or "").strip()
+    def _anexos_por_cpf():
+        s = requests.Session()
+        s.cookies.update({ck["name"]: ck["value"] for ck in ctx.cookies()})
+        s.headers.update({"User-Agent": "Mozilla/5.0", "X-Requested-With": "XMLHttpRequest",
+                          "Referer": f"{BASE}/patients"})
+        return anexos_por_cpf(s, cpf)
     try:
-        lista = anexos_do_paciente(pg, pac["nome"], pac["cod_pac"])
+        lista, out["fonte_match"] = resolver_anexos(
+            cpf, _anexos_por_cpf,
+            lambda: anexos_do_paciente(pg, pac["nome"], pac["cod_pac"],
+                                       pac.get("nascimento")))
     except Exception as e:
         out["erro"] = f"anexos: {str(e)[:80]}"; return out
     out["anexos"] = len(lista)
@@ -2315,6 +2362,18 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                               for k, v in evs[0].items()}))
             except Exception:
                 g["eventos_portal"] = []
+            # NASCIMENTO do beneficiario -> desempata homonimo no matching por nome
+            # (caso FILIPE). A carteirinha do OdontoPrev NAO e pesquisavel no PRORADIS
+            # (testado 06/08); o nascimento SIM (guia 1981-12-02 = card 02/12/1981).
+            # Vem do /v1/gto/detalhada -> beneficiario.dataNascimento.
+            try:
+                _rd = sess.get(f"{_ODO_API}/v1/gto/detalhada?numeroFicha={g['gto']}",
+                               timeout=20)
+                if _rd.status_code == 200:
+                    _ben = (_rd.json() or {}).get("beneficiario") or {}
+                    g["nascimento"] = str(_ben.get("dataNascimento") or "")
+            except Exception:
+                g["nascimento"] = g.get("nascimento", "")
             # A GUIA VEM DO PORTAL, NAO DO PRONTUARIO. Ate aqui, dentista e CRO da
             # guia so existiam se o PDF dela estivesse anexado no prontuario do
             # PRORADIS. Quando nao estava — caso JOSETE DIAS DE SANTANA, confirmado
