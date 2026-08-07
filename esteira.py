@@ -417,6 +417,63 @@ def _dentista_contradiz(a: dict, dentista_gto: str, gto_txt: str = "") -> bool:
 _JANELA_PAREAMENTO_DIAS = int(os.environ.get("SOLIC_PAREAMENTO_DIAS", "30"))
 
 
+def _data_upload(arquivo):
+    """Data do UPLOAD lida do nome do anexo do PRORADIS (NAME20260731_HHMMSS...).
+    Sinal de MESMO EPISODIO que NAO depende de decifrar a data escrita na folha:
+    folhas do mesmo upload sao do mesmo pedido/visita. Usado como fallback da data
+    lida na uniao/pareamento — MARIA CRISTINA (2 folhas: pan+peri) e NILSON (2 guias)
+    de 31/07 eram manuscritos SEM data e viravam pendencia "pedido nao cobre".
+    PADRAO ESTRITO (8 digitos de data + '_' + hora): nomes soltos tipo
+    'CamScanner_11-01-2025' NAO casam de proposito — evita data falsa que uniria
+    folhas erradas. None quando nao ha carimbo."""
+    import datetime as _dt
+    m = re.search(r"(20\d{2})(\d{2})(\d{2})_\d{4,}", str(arquivo or ""))
+    if not m:
+        return None
+    try:
+        return _dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        return None
+
+
+def _marcar_origem(leituras, cands):
+    """Liga cada leitura ao NOME do anexo de origem (idx -> cands[idx][0]) — o
+    carimbo de upload que _escolher_solicitacao usa como fallback de data.
+    Idempotente: chamado antes de CADA escolha, porque as re-leituras
+    (_reler_nao_classificados) criam dicts novos que nao herdam o campo."""
+    for _lt in (leituras or []):
+        _i = _lt.get("idx") if isinstance(_lt, dict) else None
+        if isinstance(_i, int) and 0 <= _i < len(cands):
+            _lt["arquivo_origem"] = cands[_i][0]
+
+
+def _mesma_dentista(a, ref):
+    """Mesmo PEDIDO = mesma dentista. Compara CRO (so digitos). NAO bloqueia quando
+    algum CRO falta/e curto (ilegivel) — ai a relevancia + o nome ja guardam. So
+    barra quando os DOIS CROs existem (>=4 digitos) e DIFEREM: folhas de dentistas
+    diferentes sao pedidos diferentes e nao se unem (MARIA CRISTINA = mesma dentista,
+    une; NILSON = dentistas diferentes, nao une). Trava do review adversarial 07/08."""
+    ca = re.sub(r"\D", "", str((a or {}).get("cro_lido") or ""))
+    cb = re.sub(r"\D", "", str((ref or {}).get("cro_lido") or ""))
+    if len(ca) < 4 or len(cb) < 4:
+        return True
+    return ca == cb
+
+
+def _resolver_data_carimbo(data_lida, data_exame, hoje):
+    """Ajuste de data da solicitacao antes de anexar. A data CARIMBADA e sempre a do
+    EXAME, nunca 'hoje' — carimbar hoje datava o pedido DEPOIS do exame (glosa:
+    'pedido posterior a realizacao'). A DETECCAO de vencida (>60 dias) segue relativa
+    a hoje (inalterada). Retorna (precisa_manipular, tipo, nova_data_str|None)."""
+    ref = data_exame or hoje
+    nova = ref.strftime("%d/%m/%Y")
+    if not data_lida:
+        return True, "inserir", nova
+    if (hoje - data_lida).days > 60:
+        return True, "atualizar", nova
+    return False, None, None
+
+
 def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
                           detalhe=None, gto_txt="", prontuario_confirmado=False):
     """NÍVEL 2 — o CÓDIGO escolhe a solicitação certa entre as leituras que o Gemini
@@ -518,8 +575,16 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         # Recencia = ordem do anexo no prontuario (a lista chega ordenada por id
         # decrescente, entao idx MENOR = mais novo). A data escrita no papel entra
         # so como desempate, porque e lida por IA e as vezes falha.
-        cands_ok.append({"idx": ai, "a": a, "ex": ex,
-                         "data": _parse_br_date(a.get("data_solicitacao")),
+        #
+        # SEM DATA LIDA -> cai na DATA DE UPLOAD do anexo (nome do arquivo do
+        # PRORADIS). Manuscrito raramente traz data; sem esse fallback a uniao
+        # (JUCILENE) e o pareamento (OZIEL) — que exigem data — nao disparavam e o
+        # pedido em 2 folhas / a guia irma viravam pendencia "pedido nao cobre"
+        # (MARIA CRISTINA, NILSON, 31/07). O upload independe de decifrar a letra:
+        # folhas do MESMO upload sao do mesmo episodio; uploads de DIAS diferentes
+        # nao unem (barreira anti-2023). A data LIDA continua tendo precedencia.
+        _dt = _parse_br_date(a.get("data_solicitacao")) or _data_upload(a.get("arquivo_origem"))
+        cands_ok.append({"idx": ai, "a": a, "ex": ex, "data": _dt,
                          "cobre": bool(gto_ex and gto_ex.issubset(ex))})
     # ESCOLHA: a mais recente entre as candidatas — e SO ela e avaliada na cobertura.
     if cands_ok:
@@ -542,8 +607,22 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         # "A mais recente vence" continua valendo: o que se soma e o pedido mais
         # recente, que pode estar escrito em varias folhas da MESMA DATA. Folha de
         # data anterior fica de fora, como o dono definiu.
-        if recente["data"]:
-            grupo = [c for c in cands_ok if c["data"] == recente["data"]]
+        # TRAVAS DA UNIAO (review adversarial 07/08/26). Unir folhas por data era
+        # perigoso sem elas: juntava folha de OUTRA guia/dentista e a tornava a
+        # justificativa PRIMARIA — upload irreversivel errado (caso NILSON). Só une
+        # quem e plausivelmente O MESMO PEDIDO:
+        #   - recente TOCA a guia (senao nem e o pedido desta guia -> vai pro pareamento);
+        #   - cada folha do grupo TOCA a guia (relevancia): a periapical de outra guia
+        #     nao entra numa guia so de panoramica;
+        #   - MESMA DENTISTA (CRO): pedidos de dentistas diferentes nao se unem;
+        #   - nome forte (_via == 'nome'): folha de nome ilegivel/corroborado nao entra
+        #     na uniao (fecha o vazamento pra pedido de parente).
+        if recente["data"] and (recente["ex"] & gto_ex) and recente["a"].get("_via") == "nome":
+            grupo = [c for c in cands_ok
+                     if c["data"] == recente["data"]
+                     and (c["ex"] & gto_ex)
+                     and c["a"].get("_via") == "nome"
+                     and _mesma_dentista(c["a"], recente["a"])]
             if len(grupo) > 1:
                 uniao = set()
                 for c in grupo:
@@ -566,10 +645,16 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         # de pedido de 2023 para exame de 2026: la a distancia passava de 1000 dias) e
         # exige data LIDA nos dois. Sem data nao da para afirmar que e o mesmo
         # episodio, e no escuro a guia vai para uma pessoa, como sempre.
+        # PAREAMENTO — folha UNICA que cobre outra guia do mesmo paciente. Com o
+        # fallback de upload isto passa a rodar tambem sem data lida, entao exige
+        # NOME FORTE (_via=='nome') na folha pareada: no escuro a guia iria pra uma
+        # pessoa (review 07/08). Nao exige mesma dentista — guias irmas podem ter
+        # dentistas diferentes (NILSON), so nao podem UNIR (isso e a uniao acima).
         if gto_ex and recente.get("data"):
             _pareado = next(
                 (c for c in cands_ok[1:]
                  if c["cobre"] and c["data"]
+                 and c["a"].get("_via") == "nome"
                  and abs((c["data"] - recente["data"]).days) <= _JANELA_PAREAMENTO_DIAS),
                 None)
             if _pareado:
@@ -1493,7 +1578,7 @@ def _motivo_nao_cobre(pede, falta, cn):
 
 
 def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
-             eventos_portal=None, gto_blob=None, gto_mime=""):
+             eventos_portal=None, gto_blob=None, gto_mime="", data_exame=None):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
     manda TUDO pro Gemini escolher a solicitação certa + decidir. NÃO anexa.
     Devolve plano (laudo+imgs sempre; solicitação se a IA confiar) + a decisão.
@@ -1754,6 +1839,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     raise
                 out["leitura_um_a_um"] = True
             leituras = (data.get("anexos") if isinstance(data, dict) else data) or []
+            _marcar_origem(leituras, cands)   # carimbo de upload -> fallback de data
 
             # ── O CÓDIGO ESCOLHE a solicitação (o Gemini só LEU/transcreveu) ──────
             # ALVO DA COBERTURA — precedência explícita:
@@ -1794,6 +1880,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                                                nome_gto=pac["nome"])
                 if _n2:
                     out["releitura_achou"] = _n2
+                _marcar_origem(leituras, cands)   # re-leituras criam dicts novos
                 _det = {}
             idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
                                                     len(cands), out.get("dentista_gto") or "",
@@ -1927,14 +2014,12 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 data_lida_str = dec.get("data_solicitacao")
                 data_lida = _parse_br_date(data_lida_str) if data_lida_str else None
                 hoje = datetime.now().date()
-                
-                precisa_manipular = False
-                tipo = None
-                
-                if not data_lida:
-                    precisa_manipular = True; tipo = 'inserir'
-                elif (hoje - data_lida).days > 60:
-                    precisa_manipular = True; tipo = 'atualizar'
+                # A data CARIMBADA e a do EXAME, nunca 'hoje' (carimbar hoje datava o
+                # pedido DEPOIS do exame = glosa). _data_exame vem do call site
+                # (data_exame_real ou o dia processado).
+                _data_ex = _parse_br_date(data_exame) if data_exame else None
+                precisa_manipular, tipo, _nova_data_carimbo = _resolver_data_carimbo(
+                    data_lida, _data_ex, hoje)
             
                 # Solicitação em PDF: o ajuste de data edita IMAGEM (PIL). Antes um PDF
                 # com data VENCIDA ia direto pra revisão. Agora RENDERIZA a página do
@@ -1960,8 +2045,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                         img = Image.open(io.BytesIO(blob))
                         draw = ImageDraw.Draw(img)
                         largura, altura = img.size
-                        nova_data = hoje.strftime("%d/%m/%Y")
-                        
+                        nova_data = _nova_data_carimbo   # data do EXAME (não 'hoje')
+
                         tamanho_fonte = max(24, int(altura * 0.025)) # Aprox 2.5% da altura da imagem
                         try:
                             font = ImageFont.truetype("arial.ttf", tamanho_fonte)
@@ -2473,7 +2558,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                    review_dir=review_dir, gto=item["gto"],
                                    eventos_portal=item.get("eventos_portal"),
                                    gto_blob=item.get("gto_portal_blob"),
-                                   gto_mime=item.get("gto_portal_mime") or "")
+                                   gto_mime=item.get("gto_portal_mime") or "",
+                                   data_exame=(item.get("data_exame_real") or data))
                 except Exception as e:
                     dec = {"erro": str(e)[:100], "decisao": None, "anexos": 0,
                            "gto_exames": [], "plano_laudo_imgs": [], "plano_solicitacao": None}

@@ -94,6 +94,118 @@ def test_pedido_velho_datado_nao_e_puxado_pela_recente_sem_data():
     assert idx is None
 
 
+# ── Uniao/pareamento de folha SEM DATA por CARIMBO DE UPLOAD (07/08/26) ───────
+# Quando o dentista NAO escreve data (manuscrito), a uniao (JUCILENE) e o
+# pareamento (OZIEL) — que exigiam data LIDA — nao disparavam e o pedido em duas
+# folhas / a guia irma viravam pendencia "pedido nao cobre". Sinal que independe
+# de decifrar a letra: a DATA DE UPLOAD no nome do anexo do PRORADIS
+# (NAME20260731_HHMMSS). Mesmo upload = mesmo episodio. Dias de upload diferentes
+# = episodios diferentes -> NAO unem (barreira anti-KAEL). Casos reais 31/07:
+# MARIA CRISTINA (2 folhas: panoramica + periapical) e NILSON (2 guias).
+
+def _solu(idx, ex, arquivo, data=None, cro="2556", pac="MARIA CRISTINA SOUZA ALVES"):
+    """Leitura de solicitacao COM o nome do arquivo (carimbo de upload)."""
+    return {"idx": idx, "tipo": "solicitacao", "legivel": True, "paciente_lido": pac,
+            "cro_lido": cro, "data_solicitacao": data, "exames_lidos": ex,
+            "arquivo_origem": arquivo}
+
+
+def test_data_upload_parseia_o_carimbo_do_nome():
+    from esteira import _data_upload
+    from datetime import date
+    assert _data_upload("MARIA_CRISTINA_SOUZZA20260731_125551.jpg") == date(2026, 7, 31)
+    assert _data_upload("NILSON_CONCEICAO_20260731_11005131.jpg") == date(2026, 7, 31)
+    assert _data_upload("CamScanner_11-01-2025_09.08.pdf") is None   # sem carimbo padrao
+    assert _data_upload(None) is None
+
+
+def test_maria_cristina_folhas_do_mesmo_upload_unem():
+    # 2 folhas SEM data lida, do MESMO upload (12:55:51 e 12:56:16). Uma pede
+    # panoramica, outra periapical; a guia pede as duas. Unem pelo upload e cobrem.
+    leituras = [_solu(0, ["panoramica"], "MARIA20260731_125551.jpg"),
+                _solu(1, ["periapical"], "MARIA20260731_125616.jpg")]
+    idx, _a, motivo = _escolher_solicitacao(leituras, "MARIA CRISTINA SOUZA ALVES",
+                                            {"panoramica", "periapical"}, 2)
+    assert idx is not None and motivo is None
+
+
+def test_folhas_sem_data_de_uploads_de_dias_diferentes_nao_unem():
+    # ANTI-KAEL: sem data lida, mas uploads em DIAS diferentes (2026 x 2023) ->
+    # episodios diferentes -> NAO unem, mesmo sem data no papel.
+    leituras = [_solu(0, ["panoramica"], "MARIA20260731_125551.jpg"),
+                _solu(1, ["periapical"], "MARIA20231213_100000.jpg")]
+    idx, _a, motivo = _escolher_solicitacao(leituras, "MARIA CRISTINA SOUZA ALVES",
+                                            {"panoramica", "periapical"}, 2)
+    assert idx is None
+
+
+# ── Carimbo de data usa a DATA DO EXAME, nunca 'hoje' (07/08/26) ──────────────
+# O codigo carimbava datetime.now() na solicitacao sem data. Exame 31/07 rodado
+# em 07/08 -> pedido datava DEPOIS do exame = risco de glosa. Deve carimbar a data
+# do EXAME. A DETECCAO de vencida (>60 dias) segue relativa a hoje (inalterada).
+
+def test_carimbo_usa_data_do_exame_nao_hoje():
+    from esteira import _resolver_data_carimbo
+    from datetime import date
+    precisa, tipo, nova = _resolver_data_carimbo(None, date(2026, 7, 31), date(2026, 8, 7))
+    assert precisa and tipo == "inserir" and nova == "31/07/2026"
+
+
+def test_carimbo_vencida_reescreve_com_data_do_exame():
+    from esteira import _resolver_data_carimbo
+    from datetime import date
+    # data lida 98 dias antes de hoje -> vencida -> reescreve com a data do EXAME
+    precisa, tipo, nova = _resolver_data_carimbo(date(2026, 5, 1), date(2026, 7, 31),
+                                                 date(2026, 8, 7))
+    assert precisa and tipo == "atualizar" and nova == "31/07/2026"
+
+
+def test_carimbo_data_recente_nao_mexe():
+    from esteira import _resolver_data_carimbo
+    from datetime import date
+    precisa, tipo, nova = _resolver_data_carimbo(date(2026, 7, 30), date(2026, 7, 31),
+                                                 date(2026, 8, 7))
+    assert precisa is False and tipo is None
+
+
+# ── TRAVAS da uniao/pareamento (review adversarial, 07/08/26) ─────────────────
+# A uniao por upload PRECISA de travas, senao junta folha errada e a torna a
+# justificativa PRIMARIA de uma guia — regressao que vira upload irreversivel:
+#   (1) RELEVANCIA: cada folha do grupo tem de tocar os exames da guia;
+#   (2) MESMA DENTISTA (CRO): folhas de dentistas diferentes sao pedidos
+#       diferentes (MARIA CRISTINA=mesma dentista une; NILSON=diferentes NAO);
+#   (3) prefere folha unica que cobre (pareamento) a unir.
+
+def test_uniao_bloqueia_folha_irrelevante():
+    # Guia SO de panoramica. Recente = periapical (NAO toca a guia); a de panoramica
+    # cobre sozinha. NAO pode unir a periapical na guia de panoramica -> pareia com a
+    # de panoramica. (Regressao do CRITICO do review: caso NILSON.)
+    leituras = [_solu(0, ["periapical"], "X20260731_120000.jpg"),
+                _solu(1, ["panoramica"], "X20260731_120100.jpg")]
+    idx, a, motivo = _escolher_solicitacao(leituras, "MARIA CRISTINA SOUZA ALVES",
+                                           {"panoramica"}, 2)
+    assert a is not None and a.get("exames_lidos") == ["panoramica"]
+
+
+def test_uniao_bloqueia_dentistas_diferentes():
+    # Duas folhas que juntas cobririam {pan,peri}, MESMO upload, mas DENTISTAS
+    # DIFERENTES (CRO 1111 x 2222) -> pedidos diferentes -> NAO unem -> pendencia.
+    leituras = [_solu(0, ["panoramica"], "X20260731_120000.jpg", cro="1111"),
+                _solu(1, ["periapical"], "X20260731_120100.jpg", cro="2222")]
+    idx, _a, motivo = _escolher_solicitacao(leituras, "MARIA CRISTINA SOUZA ALVES",
+                                            {"panoramica", "periapical"}, 2)
+    assert idx is None
+
+
+def test_maria_cristina_continua_unindo_mesma_dentista():
+    # GARANTIA: o caso bom (2 folhas, MESMA dentista, ambas relevantes) segue unindo.
+    leituras = [_solu(0, ["panoramica"], "MARIA20260731_125551.jpg", cro="6569"),
+                _solu(1, ["periapical"], "MARIA20260731_125616.jpg", cro="6569")]
+    idx, _a, motivo = _escolher_solicitacao(leituras, "MARIA CRISTINA SOUZA ALVES",
+                                            {"panoramica", "periapical"}, 2)
+    assert idx is not None and motivo is None
+
+
 # ── Documentação x componentes (Bug 2) ───────────────────────────────────────
 # GTO pede "Doc Orto Compl" -> {documentacao}. A solicitação escreve os
 # componentes. O issubset falhava e reprovava pedido CORRETO e mais completo que
