@@ -419,7 +419,15 @@ def extrair_unidade(pw, conta, label, dia_str, destino_dir, checar_recursos=True
     """Extrai glosas de uma unidade: gera/parseia o PDF, checa o estado de recurso
     de cada guia distinta e (opcional) cruza com o Demonstrativo de Pagamento
     (resultado financeiro/recurso). Retorna {conta,label,periodo,eventos}."""
-    user, pwd = conta, get_credentials_odonto()[1]
+    # Login POR-CONTA: user = codigo da unidade, senha = a cadastrada por-conta
+    # (db.get_portal_senha). A ODONTOPREV_PASSWORD do .env esta stale e o login
+    # falhava ("campo de senha ainda visivel") — o faturamento ja usa a por-conta.
+    try:
+        import db as _db
+        _sp = _db.get_portal_senha(conta)
+    except Exception:
+        _sp = None
+    user, pwd = conta, (_sp or get_credentials_odonto()[1])
     os.makedirs(destino_dir, exist_ok=True)
     pdf_path = os.path.join(destino_dir, f"glosa_{conta}.pdf")
 
