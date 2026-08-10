@@ -103,6 +103,26 @@ def _faturadas_do_dia(dia: str, contas=None) -> list:
     return list(por_gto.values())
 
 
+def _ler_anexos_estavel(gp, tentativas=10, intervalo_ms=600):
+    """Le os anexos de uma guia esperando a LISTA renderizar. Uma guia faturada tem
+    SEMPRE ao menos a copia da GTO (img_ASSINADA); uma leitura VAZIA e quase sempre a
+    lista ainda carregando, nao ausencia real. Re-le ate duas leituras consecutivas
+    baterem e nao-vazias (estavel) — evita o FALSO AUSENTE (caso MARCOS BOJCO/
+    195763490: OK numa rodada, 'portal=[]' na seguinte, minutos depois)."""
+    from extrator_odontoprev import _anexos_nomes
+    anterior = set()
+    for _ in range(tentativas):
+        nomes = set(_anexos_nomes(gp))
+        if nomes and nomes == anterior:
+            return nomes
+        anterior = nomes
+        try:
+            gp.wait_for_timeout(intervalo_ms)
+        except Exception:
+            break
+    return anterior
+
+
 def auditar_dia(dia: str, contas=None, log=print) -> list:
     """Driver SÓ-LEITURA: abre no OdontoPrev cada guia que faturamos no dia e
     confere se nossos arquivos estão lá. NÃO anexa nada.
@@ -140,10 +160,26 @@ def auditar_dia(dia: str, contas=None, log=print) -> list:
             try:
                 abrir_consultar_gtos(page)
                 consultar_periodo(page, dia)
+            except Exception as e:
+                # Falha de MENU/PERIODO é da sessão desta conta, não das guias.
+                # Marca as guias desta conta para reauditar e SEGUE para a próxima
+                # — antes, uma conta com menu instável (Tancredo) abortava o dia
+                # inteiro e derrubava até as guias já conferidas de outra unidade.
+                log(f"  [ERRO_MENU] {conta}: {str(e)[:70]} — guias marcadas p/ reauditar")
+                for g in guias:
+                    resultados.append({**g, "status": "ERRO_ABRIR",
+                                       "faltando": [], "no_portal": [],
+                                       "portal_nomes": [], "detalhe": ("menu: " + str(e))[:100]})
+                try:
+                    b.close()
+                except Exception:
+                    pass
+                continue
+            try:
                 for g in guias:
                     try:
                         gp = abrir_gto(page, g["gto"])
-                        nomes = sorted(_anexos_nomes(gp))
+                        nomes = sorted(_ler_anexos_estavel(gp))
                         try:
                             gp.close()
                         except Exception:
@@ -154,7 +190,7 @@ def auditar_dia(dia: str, contas=None, log=print) -> list:
                         try:
                             consultar_periodo(page, dia)
                             gp = abrir_gto(page, g["gto"])
-                            nomes = sorted(_anexos_nomes(gp))
+                            nomes = sorted(_ler_anexos_estavel(gp))
                             try:
                                 gp.close()
                             except Exception:
@@ -165,6 +201,23 @@ def auditar_dia(dia: str, contas=None, log=print) -> list:
                                                "portal_nomes": [], "detalhe": str(e2)[:80]})
                             continue
                     v = auditar_guia(g["esperados"], nomes)
+                    if v["status"] in ("AUSENTE", "PARCIAL"):
+                        # AUSENTE/PARCIAL manda a operacao re-anexar — nao pode ser
+                        # falso. Leitura vazia/parcial costuma ser a lista ainda
+                        # renderizando (caso MARCOS BOJCO). Reabre, re-le estavel e
+                        # fica com a MELHOR leitura; so mantem o alarme se persistir.
+                        try:
+                            gp2 = abrir_gto(page, g["gto"])
+                            nomes2 = sorted(_ler_anexos_estavel(gp2))
+                            try:
+                                gp2.close()
+                            except Exception:
+                                pass
+                            v2 = auditar_guia(g["esperados"], nomes2)
+                            if len(v2["no_portal"]) >= len(v["no_portal"]):
+                                v, nomes = v2, nomes2
+                        except Exception:
+                            pass
                     item = {**g, **v, "portal_nomes": nomes}
                     marca = {"OK": "  ok", "PARCIAL": "!!PARCIAL", "AUSENTE": "!!!AUSENTE",
                              "SEM_PLANO": "  s/plano"}.get(v["status"], v["status"])

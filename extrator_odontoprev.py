@@ -203,8 +203,63 @@ def login_odonto(pw, user: str, password: str):
 
 
 # ── Navegação até Consultar GTOs ────────────────────────────────────────────────
+def _fechar_avisos(page):
+    """Fecha modais de aviso que aparecem apos o login e COBREM o menu (Vuetify
+    .v-dialog). O 'Atencao! Pacientes inativos' do Tancredo (08/08) bloqueava TODO
+    o menu: o submenu vinha com itens VAZIOS porque o overlay cobria a tela, e a
+    navegacao (faturamento E auditoria) morria em 'Consultar GTOs nao encontrado'.
+    Clica 'OK, CIENTE'/'Ciente'/'OK'/'Fechar'/'Entendi', com Escape de reserva.
+    Loop curto porque pode haver mais de um aviso empilhado (ex.: Comunicados)."""
+    rot = re.compile(r"^\s*(ok,?\s*ciente|ciente|ok|entendi|fechar|continuar|"
+                     r"concordo|prosseguir)\s*$", re.I)
+    # O modal aparece ALGUNS SEGUNDOS APOS o login (o dashboard hidrata depois que
+    # o campo de senha some, gatilho do retorno de login_odonto). Por isso NAO basta
+    # olhar uma vez: observa ate ~10s o modal surgir; some assim que ele for fechado
+    # ou apos ~4s sem nunca ver modal (contas sem aviso nao pagam a espera toda).
+    fechou = False
+    for i in range(20):
+        dialogs = []
+        for d in page.query_selector_all(".v-dialog, [role=dialog]"):
+            try:
+                if d.is_visible() and (d.inner_text() or "").strip():
+                    dialogs.append(d)
+            except Exception:
+                pass
+        if not dialogs:
+            if fechou or i >= 8:
+                return
+            page.wait_for_timeout(500)
+            continue
+        clicou = False
+        for d in dialogs:
+            for btn in d.query_selector_all("button, .v-btn, a"):
+                try:
+                    if btn.is_visible() and rot.match(btn.inner_text() or ""):
+                        try:
+                            btn.click()
+                        except Exception:
+                            btn.click(force=True)
+                        clicou = True
+                        fechou = True
+                        print("[_odonto] aviso pos-login fechado", flush=True)
+                        page.wait_for_timeout(800)
+                        break
+                except Exception:
+                    continue
+            if clicou:
+                break
+        if not clicou:                      # nenhum botao rotulado — tenta Escape
+            try:
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
+        page.wait_for_timeout(300)
+
+
 def abrir_consultar_gtos(page):
     """Abre Atendimento (mouse real, pois clique é interceptado) -> Consultar GTOs."""
+    _fechar_avisos(page)          # tira modais que cobrem o menu (Pacientes inativos)
     at = None
     for _ in range(20):
         for el in page.query_selector_all(".c-menu-itens.c-subMenu"):
@@ -217,16 +272,29 @@ def abrir_consultar_gtos(page):
     if not at:
         raise RuntimeError("Menu 'Atendimento' não apareceu.")
     box = at.bounding_box()
-    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-    page.wait_for_timeout(700)
-    page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
-    page.wait_for_timeout(1800)
-    for el in page.query_selector_all("li.a-item-submenu"):
-        if "CONSULTAR GTO" in (el.inner_text() or "").upper():
-            el.click()
+    cx = box["x"] + box["width"] / 2
+    cy = box["y"] + box["height"] / 2
+    # O flyout do 'Atendimento' as vezes NAO hidrata no primeiro clique (caso
+    # Tancredo/04/08: 3 logins seguidos falharam so aqui, e a auditoria perdia o
+    # dia inteiro). Re-hover/re-clica ate o item aparecer. A 1a tentativa mantem o
+    # timing original — as demais so entram quando o clique unico teria falhado.
+    alvo = None
+    for tentativa in range(6):
+        page.mouse.move(cx, cy)
+        page.wait_for_timeout(700)
+        page.mouse.click(cx, cy)
+        page.wait_for_timeout(1800 + tentativa * 500)
+        for el in page.query_selector_all("li.a-item-submenu"):
+            if "CONSULTAR GTO" in (el.inner_text() or "").upper():
+                alvo = el
+                break
+        if alvo:
             break
-    else:
+        page.mouse.move(cx, cy + 220)      # sai do hover para resetar o flyout
+        page.wait_for_timeout(400)
+    if not alvo:
         raise RuntimeError("Item 'Consultar GTOs' não encontrado no submenu.")
+    alvo.click()
     try:
         page.wait_for_load_state("networkidle", timeout=30000)
     except Exception:
