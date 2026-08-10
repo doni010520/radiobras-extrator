@@ -1383,7 +1383,15 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
                 if not w.get("accession"):
                     continue
                 wn = normaliza_nome(w.get("nome", ""))
-                if wn == nn_alvo or _prefixo_casa(wn, nn_alvo) or _prefixo_casa(nn_alvo, wn):
+                # exato | prefixo | _nomes_compat: o ultimo cobre o NOME DO MEIO a
+                # mais/menos entre guia e cadastro (MATEUS DA SILVA _DE NOVAES_ x
+                # MATEUS DA SILVA _MONTEIRO_ DE NOVAES) — que quebrava o prefixo. E
+                # SEGURO: _nomes_compat exige >=2 tokens significativos em comum e o
+                # token divergente TEM de ser grafia (rejeita irmao LUCAS/sobrenome
+                # final diferente); alem disso, dois pacientes distintos casando ->
+                # AMBIGUO (nao chuta) e o nascimento desempata a jusante.
+                if (wn == nn_alvo or _prefixo_casa(wn, nn_alvo) or _prefixo_casa(nn_alvo, wn)
+                        or _nomes_compat(w.get("nome", ""), g["nome"])):
                     out.setdefault(wn, []).append(w["accession"])
             return out
 

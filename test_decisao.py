@@ -307,6 +307,21 @@ def test_ocr_grudado_tokens_repetidos_nao_quebra():
     assert _nomes_compat("ANAANA SOUZA", "ANA ANA SOUZA")
 
 
+def test_nome_do_meio_a_mais_no_cadastro_casa_mas_irmao_nao():
+    # Base do fix de _casam_por_paciente (matching guia<->worklist do PRORADIS):
+    # a guia traz "MATEUS DA SILVA DE NOVAES" e o cadastro "MATEUS DA SILVA
+    # MONTEIRO DE NOVAES" (nome do meio a mais). O prefixo quebra; _nomes_compat
+    # casa (mesma pessoa). Mas NAO pode afrouxar a trava de irmao/sobrenome.
+    assert _nomes_compat("MATEUS DA SILVA DE NOVAES",
+                         "MATEUS DA SILVA MONTEIRO DE NOVAES")      # subset -> mesmo
+    assert _nomes_compat("MARIA SILVA SANTOS", "MARIA SILVA SANTOS COSTA")
+    assert not _nomes_compat("MATEUS DA SILVA DE NOVAES",
+                             "LUCAS DA SILVA DE NOVAES")            # irmao
+    assert not _nomes_compat("MATEUS DA SILVA DE NOVAES",
+                             "MATEUS DA SILVA DE COSTA")            # sobrenome final difere
+    assert not _nomes_compat("MATEUS DA SILVA", "MATEUS DA COSTA")  # so 1 comum
+
+
 # ── Exame particular / procedência do accession (item 3) ────────────────────
 
 def _pasta(tmp_path, nomes):
