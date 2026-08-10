@@ -197,6 +197,30 @@ def test_uniao_bloqueia_dentistas_diferentes():
     assert idx is None
 
 
+def test_carimbar_imagem_inserir_desenha():
+    # helper do carimbo (N3): 'inserir' escreve a data numa imagem sem data.
+    from esteira import _carimbar_imagem
+    from PIL import Image
+    import io
+    buf = io.BytesIO(); Image.new("RGB", (300, 400), "white").save(buf, format="PNG")
+    blob = buf.getvalue()
+    novo, editou = _carimbar_imagem(blob, "31/07/2026", "inserir", None, None)
+    assert editou is True and novo != blob   # desenhou algo
+
+
+def test_carimbar_imagem_atualizar_sem_box_nao_desenha():
+    # 'atualizar' precisa saber ONDE a data velha esta; sem box e sem re-leitor,
+    # nao desenha (nao inventa posicao pra apagar) — fail-safe.
+    from esteira import _carimbar_imagem
+    from PIL import Image
+    import io
+    buf = io.BytesIO(); Image.new("RGB", (300, 400), "white").save(buf, format="PNG")
+    blob = buf.getvalue()
+    novo, editou = _carimbar_imagem(blob, "31/07/2026", "atualizar", None, None,
+                                    reler_box_fn=lambda: None)
+    assert editou is False
+
+
 def test_maria_cristina_continua_unindo_mesma_dentista():
     # GARANTIA: o caso bom (2 folhas, MESMA dentista, ambas relevantes) segue unindo.
     leituras = [_solu(0, ["panoramica"], "MARIA20260731_125551.jpg", cro="6569"),

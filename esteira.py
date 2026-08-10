@@ -474,6 +474,59 @@ def _resolver_data_carimbo(data_lida, data_exame, hoje):
     return False, None, None
 
 
+def _carimbar_imagem(blob, nova_data, tipo, box_data, box_assinatura, reler_box_fn=None):
+    """Desenha nova_data numa IMAGEM de solicitacao. 'inserir' escreve na area de
+    assinatura (fallback: centro-inferior); 'atualizar' apaga a data velha (box_data,
+    retangulo branco) e reescreve. reler_box_fn() -> box_data quando falta na
+    'atualizar'. Retorna (blob_novo, True) se desenhou; (blob, False) se nao deu
+    (ex.: atualizar sem saber ONDE — nao inventa posicao). Usado na folha PRINCIPAL
+    E em CADA folha EXTRA da uniao (N3): antes so a principal era carimbada e a folha
+    extra manuscrita sem data subia SEM data (risco de glosa 'documento sem data')."""
+    try:
+        img = Image.open(io.BytesIO(blob))
+        draw = ImageDraw.Draw(img)
+        largura, altura = img.size
+        tamanho = max(24, int(altura * 0.025))
+        try:
+            font = ImageFont.truetype("arial.ttf", tamanho)
+        except Exception:
+            try:
+                font = ImageFont.truetype("LiberationSans-Regular.ttf", tamanho)
+            except Exception:
+                font = ImageFont.load_default()
+        _bd = _box4(box_data)
+        if tipo == "atualizar" and not _bd and reler_box_fn:
+            try:
+                _bd = reler_box_fn()
+            except Exception:
+                _bd = None
+        if tipo == "atualizar" and _bd:
+            ymin, xmin, ymax, xmax = _bd
+            draw.rectangle([int((xmin / 1000) * largura), int((ymin / 1000) * altura),
+                            int((xmax / 1000) * largura), int((ymax / 1000) * altura)], fill="white")
+            draw.text((int((xmin / 1000) * largura), int((ymin / 1000) * altura)),
+                      nova_data, fill="black", font=font)
+        elif tipo == "inserir":
+            _ba = _box4(box_assinatura)
+            if _ba:
+                ymin_a, xmin_a, ymax_a, xmax_a = _ba
+                pos_x = int(((xmin_a + xmax_a) / 2 / 1000) * largura)
+                pos_y = int((ymax_a / 1000) * altura) + 4
+            else:
+                pos_x = int(largura * 0.50)
+                pos_y = int(altura * 0.85)
+            draw.text((pos_x, pos_y), nova_data, fill="black", font=font)
+        else:
+            return blob, False
+        out = io.BytesIO()
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        img.save(out, format=img.format if img.format else "JPEG")
+        return out.getvalue(), True
+    except Exception:
+        return blob, False
+
+
 def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
                           detalhe=None, gto_txt="", prontuario_confirmado=False):
     """NÍVEL 2 — o CÓDIGO escolhe a solicitação certa entre as leituras que o Gemini
@@ -2115,23 +2168,50 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 out["plano_solicitacao"] = fn_candidato
                 out["solic_idx"] = idx
                 if pasta_dl and os.path.isdir(pasta_dl):
-                    sname = "SOLICITACAO_" + (re.sub(r"[^A-Za-z0-9._-]+", "_", fn_candidato) or "solic")
+                    # idx no nome -> nunca colide com folha extra (review N3): o upload
+                    # junta os SOLICITACAO_* do disco pelo NOME; nomes iguais se
+                    # sobrescreviam e uma folha sumia do envio (irreversivel).
+                    sname = f"SOLICITACAO_{idx}__" + (re.sub(r"[^A-Za-z0-9._-]+", "_", fn_candidato) or "solic")
                     with open(os.path.join(pasta_dl, sname), "wb") as f:
                         f.write(blob)
                     # PEDIDO EM VARIAS FOLHAS: quando o pedido mais recente veio
-                    # dividido (mesma data), TODAS as folhas sobem — senao a guia e
-                    # anexada com metade do pedido. Caso JUCILENE (GTO 195371168).
-                    # A folha extra vai como ESTA, sem ajuste de data: ela tem a
-                    # mesma data da principal, que ja foi tratada acima.
+                    # dividido (mesma data/upload), TODAS as folhas sobem — senao a
+                    # guia e anexada com metade do pedido. Caso JUCILENE/MARIA CRISTINA.
+                    # N3 (review 07/08): cada folha EXTRA tambem recebe o carimbo da
+                    # DATA DO EXAME quando nao tem data lida — antes subia SEM data e a
+                    # linha dela glosava por "documento sem data". Usa a caixa da
+                    # PROPRIA folha (box da leitura dela, ou _reler_box_data(idx)).
                     _extras_idx = [i for i in (_det.get("idxs") or []) if i != idx]
                     for _ix in _extras_idx:
                         try:
                             _fn2, _mm2, _bl2, _sv2 = cands[_ix]
-                            _sn2 = "SOLICITACAO_" + (
+                            _aex = next((l for l in leituras
+                                         if isinstance(l, dict) and l.get("idx") == _ix), {})
+                            _pr, _tp, _nv = _resolver_data_carimbo(
+                                _parse_br_date(_aex.get("data_solicitacao")), _data_ex, hoje)
+                            if _pr:
+                                if "image" not in (_mm2 or "").lower():
+                                    _rend = _pdf_para_imagem(_bl2)
+                                    if _rend:
+                                        _bl2, _mm2 = _rend
+                                        _fn2 = re.sub(r"\.[A-Za-z0-9]+$", "", _fn2) + ".png"
+                                if "image" in (_mm2 or "").lower():
+                                    _bl3, _ed = _carimbar_imagem(
+                                        _bl2, _nv, _tp, _aex.get("box_data"),
+                                        _aex.get("box_assinatura"),
+                                        lambda i=_ix: _reler_box_data(gem, cands, i)[0])
+                                    if _ed:
+                                        _bl2 = _bl3
+                            _sn2 = f"SOLICITACAO_{_ix}__" + (
                                 re.sub(r"[^A-Za-z0-9._-]+", "_", _fn2) or f"solic{_ix}")
                             with open(os.path.join(pasta_dl, _sn2), "wb") as f:
                                 f.write(_bl2)
-                        except Exception:
+                        except Exception as _e2:
+                            # nao engolir em silencio: registra a folha extra que
+                            # falhou (review N3, Finding 2) — senao a guia subia com
+                            # metade do pedido sem rastro.
+                            out.setdefault("extras_falha", []).append(
+                                f"{_ix}:{str(_e2)[:40]}")
                             continue
                     if _extras_idx:
                         out["solicitacoes_extras"] = len(_extras_idx)
