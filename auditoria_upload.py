@@ -1,0 +1,197 @@
+"""
+auditoria_upload.py — Camada 2 do QA de faturamento.
+
+Confere, guia por guia, se os documentos que O ROBÔ registrou ter anexado estão
+REALMENTE na guia do OdontoPrev. Pega a falha SILENCIOSA: a anexação reportou
+"OK", mas o arquivo não persistiu (JWT expirado no meio do run, colisão de nome,
+portal que aceitou e descartou) — o tipo de coisa que vira glosa "documentação
+ausente" e que, sem esta conferência, ninguém enxerga até a operadora glosar.
+
+Duas partes:
+  - auditar_guia() / _tipos_nossos()  -> veredito PURO e testável
+    (test_auditoria.py). Não abre navegador, não toca no banco.
+  - auditar_dia()                     -> driver SÓ-LEITURA do portal. Puxa do
+    banco as guias que faturamos no dia, abre cada uma no OdontoPrev e confere.
+    NÃO anexa, NÃO altera nada — apenas lê os anexos.
+
+Nomes deterministas da automação (prova de autoria), iguais aos usados em todo o
+pipeline (ver _ja_anexado_por_nos em fechar_dia.py e _chave_anexo em
+extrator_odontoprev.py): LAUDO_*, ENTREGA_*, SOLICITACAO_*. Anexo manual usa
+outro nome e NÃO casa aqui — por isso "AUSENTE" significa mesmo "não subiu",
+não "subiu com outro nome".
+"""
+
+
+def _tipo_nosso(nome: str):
+    """Tipo do arquivo NOSSO ('laudo' | 'img' | 'solic'), ou None se não é nosso.
+
+    Presença é LENIENTE (startswith): um falso "AUSENTE" alarma à toa e mina a
+    confiança na auditoria, então só marcamos ausência quando NADA nosso casa.
+    """
+    u = str(nome or "").strip().upper()
+    if u.startswith("LAUDO_"):
+        return "laudo"
+    if u.startswith("ENTREGA_"):
+        return "img"
+    if u.startswith("SOLICITACAO_"):
+        return "solic"
+    return None
+
+
+def _tipos_nossos(nomes) -> set:
+    """Conjunto de tipos de arquivo nosso presentes numa lista de nomes."""
+    return {t for t in (_tipo_nosso(n) for n in (nomes or [])) if t}
+
+
+def auditar_guia(esperados, portal) -> dict:
+    """Veredito de UMA guia que o robô diz ter faturado.
+
+    esperados: nomes que o robô REGISTROU ter anexado (banco: arquivos_plano +
+        solicitacao). É a nossa afirmação — o que deveria estar na guia.
+    portal:    nomes dos anexos que ESTÃO na guia agora (lidos do OdontoPrev).
+
+    Retorna {status, faltando, esperava, no_portal}:
+      OK        — tudo que dissemos ter anexado está lá.
+      PARCIAL   — parte chegou, parte sumiu (ex.: subiu a solicitação, o laudo não).
+      AUSENTE   — dissemos ter anexado, mas NADA nosso está na guia (falha silenciosa).
+      SEM_PLANO — o banco não registrou o que anexamos E não há arquivo nosso na
+                  guia: não dá para afirmar; revisar à mão (execução antiga).
+    """
+    esperava = _tipos_nossos(esperados)
+    no_portal = _tipos_nossos(portal)
+    if not esperava:
+        # Banco não diz o que anexamos. Se há QUALQUER arquivo nosso na guia, o
+        # upload aconteceu (OK); se não, não temos como afirmar (SEM_PLANO).
+        status = "OK" if no_portal else "SEM_PLANO"
+        return {"status": status, "faltando": [],
+                "esperava": [], "no_portal": sorted(no_portal)}
+    faltando = sorted(esperava - no_portal)
+    if not faltando:
+        status = "OK"
+    elif esperava & no_portal:
+        status = "PARCIAL"
+    else:
+        status = "AUSENTE"
+    return {"status": status, "faltando": faltando,
+            "esperava": sorted(esperava), "no_portal": sorted(no_portal)}
+
+
+def _faturadas_do_dia(dia: str, contas=None) -> list:
+    """Guias que O ROBÔ faturou (faturado=True) num dia, com o que ele registrou
+    ter anexado. Só execuções REAIS (dry não conta); a mais recente por GTO vence.
+
+    Retorna [{conta, gto, paciente, esperados[]}].
+    """
+    import db
+    with db.SessionLocal() as s:
+        q = (s.query(db.Execucao)
+             .filter(db.Execucao.dia == dia, db.Execucao.dry_run == False)  # noqa: E712
+             .order_by(db.Execucao.criado_em.asc()))
+        execs = [e for e in q.all() if not contas or e.conta in contas]
+        por_gto = {}
+        for e in execs:
+            for it in e.itens:
+                if not it.faturado:
+                    continue
+                nomes = []
+                if it.arquivos_plano:
+                    nomes += [x.strip() for x in it.arquivos_plano.split(",") if x.strip()]
+                if it.solicitacao:
+                    nomes.append(str(it.solicitacao).strip())
+                por_gto[str(it.gto)] = {"conta": e.conta, "gto": str(it.gto),
+                                        "paciente": it.paciente, "esperados": nomes}
+    return list(por_gto.values())
+
+
+def auditar_dia(dia: str, contas=None, log=print) -> list:
+    """Driver SÓ-LEITURA: abre no OdontoPrev cada guia que faturamos no dia e
+    confere se nossos arquivos estão lá. NÃO anexa nada.
+
+    Retorna a lista de {conta, gto, paciente, status, faltando, no_portal,
+    portal_nomes, esperados}. Uma falha de login/abertura vira status próprio
+    (ERRO_LOGIN / ERRO_ABRIR) — nunca derruba a auditoria inteira.
+    """
+    from playwright.sync_api import sync_playwright
+    import db
+    from extrator_odontoprev import (login_odonto, abrir_consultar_gtos,
+                                     consultar_periodo, abrir_gto, _anexos_nomes)
+
+    alvos = _faturadas_do_dia(dia, contas)
+    por_conta = {}
+    for a in alvos:
+        por_conta.setdefault(a["conta"], []).append(a)
+    if not alvos:
+        log(f"[auditoria] nenhuma guia faturada por nós em {dia} (contas={contas})")
+        return []
+
+    resultados = []
+    with sync_playwright() as pw:
+        for conta, guias in por_conta.items():
+            log(f"[auditoria] {conta}: {len(guias)} guia(s) faturada(s) a conferir")
+            senha = db.get_portal_senha(conta)
+            try:
+                b, _c, page = login_odonto(pw, conta, senha)
+            except Exception as e:
+                for g in guias:
+                    resultados.append({**g, "status": "ERRO_LOGIN",
+                                       "faltando": [], "no_portal": [],
+                                       "portal_nomes": [], "detalhe": str(e)[:100]})
+                continue
+            try:
+                abrir_consultar_gtos(page)
+                consultar_periodo(page, dia)
+                for g in guias:
+                    try:
+                        gp = abrir_gto(page, g["gto"])
+                        nomes = sorted(_anexos_nomes(gp))
+                        try:
+                            gp.close()
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        # tenta reconsultar o período uma vez (a tabela pode ter
+                        # sido reciclada pelo Vuetify) antes de desistir da guia
+                        try:
+                            consultar_periodo(page, dia)
+                            gp = abrir_gto(page, g["gto"])
+                            nomes = sorted(_anexos_nomes(gp))
+                            try:
+                                gp.close()
+                            except Exception:
+                                pass
+                        except Exception as e2:
+                            resultados.append({**g, "status": "ERRO_ABRIR",
+                                               "faltando": [], "no_portal": [],
+                                               "portal_nomes": [], "detalhe": str(e2)[:80]})
+                            continue
+                    v = auditar_guia(g["esperados"], nomes)
+                    item = {**g, **v, "portal_nomes": nomes}
+                    marca = {"OK": "  ok", "PARCIAL": "!!PARCIAL", "AUSENTE": "!!!AUSENTE",
+                             "SEM_PLANO": "  s/plano"}.get(v["status"], v["status"])
+                    log(f"  [{marca}] GTO {g['gto']} {(g.get('paciente') or '')[:28]:28} "
+                        f"esperava={v['esperava']} portal={v['no_portal']} "
+                        f"faltando={v['faltando']}")
+                    resultados.append(item)
+            finally:
+                try:
+                    b.close()
+                except Exception:
+                    pass
+    return resultados
+
+
+def resumir(resultados: list) -> dict:
+    """Conta os vereditos por status. AUSENTE/PARCIAL = agir; o resto é confirmação."""
+    por = {}
+    for r in resultados:
+        por[r["status"]] = por.get(r["status"], 0) + 1
+    return {
+        "total": len(resultados),
+        "ok": por.get("OK", 0),
+        "parcial": por.get("PARCIAL", 0),
+        "ausente": por.get("AUSENTE", 0),
+        "sem_plano": por.get("SEM_PLANO", 0),
+        "erro_login": por.get("ERRO_LOGIN", 0),
+        "erro_abrir": por.get("ERRO_ABRIR", 0),
+        "acao": [r for r in resultados if r["status"] in ("AUSENTE", "PARCIAL")],
+    }
