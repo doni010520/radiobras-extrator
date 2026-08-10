@@ -72,7 +72,12 @@ _CANON = [
     (r"seios?\s*da\s*face", "seios_da_face"),
     # \btc\b com fronteira DOS DOIS LADOS: sem ela, "etc" virava "tomografia" e a
     # solicitacao passava a "cobrir" um exame que ninguem pediu.
-    (r"tomograf|\btc\b|cone beam|feixe c", "tomografia"),
+    # "tomo comput"/"tomo. computad": ABREVIACAO do portal OdontoPrev no evento do
+    # GTO ("Tomo Computad" — casos FRANCIS/ANDRE, cone-beam). Sem ela, `tomograf`
+    # nao casava ("tomo" != "tomograf"), o exame de referencia da guia vinha VAZIO e
+    # caia em "nao consegui ler o que a guia autoriza" — falha nossa, nao da clinica.
+    # \btomo exige fronteira p/ nao casar "atomo"; exige "comput" depois p/ ser especifico.
+    (r"tomograf|\btomo\.?\s*comput|\btc\b|cone beam|feixe c", "tomografia"),
     # "Fotos intra e extras bucais" é como o dentista escreve — `fotograf` não pega.
     # \bfotos?\b com fronteira dos dois lados para não casar "fotossensível".
     (r"fotograf|\bfotos?\b", "fotografia"),
