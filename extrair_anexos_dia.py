@@ -296,6 +296,29 @@ def _gemeos_de(cards, href_principal):
     return out[:2]
 
 
+def _card_wl_por_nome_nascimento(cards, nome_guia, nascimento):
+    """Site-2 (caminho WL, sem codigo real de prontuario): escolhe o card do
+    resultado da busca cujo NASCIMENTO bate com o da guia E o nome e compativel
+    (_nomes_compat — mesma trava do site-1, rejeita irmao/sobrenome diferente).
+
+    TRAVA DURA: sem nascimento da guia, ou sem card com nascimento IGUAL, retorna
+    None (nao aceita nem com nome identico). So devolve se sobrar EXATAMENTE UM —
+    dois com mesmo nome+nascimento (gemeo real) fica ambiguo e nao escolhe. Isso
+    cobre o cadastro com nome do meio a mais (MATEUS DA SILVA _MONTEIRO_ DE NOVAES)
+    sem risco de abrir o prontuario de outra pessoa."""
+    nn = _norm_nasc(nascimento)
+    if not nn:
+        return None
+    from esteira import _nomes_compat   # lazy: esteira importa este modulo (evita circular)
+    uniq = {}
+    for c in cards or []:
+        uniq[c.get("cod") or c.get("href")] = c
+    casam = [c for c in uniq.values()
+             if _norm_nasc(c.get("nascimento")) == nn
+             and _nomes_compat(c.get("nome", ""), nome_guia)]
+    return casam[0] if len(casam) == 1 else None
+
+
 def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
     """Busca o paciente, abre prontuario + anexos, retorna [{id, filename, url}].
 
@@ -315,6 +338,13 @@ def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
     # do _record_href e true para QUALQUER card, e a busca cada vez mais larga
     # aceitaria o primeiro paciente que aparecesse (achado do code review 31/07)
     if cod_s and not cod_s.startswith("WL"):
+        tentativas += [" ".join(toks[:n]) for n in range(len(toks) - 1, 1, -1)]
+    elif cod_s.startswith("WL") and _norm_nasc(nascimento):
+        # WL + nascimento (site-2): pode ENCURTAR a busca. E seguro porque a
+        # aceitacao (abaixo, _card_wl_por_nome_nascimento) exige NASCIMENTO igual +
+        # nome compativel + card UNICO — nunca aceita card so por aparecer. Cobre o
+        # cadastro com nome do meio a mais (MATEUS ...MONTEIRO...) que o
+        # #patient_search nao acha pelo nome cheio (caso MATEUS, 05/08).
         tentativas += [" ".join(toks[:n]) for n in range(len(toks) - 1, 1, -1)]
 
     href, n_cards = None, 0
@@ -341,6 +371,19 @@ def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
         if len(casam_nasc) == 1:
             href = casam_nasc[0].get("href")
             cod_efetivo = casam_nasc[0].get("cod") or cod
+            cod_s = str(cod_efetivo or "").strip()
+
+    # SITE-2 (WL + nascimento): o cod 'WL' nunca casa por codigo. Se a busca (cheia
+    # ou encurtada) achou o cadastro com nome do meio a mais, aceita SO com
+    # nascimento igual + nome compativel + card unico (trava dura contra outra pessoa).
+    if not href and cod_s.startswith("WL"):
+        try:
+            _cd = _card_wl_por_nome_nascimento(_cards_da_busca(page), nome_limpo, nascimento)
+        except Exception:
+            _cd = None
+        if _cd:
+            href = _cd.get("href")
+            cod_efetivo = _cd.get("cod") or cod
             cod_s = str(cod_efetivo or "").strip()
 
     if not href:
