@@ -43,6 +43,23 @@ def _tipos_nossos(nomes) -> set:
     return {t for t in (_tipo_nosso(n) for n in (nomes or [])) if t}
 
 
+def _laudos_faltando(esperados, portal) -> list:
+    """LAUDOS especificos (por IDENTIDADE acc+TIPO) que dissemos ter anexado mas
+    NAO estao na guia. Fecha o ponto cego do check por TIPO: uma guia com 2 exames
+    espera 2 laudos; se so 1 grudou, o tipo 'laudo' esta presente e o check grosso
+    dava OK — deixando passar a guia sem um dos laudos (NILSON/RENATA). Compara por
+    _chave_anexo (ignora o rotulo do exame), entao rotulo trocado nao vira falso
+    faltante. Retorna os NOMES esperados cujo laudo nao casou nenhum do portal."""
+    from extrator_odontoprev import _chave_anexo  # lazy: mantem auditar_guia puro
+    chaves_portal = {_chave_anexo(n) for n in (portal or [])}
+    faltam = []
+    for n in (esperados or []):
+        if str(n or "").strip().upper().startswith("LAUDO_"):
+            if _chave_anexo(n) not in chaves_portal:
+                faltam.append(str(n).strip())
+    return sorted(set(faltam))
+
+
 def auditar_guia(esperados, portal) -> dict:
     """Veredito de UMA guia que o robô diz ter faturado.
 
@@ -50,20 +67,26 @@ def auditar_guia(esperados, portal) -> dict:
         solicitacao). É a nossa afirmação — o que deveria estar na guia.
     portal:    nomes dos anexos que ESTÃO na guia agora (lidos do OdontoPrev).
 
-    Retorna {status, faltando, esperava, no_portal}:
+    Retorna {status, faltando, laudos_faltando, esperava, no_portal}:
       OK        — tudo que dissemos ter anexado está lá.
-      PARCIAL   — parte chegou, parte sumiu (ex.: subiu a solicitação, o laudo não).
+      PARCIAL   — parte chegou, parte sumiu (ex.: subiu a solicitação, o laudo não;
+                  ou 2 laudos esperados e só 1 grudou — ver laudos_faltando).
       AUSENTE   — dissemos ter anexado, mas NADA nosso está na guia (falha silenciosa).
       SEM_PLANO — o banco não registrou o que anexamos E não há arquivo nosso na
                   guia: não dá para afirmar; revisar à mão (execução antiga).
+
+    faltando: TIPOS (laudo/img/solic) ausentes — visão grossa, compatível.
+    laudos_faltando: LAUDOS específicos (por acc+TIPO) que sumiram — visão fina,
+        pega o laudo que faltou mesmo com o tipo 'laudo' presente.
     """
     esperava = _tipos_nossos(esperados)
     no_portal = _tipos_nossos(portal)
+    laudos_faltando = _laudos_faltando(esperados, portal)
     if not esperava:
         # Banco não diz o que anexamos. Se há QUALQUER arquivo nosso na guia, o
         # upload aconteceu (OK); se não, não temos como afirmar (SEM_PLANO).
         status = "OK" if no_portal else "SEM_PLANO"
-        return {"status": status, "faltando": [],
+        return {"status": status, "faltando": [], "laudos_faltando": laudos_faltando,
                 "esperava": [], "no_portal": sorted(no_portal)}
     faltando = sorted(esperava - no_portal)
     if not faltando:
@@ -72,7 +95,11 @@ def auditar_guia(esperados, portal) -> dict:
         status = "PARCIAL"
     else:
         status = "AUSENTE"
-    return {"status": status, "faltando": faltando,
+    # visão fina: um laudo específico que faltou rebaixa OK -> PARCIAL, mesmo que o
+    # tipo 'laudo' esteja presente por causa de OUTRO laudo da mesma guia.
+    if laudos_faltando and status == "OK":
+        status = "PARCIAL"
+    return {"status": status, "faltando": faltando, "laudos_faltando": laudos_faltando,
             "esperava": sorted(esperava), "no_portal": sorted(no_portal)}
 
 
@@ -223,7 +250,9 @@ def auditar_dia(dia: str, contas=None, log=print) -> list:
                              "SEM_PLANO": "  s/plano"}.get(v["status"], v["status"])
                     log(f"  [{marca}] GTO {g['gto']} {(g.get('paciente') or '')[:28]:28} "
                         f"esperava={v['esperava']} portal={v['no_portal']} "
-                        f"faltando={v['faltando']}")
+                        f"faltando={v['faltando']}"
+                        + (f" LAUDO_FALTANDO={v['laudos_faltando']}"
+                           if v.get('laudos_faltando') else ""))
                     resultados.append(item)
             finally:
                 try:

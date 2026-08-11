@@ -55,3 +55,23 @@ def test_sem_plano_e_sem_nossos_arquivos_fica_sem_plano():
     # arquivo nosso na guia -> marca SEM_PLANO (revisar à mão), não AUSENTE
     r = auditar_guia([], ["img_ASSINADA.png"])
     assert r["status"] == "SEM_PLANO"
+
+
+def test_dois_laudos_esperados_so_um_grudou_e_parcial():
+    # guia com 2 exames (2 accessions): esperava 2 laudos, portal só tem 1. O tipo
+    # 'laudo' está presente, mas UM laudo específico sumiu -> antes dava OK (ponto
+    # cego); agora PARCIAL e aponta QUAL laudo faltou (causa NILSON/RENATA).
+    esperados = ["LAUDO_PANORAMICA_111_OFICIAL.pdf", "LAUDO_TELERAD_222_OFICIAL.pdf"]
+    portal = ["LAUDO_PANORAMICA_111_OFICIAL.pdf", "img_ASSINADA.png"]
+    r = auditar_guia(esperados, portal)
+    assert r["status"] == "PARCIAL"
+    assert r["laudos_faltando"] == ["LAUDO_TELERAD_222_OFICIAL.pdf"]
+
+
+def test_laudo_presente_com_rotulo_diferente_do_mesmo_acc_continua_ok():
+    # robusto à mudança de rótulo do exame: mesmo acc+TIPO = mesmo laudo -> OK
+    esperados = ["LAUDO_ATM_111_OFICIAL.pdf"]
+    portal = ["LAUDO_INTERPROXIMAL_111_OFICIAL.pdf", "img_ASSINADA.png"]
+    r = auditar_guia(esperados, portal)
+    assert r["status"] == "OK"
+    assert r["laudos_faltando"] == []
