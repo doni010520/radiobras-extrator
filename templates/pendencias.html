@@ -162,6 +162,7 @@
           <td>
             <span class="who-pill {{ 'reproc' if p.responsavel == 'Reprocessar' }}"
                   title="{{ p.acao }}">→ {{ p.responsavel }}</span>
+            {% if p.acao %}<div style="font-size:11px;color:#5a6472;margin-top:4px;max-width:320px;line-height:1.35">{{ p.acao }}</div>{% endif %}
             {% if p.resolvido %}<div class="who">✓ {{ p.resolvido_por }}{% if p.resolvido_em %} · {{ p.resolvido_em.strftime('%d/%m %H:%M') }}{% endif %}</div>{% endif %}
           </td>
         </tr>
