@@ -2938,9 +2938,16 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                         except Exception:
                             pass
                         item["anexado"] = "OK" if res.get("ok") else "FALHOU"
-                        item["upload"] = {k: res.get(k) for k in ("anexos_antes", "anexos_depois", "enviados", "ja_anexados")}
+                        item["upload"] = {k: res.get(k) for k in ("anexos_antes", "anexos_depois", "enviados", "ja_anexados", "nao_grudaram")}
+                        _ng = res.get("nao_grudaram") or []
+                        if _ng:
+                            # enviado != grudou: o POST foi aceito mas o arquivo
+                            # (laudo em especial) NAO persistiu na guia. NAO e OK.
+                            item["anexar_erro"] = ("enviado mas NAO grudou na guia: "
+                                                   + ", ".join(_ng))
                         _t(f"[ANEX{wid}] GTO {item['gto']} -> {item['anexado']} "
-                           f"({len(res.get('enviados', []))} enviados, {len(res.get('ja_anexados', []))} já tinha)")
+                           f"({len(res.get('enviados', []))} enviados, {len(res.get('ja_anexados', []))} já tinha"
+                           + (f", {len(_ng)} NAO GRUDOU: {', '.join(_ng)}" if _ng else "") + ")")
                     except Exception as e:
                         item["anexado"] = "ERRO"; item["anexar_erro"] = str(e)[:120]
                         _t(f"[ANEX{wid}] GTO {item['gto']} ERRO {str(e)[:90]}")

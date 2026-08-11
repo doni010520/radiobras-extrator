@@ -583,6 +583,23 @@ def _resolver_contagem(dom_n, dom_nomes, fallback):
     return dom_n, dom_nomes
 
 
+def _nao_grudaram(nomes_no_portal, enviados) -> list:
+    """Dado o que o portal MOSTRA anexado e o que tentamos enviar, devolve os
+    arquivos enviados cuja IDENTIDADE (_chave_anexo) NAO aparece no portal.
+
+    'enviado' (o portal aceitou o POST / mostrou toast 'sucesso') != 'grudou'
+    (o arquivo persiste na guia). Casos NILSON/RENATA: o laudo foi aceito mas
+    ficou ausente da guia — faturado sem laudo = glosa. Compara por _chave_anexo,
+    nao por nome exato, para ser robusto a variacao de rotulo do exame (o mesmo
+    laudo ja subiu com LAUDO_ATM_ e LAUDO_INTERPROXIMAL_ pro mesmo acc)."""
+    chaves_portal = {_chave_anexo(n) for n in (nomes_no_portal or set())}
+    faltaram = []
+    for b in (enviados or set()):
+        if _chave_anexo(b) not in chaves_portal:
+            faltaram.append(os.path.basename(b))
+    return sorted(set(faltaram))
+
+
 def upload_arquivos(gp, arquivos: list, max_antes: int = 1, contar_fallback=None) -> dict:
     """Anexa a lista de arquivos na GTO aberta (input[type=file] oculto, multiple).
     O portal envia imediatamente.
@@ -719,10 +736,26 @@ def upload_arquivos(gp, arquivos: list, max_antes: int = 1, contar_fallback=None
         gp.wait_for_timeout(1000)
 
     depois = _anexos_count(gp)
+
+    # CONFIRMACAO FINAL "GRUDOU" != "ENVIEI" ─────────────────────────────────
+    # O ok acima pode ter vindo do fallback "toast 'sucesso' + aritmetica do
+    # contador" — que NAO prova que CADA arquivo (o LAUDO em especial) persistiu
+    # na guia. Casos NILSON/RENATA: laudo aceito pelo POST, ausente da guia =
+    # faturado sem laudo = glosa. Re-le os anexos pela fonte AUTORITATIVA (DOM,
+    # e API se o DOM falhar) e confere por IDENTIDADE que cada enviado esta la.
+    # So DERRUBA o ok quando a leitura foi REAL (nomes_depois nao vazio): leitura
+    # falha nao vira falso "nao grudou" (a Camada 2 cobre pagina ilegivel).
+    nomes_depois = _anexos_nomes(gp)
+    _dn, nomes_depois = _resolver_contagem(depois, nomes_depois, contar_fallback)
+    nao_grudaram = _nao_grudaram(nomes_depois, alvo_bn) if nomes_depois else []
+    if nao_grudaram:
+        ok = False
+
     return {
         "anexos_antes": antes,
         "anexos_depois": depois,
         "ja_anexados": ja,
         "enviados": sorted(alvo_bn),
+        "nao_grudaram": nao_grudaram,
         "ok": ok,
     }
