@@ -395,14 +395,26 @@ def listar_worklist_por_pacientes(page, data: str, nomes: list) -> list:
                     continue
                 vistos.add(chave.upper())
                 for tipo in ("study_datetime", "realized"):
-                    try:
-                        raw_html = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
-                        antes = len(by_acc)
-                        _parse_worklist_html(raw_html, by_acc)
-                        if len(by_acc) > antes:
-                            achou_linha = True
-                    except Exception as e:
-                        print(f"   [worklist] falha nome={chave} tipo={tipo}: {e}")
+                    # RETRY: 'erros de leitura sao inadmissiveis'. O page.evaluate
+                    # falha com "Execution context was destroyed" quando o SmartRIS
+                    # navega/faz polling no meio da busca — transitorio. Sem retry, o
+                    # paciente sumia da worklist e a guia caia em SEM_MATCH indevido.
+                    for _r in range(3):
+                        try:
+                            raw_html = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
+                            antes = len(by_acc)
+                            _parse_worklist_html(raw_html, by_acc)
+                            if len(by_acc) > antes:
+                                achou_linha = True
+                            break
+                        except Exception as e:
+                            if _r < 2:
+                                try:
+                                    page.wait_for_timeout(800 * (_r + 1))
+                                except Exception:
+                                    pass
+                                continue
+                            print(f"   [worklist] falha nome={chave} tipo={tipo}: {e}")
             if achou_linha:
                 break
     return list(by_acc.values())

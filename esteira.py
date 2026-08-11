@@ -209,6 +209,29 @@ def _par_concatenado(tok: str, ordenados: list, livres) -> tuple:
     return ()
 
 
+def _get_json_com_retry(sess, url, timeout=25, tentativas=6, _sleep=time.sleep):
+    """GET JSON com retry e BACKOFF EXPONENCIAL. Retorna (json, None) no HTTP 200,
+    ou (None, msg) apos esgotar as tentativas.
+
+    'Erros de leitura sao inadmissiveis' (dono, 10/08): um HTTP 500 transitorio do
+    OdontoPrev (TE-BFF-GTO-0001) ou um reset de conexao NAO pode fazer a guia cair
+    em NAO_VERIFICADA — o backoff (1.5, 3, 6, 12, 20, 20s) absorve o hiccup. Status
+    != 200 e SEMPRE falha (nunca lista vazia, que mascarava um 500 como '0 anexos').
+    _sleep injetavel para os testes rodarem sem esperar de verdade."""
+    falha = None
+    for t in range(tentativas):
+        try:
+            r = sess.get(url, timeout=timeout)
+            if r.status_code == 200:
+                return (r.json() or []), None
+            falha = f"HTTP {r.status_code} {r.text[:80]!r}"
+        except Exception as e:
+            falha = f"{type(e).__name__}: {str(e)[:100]}"
+        if t < tentativas - 1:
+            _sleep(min(1.5 * (2 ** t), 20))
+    return None, falha
+
+
 def _nomes_compat(lido: str, alvo: str) -> bool:
     """Casa o nome LIDO na solicitação com o nome-ALVO (da GTO) por TOKENS, não por
     substring (evita 'ANA' casar 'ANA PAULA'). Exige >=2 tokens significativos em
@@ -2427,21 +2450,13 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             # Agora tenta 3x com backoff e, se ainda falhar, guarda o PORQUE (status
             # HTTP ou tipo+msg da excecao) para o log. Tambem trata status != 200 como
             # falha (antes virava cnt=0 -> guia lida como '0 anexos', mascarando um 500).
-            _falha = None
-            for _tent in range(3):
-                try:
-                    r = sess.get(f"{_ODO_API}/v1/gto/imagens"
-                                 f"?numeroFicha={g['gto']}", timeout=25)
-                    if r.status_code == 200:
-                        imgs, _falha = (r.json() or []), None
-                        break
-                    _falha = f"HTTP {r.status_code} {r.text[:80]!r}"
-                except Exception as e:
-                    _falha = f"{type(e).__name__}: {str(e)[:100]}"
-                if _tent < 2:
-                    time.sleep(1.5 * (_tent + 1))
+            # Retry robusto com backoff exponencial (6x): 'erros de leitura sao
+            # inadmissiveis' — um HTTP 500 transitorio (TE-BFF-GTO-0001) ou reset
+            # nao pode perder a guia. Ver _get_json_com_retry.
+            imgs, _falha = _get_json_com_retry(
+                sess, f"{_ODO_API}/v1/gto/imagens?numeroFicha={g['gto']}", timeout=25)
             if _falha:
-                nomes, cnt = set(), -1
+                imgs, nomes, cnt = [], set(), -1
             else:
                 nomes = {str(i.get("nomeArquivo", "")) for i in imgs}
                 cnt = len(imgs)
