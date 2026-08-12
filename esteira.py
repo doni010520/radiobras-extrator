@@ -1255,6 +1255,29 @@ def _exame_do_laudo(p):
     return canon_exames(m.group(1)) if m else set()
 
 
+def _laudo_tele_faltando(exames_canon, laudos_no_plano) -> bool:
+    """A guia autoriza telerradiografia mas NAO ha laudo de tele (traçado/CEPH) no
+    plano? -> o gate deve SEGURAR (pendencia 'esperando_tele'), nunca faturar so com
+    a panoramica. Causa dos 33 faturados-sem-tele (conferencia RedeUna 01/08): o
+    tracado cefalometrico nao estava pronto quando rodamos, a esteira anexou so a
+    panoramica e o gate 'tem QUALQUER laudo' aceitou.
+
+    Autoriza tele = 'telerradiografia' no exame OU 'documentacao' (documentacao
+    ortodontica SEMPRE inclui panoramica E telerradiografia — regra do dono).
+    Tem tele = algum LAUDO_* cujo exame canonico e telerradiografia (cobre o CEPH,
+    cujo nome e LAUDO_TELERRADIOGRAFIA_<acc>_CEPH). Falha SEGURA: na duvida exige."""
+    ex = set(exames_canon or ())
+    autoriza_tele = ("telerradiografia" in ex) or ("documentacao" in ex)
+    if not autoriza_tele:
+        return False
+    for f in (laudos_no_plano or []):
+        if not str(f).upper().startswith("LAUDO_"):
+            continue
+        if "telerradiografia" in _exame_do_laudo(f) or "CEPH" in str(f).upper():
+            return False
+    return True
+
+
 def _acc_do_laudo(p):
     """Accession embutido no nome: LAUDO_<EXAME>_<acc>_TIPO.pdf -> '<acc>'.
     É a chave FORTE (identidade do exame no PRORADIS), ao contrário do nome do
@@ -2682,7 +2705,16 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 _tem_laudo = any(str(f).upper().startswith("LAUDO_")
                                  for f in dec.get("plano_laudo_imgs", []))
                 _tem_solic_ou_justif = bool(dec.get("justificativa")) or bool(dec.get("plano_solicitacao"))
-                _laudo_ok = _tem_laudo or bool(dec.get("dispensa_laudo"))
+                _laudo_base_ok = _tem_laudo or bool(dec.get("dispensa_laudo"))
+                # GATE POR EXAME: "tem QUALQUER laudo" deixava faturar documentacao
+                # ortodontica so com a panoramica, sem o laudo da telerradiografia
+                # (tracado). Causa dos 30 faturados-sem-tele (conferencia RedeUna
+                # 01/08, 08-06/06). Se a guia autoriza tele e nao ha laudo de tele
+                # no plano, SEGURA -> pendencia 'esperando_tele' (falha SEGURA).
+                _exames_da_guia = dec.get("gto_exames_desta") or dec.get("gto_exames") or set()
+                _falta_tele = _laudo_tele_faltando(_exames_da_guia,
+                                                   dec.get("plano_laudo_imgs", []))
+                _laudo_ok = _laudo_base_ok and not _falta_tele
                 anexa = _laudo_ok and _tem_solic_ou_justif
                 if anexar_on and anexa:
                     fila_anexar.put(item)
@@ -2700,8 +2732,11 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 # ele dizia "REVISÃO" sem contar POR QUE — inútil pra quem precisa
                 # agir. Inclui também o que falta pro gate (laudo/solicitação).
                 _falta = []
-                if not _laudo_ok:
+                if not _laudo_base_ok:
                     _falta.append("LAUDO")
+                elif _falta_tele:
+                    # tem a panoramica, falta o laudo da telerradiografia (traçado)
+                    _falta.append("o LAUDO da telerradiografia (traçado cefalométrico)")
                 if not _tem_solic_ou_justif:
                     _falta.append("SOLICITAÇÃO/JUSTIFICATIVA")
                 _mot = d.get("motivo") or dec.get("erro") or ""

@@ -780,6 +780,14 @@ _GRUPOS_PENDENCIA = [
     ("sem_entregavel", r"n[ãa]o h[áa] laudo nem imagem|ainda n[ãa]o tem entreg[áa]vel",
      "Radiologista", "Exame registrado sem laudo E sem imagem — não há o que anexar. "
      "Cobrar a emissão."),
+    # TELE (traçado cefalométrico) faltando numa documentação ortodôntica: vem ANTES
+    # de falta_laudo (mais específico). A guia TEM a panorâmica; falta só o laudo da
+    # telerradiografia. Causa dos 30 faturados-sem-tele (conferência RedeUna 01/08).
+    ("esperando_tele",
+     r"LAUDO da telerradiografia|tra[çc]ado cefalom|laudo da tele|falta laudo tele",
+     "Radiologista", "Documentação ortodôntica com a panorâmica anexada, mas SEM o "
+     "laudo da telerradiografia (traçado cefalométrico). O robô anexa sozinho assim "
+     "que o traçado sair no PRORADIS — cobrar a emissão do traçado."),
     ("falta_laudo", r"falta o LAUDO|sem laudo|laudo veio em branco|laudo.*n[ãa]o pronto",
      "Radiologista", "O robô anexa sozinho assim que o laudo sair. Só cobrar."),
     # PEDIDO ILEGÍVEL (caso MARIA CLARA): o robô não leu a caligrafia dos exames.
@@ -843,6 +851,7 @@ _NOSSO = "Nós"   # responsavel cujas pendencias vao para a FILA TECNICA
 
 _TITULO_GRUPO = {
     "sem_entregavel": "Exame sem laudo e sem imagem",
+    "esperando_tele": "Esperando o laudo da telerradiografia (traçado)",
     "falta_laudo": "Esperando o laudo do radiologista",
     "pedido_ilegivel": "Pedido do dentista com caligrafia ilegível",
     "pedido_nao_cobre": "O pedido do dentista não cobre a guia",
