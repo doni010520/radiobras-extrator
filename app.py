@@ -1242,6 +1242,7 @@ def pendencias_page():
         p["bucket"] = _sla_bucket(p["sla"])
         _chave, _quem, _acao = db.classificar_pendencia(p.get("motivo"), p.get("categoria") or "")
         p["acao"] = _acao
+        p["chave"] = _chave   # p/ a tela distinguir 'nome não bate' de 'ilegível'
         # título CURTO do motivo (headline) — a linha fica enxuta; o texto completo
         # abre ao clicar. Ex.: "Paciente não encontrado no PRORADIS".
         p["titulo"] = getattr(db, "_TITULO_GRUPO", {}).get(_chave) or "Pendência"

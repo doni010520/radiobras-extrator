@@ -106,6 +106,8 @@
   .det-acao{margin-top:10px;font-size:12.5px;color:var(--rb-fg-muted);line-height:1.45}
   .det-acao b{color:var(--rb-fg)}
   tr.done td.tit{text-decoration:line-through;opacity:.6}
+  td.tit .vermais{font-size:11px;color:var(--rb-primary);font-weight:600;margin-top:3px}
+  tr.prow.exp td.tit .vermais,tr.done td.tit .vermais{display:none}
   .rb-page-head{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
   .arv-link{margin-left:auto;font-size:13px;font-weight:700;color:var(--rb-primary);
     text-decoration:none;white-space:nowrap}
@@ -172,7 +174,7 @@
           <td class="gto">{{ p.gto }}</td>
           <td>{{ p.paciente or '—' }}</td>
           <td class="mut">{{ p.unidade }}</td>
-          <td class="tit">{{ p.titulo }}</td>
+          <td class="tit">{{ p.titulo }}<div class="vermais">🔎 clique para ver mais</div></td>
           <td class="qa"><span class="who-pill {{ 'reproc' if p.responsavel in ('Reprocessar','Investigar') }}">→ {{ p.responsavel }}</span></td>
           <td class="chev">›</td>
         </tr>
@@ -182,7 +184,11 @@
           <div class="evid">
             {% if p.exames_gto %}<span class="ev-k">Guia pede:</span> {{ p.exames_gto }}{% endif %}
             {% if p.exames_lidos %}<span class="ev-sep">·</span> <span class="ev-k">IA leu na solicitação:</span> {{ p.exames_lidos }}
-            {% elif p.exames_gto %}<span class="ev-sep">·</span> <span class="ev-k">IA leu na solicitação:</span> <i>nada legível</i>{% endif %}
+            {% elif p.exames_gto %}<span class="ev-sep">·</span>
+              {% if p.chave == 'nome_nao_bate' %}<span class="ev-k">IA leu:</span> <i>documento legível, mas em nome de OUTRA pessoa</i> (veja abaixo)
+              {% elif p.chave == 'pedido_ilegivel' %}<span class="ev-k">IA leu na solicitação:</span> <i>ilegível — o robô não conseguiu decifrar</i>
+              {% else %}<span class="ev-k">IA leu na solicitação:</span> <i>nenhuma solicitação desta paciente foi encontrada</i>{% endif %}
+            {% endif %}
           </div>
           {% endif %}
           {% if p.lido %}<details class="evid-det"><summary>🔍 O que a IA leu, por anexo</summary><div class="evid-raw">{{ p.lido }}</div></details>{% endif %}
