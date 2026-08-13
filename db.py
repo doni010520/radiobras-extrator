@@ -449,6 +449,30 @@ def listar_pendencias(status: str = "abertas", limit: int = 5000) -> list:
         return out
 
 
+def leituras_por_gtos(gtos: list) -> dict:
+    """Para cada GTO, O QUE A IA LEU na última execução — evidência p/ a tela de
+    pendências ficar EXPLICATIVA (pedido do dono 13/08: "a pendência tem que dizer
+    o que a IA leu no pedido, não só o porquê"). Puxa do ExecucaoItem mais recente
+    do gto: exames da guia, exames lidos no pedido e o resumo por anexo. Devolve
+    {gto: {"exames_gto","exames_lidos","lido"}}."""
+    gs = {str(g) for g in (gtos or []) if g}
+    if not gs:
+        return {}
+    out = {}
+    with SessionLocal() as s:
+        # ordem crescente: o ÚLTIMO de cada gto sobrescreve = a leitura mais recente
+        rows = (s.query(ExecucaoItem)
+                .filter(ExecucaoItem.gto.in_(gs))
+                .order_by(ExecucaoItem.id.asc()).all())
+        for it in rows:
+            out[str(it.gto)] = {
+                "exames_gto": (it.exames_gto or "").strip(),
+                "exames_lidos": (it.exames_lidos or "").strip(),
+                "lido": (it.paciente_lido or "").strip(),
+            }
+    return out
+
+
 def resolver_pendencia(pid: int, username: str, obs: str = None):
     with SessionLocal() as s:
         p = s.get(Pendencia, pid)
