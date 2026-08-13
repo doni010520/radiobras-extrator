@@ -601,7 +601,7 @@ if os.environ.get("RETRY_CRON", "0") == "1":
     threading.Thread(target=_retry_scheduler, daemon=True).start()
 
 
-# ── Faturamento automático diário (cron D-3 + reprocessa pendências) ────────────
+# ── Faturamento automático diário (cron D-4 + reprocessa pendências) ────────────
 def _faturar_rodou_hoje() -> bool:
     """Já rodou o faturamento automático hoje? (compara a última marca em Brasília)."""
     try:
@@ -750,7 +750,7 @@ _faturar_cron_running = threading.Event()
 
 
 def _faturar_cron_rodar():
-    """Roda D-3 nas 3 unidades + reprocessa os dias com pendência aberta dentro do
+    """Roda D-4 nas 3 unidades + reprocessa os dias com pendência aberta dentro do
     prazo. Faturamento REAL (anexa). Idempotente: já faturado é pulado; pendência
     resolvida no PRORADIS é faturada agora e fecha sozinha."""
     if _faturar_cron_running.is_set():
@@ -966,7 +966,7 @@ def _email_resumo_semana():
     Usado pelo teste de email — confirma o SMTP entregando conteúdo útil."""
     itens = [
         ("Faturamento automático diário (05/07)",
-         "O robô roda sozinho todo dia (~5h): fatura o dia D-3 nas 3 unidades da Rede "
+         "O robô roda sozinho todo dia (~5h): fatura o dia D-4 nas 3 unidades da Rede "
          "Una e reprocessa pendências ainda dentro do prazo. Idempotente (não duplica "
          "anexo) e já ligado em produção. Prazo da OdontoPrev confirmado em 7 dias."),
         ("Alerta de prazo / SLA (05/07, ampliado 09/07)",
@@ -2512,7 +2512,7 @@ def api_diag():
         } for r in db.runs_recentes(10)]
     except Exception as e:
         diag["runs_error"] = str(e)[:200]
-    # faturamento (fluxo atual): estado do cron D-3, backlog e últimas execuções
+    # faturamento (fluxo atual): estado do cron D-4, backlog e últimas execuções
     try:
         ult = db.cron_faturar_last_at()
         diag["faturamento"] = {
