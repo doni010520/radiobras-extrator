@@ -119,7 +119,7 @@ def _injeta_usuario():
                              "nome": session.get("nome"),
                              "role": session.get("role")} if session.get("uid") else None,
             "usuario_atual_id": session.get("uid"),
-            "pendencias_abertas": db.contar_pendencias_front(so_no_prazo=True, prazo=_prazo_dias()) if session.get("uid") else 0,
+            "pendencias_abertas": db.contar_pendencias_front() if session.get("uid") else 0,
             "avisos_sem_guia": db.contar_avisos_nao_vistos() if session.get("uid") else 0}
 
 
@@ -1262,51 +1262,41 @@ def pendencias_page():
         p["exames_gto"] = _l.get("exames_gto")
         p["exames_lidos"] = _l.get("exames_lidos")
         p["lido"] = _l.get("lido")
-    # front (o usuário vê) tira o INTERNO (nosso, o sistema reprocessa). Dentro do
-    # front: NO PRAZO (o número atual que o dono quer) × VENCIDAS (fora do prazo, vão
-    # p/ uma seção à parte, recolhida — não misturam com o que ainda dá pra fazer).
+    # front (o usuário vê) tira só o INTERNO (nosso, o sistema reprocessa). TUDO o
+    # resto aparece na lista, agrupado por dia — o dono quer VER tudo (13/08), nada
+    # escondido. A urgência (vencida/no prazo) fica marcada no cabeçalho de cada dia.
     front = [p for p in itens if p["tipo"] != "interno"]
-
-    def _vencida(p):
-        s = p.get("sla")
-        return s is not None and s <= 0
-    no_prazo = [p for p in front if not _vencida(p)]
-    vencidas = [p for p in front if _vencida(p)]
-    # barra de prazo — só o que vence EM BREVE (vencidas têm seção própria)
-    sla_ct = {"d1": 0, "d2": 0, "d3": 0}
-    for p in no_prazo:
+    sla_ct = {"venc": 0, "d1": 0, "d2": 0, "d3": 0}
+    for p in front:
         if p.get("resolvido"):
             continue
         s = p.get("sla")
-        if s == 1:      sla_ct["d1"] += 1
+        if s is None:
+            continue
+        if s <= 0:      sla_ct["venc"] += 1
+        elif s == 1:    sla_ct["d1"] += 1
         elif s == 2:    sla_ct["d2"] += 1
         elif s == 3:    sla_ct["d3"] += 1
     _ordem_bucket = {"venc": 0, "d1": 1, "d2": 2, "d3": 3, "no_prazo": 4}
     _dias_sem = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
-
-    def _agrupa_por_dia(lst_front):
-        por_dia = {}
-        for p in lst_front:
-            por_dia.setdefault(p.get("dia") or "—", []).append(p)
-        gs = []
-        for dia, lst in por_dia.items():
-            lst.sort(key=lambda p: (_ordem_bucket.get(p["bucket"], 9),
-                                    (p.get("unidade") or "").lower(), p.get("gto") or ""))
-            _d = db._parse_ddmmaaaa(dia)
-            titulo = (f"{dia} · {_dias_sem[_d.weekday()]}" if _d else (dia or "sem data"))
-            pior = min((p["bucket"] for p in lst), key=lambda b: _ordem_bucket.get(b, 9))
-            gs.append({"chave": pior, "titulo": titulo, "dia": dia, "itens": lst,
+    por_dia = {}
+    for p in front:
+        por_dia.setdefault(p.get("dia") or "—", []).append(p)
+    grupos = []
+    for dia, lst in por_dia.items():
+        lst.sort(key=lambda p: (_ordem_bucket.get(p["bucket"], 9),
+                                (p.get("unidade") or "").lower(), p.get("gto") or ""))
+        _d = db._parse_ddmmaaaa(dia)
+        titulo = (f"{dia} · {_dias_sem[_d.weekday()]}" if _d else (dia or "sem data"))
+        pior = min((p["bucket"] for p in lst), key=lambda b: _ordem_bucket.get(b, 9))
+        grupos.append({"chave": pior, "titulo": titulo, "dia": dia, "itens": lst,
                        "abertas": sum(1 for p in lst if not p.get("resolvido")),
                        "total": len(lst)})
-        gs.sort(key=lambda g: db._parse_ddmmaaaa(g["dia"]) or _dt.date.max)
-        return gs
-
-    grupos = _agrupa_por_dia(no_prazo)
-    grupos_venc = _agrupa_por_dia(vencidas)
-    return render_template("pendencias.html", grupos=grupos, grupos_venc=grupos_venc,
-                           itens=no_prazo, status=status, prazo=_prazo_dias(), sla_ct=sla_ct,
-                           n_abertas=sum(1 for p in no_prazo if not p.get("resolvido")),
-                           n_vencidas=sum(1 for p in vencidas if not p.get("resolvido")))
+    grupos.sort(key=lambda g: db._parse_ddmmaaaa(g["dia"]) or _dt.date.max)
+    return render_template("pendencias.html", grupos=grupos, grupos_venc=None,
+                           itens=front, status=status, prazo=_prazo_dias(), sla_ct=sla_ct,
+                           n_abertas=sum(1 for p in front if not p.get("resolvido")),
+                           n_vencidas=0)
 
 
 @app.route("/pendencias/<int:pid>/resolver", methods=["POST"])
@@ -1314,7 +1304,7 @@ def pendencias_resolver(pid):
     obs = (request.form.get("obs") or (request.json.get("obs") if request.is_json else None)) if (request.form or request.is_json) else None
     db.resolver_pendencia(pid, session.get("username") or session.get("nome") or "?", obs=obs)
     if request.is_json or request.headers.get("X-Requested-With") == "fetch":
-        return jsonify({"ok": True, "abertas": db.contar_pendencias_front(so_no_prazo=True, prazo=_prazo_dias())})
+        return jsonify({"ok": True, "abertas": db.contar_pendencias_front()})
     return redirect(url_for("pendencias_page", status=request.args.get("status", "abertas")))
 
 
@@ -1322,7 +1312,7 @@ def pendencias_resolver(pid):
 def pendencias_reabrir(pid):
     db.reabrir_pendencia(pid)
     if request.is_json or request.headers.get("X-Requested-With") == "fetch":
-        return jsonify({"ok": True, "abertas": db.contar_pendencias_front(so_no_prazo=True, prazo=_prazo_dias())})
+        return jsonify({"ok": True, "abertas": db.contar_pendencias_front()})
     return redirect(url_for("pendencias_page", status=request.args.get("status", "abertas")))
 
 

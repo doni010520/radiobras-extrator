@@ -141,10 +141,11 @@
       <svg class="rb-ico"><use href="#i-grid"/></svg> Todas</a>
   </div>
 
-  {% set urg = sla_ct.d1 + sla_ct.d2 + sla_ct.d3 %}
+  {% set urg = sla_ct.venc + sla_ct.d1 + sla_ct.d2 + sla_ct.d3 %}
   {% if urg > 0 and status != 'resolvidas' %}
   <div class="slabar">
     <b>⚠ Prazo de faturamento (janela de {{ prazo }} dias):</b>
+    {% if sla_ct.venc %}<span class="chip">{{ sla_ct.venc }} vencida(s)</span>{% endif %}
     {% if sla_ct.d1 %}<span class="chip">{{ sla_ct.d1 }} vence(m) amanhã</span>{% endif %}
     {% if sla_ct.d2 %}<span class="chip">{{ sla_ct.d2 }} em 2 dias</span>{% endif %}
     {% if sla_ct.d3 %}<span class="chip">{{ sla_ct.d3 }} em 3 dias</span>{% endif %}
