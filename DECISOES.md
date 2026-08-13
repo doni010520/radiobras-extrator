@@ -168,9 +168,20 @@ Tudo com LLM lendo e **código decidindo** (princípios 1–5).
   15m→30m→1h→2h→4h→8h, teto 6; estourou → fica pendência "nossa, não recuperou".
   Hook em `salvar_execucao`: faturado → `resolver_retry`; falha `transitorio` →
   `registrar_retry`. TDD `test_retry_loop`.
-- **[Aberto] Proxy FlameProxies (produção):** precisa da URL atual (ou resultado do
-  `/portal/testar`) pra diagnosticar (saldo? sessão expirada? credencial?). Sem
-  proxy vivo, o usuário não roda pela tela do VPS.
+- **[EM TESTE 13/08] Proxy FlameProxies (produção):** RESOLVIDO no diagnóstico e em
+  teste de durabilidade. O "a sessão morre no dia seguinte" era: (a) país podia vir
+  Random → IP não-BR bloqueado pelo OdontoPrev; (b) sessão sticky FIXA expira em
+  `time-N` min. **Fix (sem código — o rotador já existia):** gerar a proxy com
+  **country-br + city-salvador + Sticky + session-<id>-time-60**, formato
+  `http://user:pass@host:porta`. O `_fresh_sessid` (extrator_odontoprev.py:48) **já
+  troca o `-session-<id>` a cada run** (confirmado: rotaciona só o token, preserva
+  country/city/time) → cada execução pega uma sessão BR nova de 60 min → nunca
+  reusa a de ontem. **Login ao vivo pelo proxy = OK (13/08)** (chegou em
+  `credenciado.odontoprev.com.br/portal`). Conta FlameProxies: saldo $7.50, plano
+  Residential 5GB ativo (1.06GB usados). Host `proxy.flameproxies.com:8989`, usuário
+  `flma75147f1-...-session-<id>-time-60` (senha NÃO fica no git — vai só no env do
+  EasyPanel). **AÇÃO:** setar `ODONTO_PROXY_URL` no EasyPanel e **observar quantos
+  dias dura** (a hipótese é: com o rotador, dura indefinidamente).
 - **[Aberto] NILSON** (ver seção 4).
 - **[✅ RESOLVIDA 13/08] Dúvida de domínio — documentação ortodôntica × periapical:**
   o dono decidiu: **doc ortodôntica NÃO cobre periapical/interproximal — são exames
