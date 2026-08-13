@@ -2342,7 +2342,8 @@ def _anexos_portal_split(imgs):
 
 
 def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_key=None,
-                  review_dir=None, k_attach=0, dry_run=True, conta=None, senha_portal=None):
+                  review_dir=None, k_attach=0, dry_run=True, conta=None, senha_portal=None,
+                  apenas_gtos=None):
     """Pipeline de até 4 estágios (descoberta -> download -> decisão -> anexação).
     conta = código da conta RedeUna (plano); usa o login + convênios/segmentos dela.
     gemini_key liga a decisão. k_attach>0 liga a ANEXAÇÃO (estágio 4): auto e
@@ -2441,6 +2442,12 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                         f"processado (datas vistas: "
                         f"{sorted({g.get('liberacao') for g in gtos})[:6]}).")
                 alvos = [g for g in do_dia if "REPASSE" in g["status"].upper()]
+                # RETRY DIRECIONADO (Fase 3): quando o loop de retry chama com uma
+                # lista de gtos, processa SO essas — nao re-roda o dia inteiro (barato
+                # e nao re-tenta o externo à toa).
+                if apenas_gtos:
+                    _alvo_set = {str(x) for x in apenas_gtos}
+                    alvos = [g for g in alvos if str(g.get("gto")) in _alvo_set]
                 if not tok["v"] and alvos:   # fallback: abre 1 GTO p/ disparar a API
                     try:
                         gp = abrir_gto(pg, alvos[0]["gto"], _refrescar=None)
@@ -3329,3 +3336,38 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     except Exception:
         pass
     return resumo
+
+
+def processar_retries(gemini_key=None, k_attach=3, log=None) -> dict:
+    """WORKER do loop de retry (Fase 3): pega os TRANSITÓRIOS devidos (proximo_em
+    vencido), re-roda a esteira DIRECIONADA (apenas_gtos) por (dia,conta) — barato,
+    não re-processa o dia inteiro nem o externo. O hook em salvar_execucao resolve os
+    que recuperaram; os que falharem de novo são re-agendados pelo bump (feito ANTES
+    de rodar, pra a tentativa contar mesmo se travar). REAL (anexa) — roda em produção
+    pelo scheduler; idempotente (não duplica). Retorna {devidos, grupos}."""
+    import db
+    from collections import defaultdict
+    _log = log or (lambda m: None)
+    devidos = db.retries_devidos()
+    if not devidos:
+        return {"devidos": 0, "grupos": 0}
+    por = defaultdict(list)
+    for d in devidos:
+        por[(d["dia"], d["conta"])].append(d["gto"])
+    _log(f"[retry] {len(devidos)} guia(s) devida(s) em {len(por)} grupo(s)")
+    for (dia, conta), gtos in por.items():
+        for g in gtos:
+            db.bump_retry(g)   # conta a tentativa ANTES (evita loop se a rodada travar)
+        try:
+            senha = db.get_portal_senha(conta)
+            _logs = []
+            r = rodar_esteira(dia, 3, 3, 5, log=lambda m, _l=_logs: _l.append(m),
+                              gemini_key=gemini_key, k_attach=k_attach, dry_run=False,
+                              conta=conta, senha_portal=senha, apenas_gtos=gtos)
+            try:
+                db.salvar_execucao(r, _logs)   # hook resolve os que faturaram
+            except Exception as e:
+                _log(f"[retry] gravar {dia} {conta}: {str(e)[:60]}")
+        except Exception as e:
+            _log(f"[retry] {dia} {conta}: {type(e).__name__}: {str(e)[:70]}")
+    return {"devidos": len(devidos), "grupos": len(por)}

@@ -752,6 +752,16 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
                 _sync_pendencias(s, resumo.get("conta"), resumo.get("data"), ex.id, itens_info)
             except Exception as e:
                 print(f"[db] sync pendencias falhou: {e}", flush=True)
+            # FILA DE RETRY (Fase 3): faturado sai da fila; falha TRANSITORIA entra
+            # (pra o loop re-tentar sozinho). Externo/logica nao entram (nao retry cego).
+            try:
+                for _gto, _pac, _cat, _mot, _fat in itens_info:
+                    if _fat:
+                        resolver_retry(_gto)
+                    elif classe_retry(_mot, _cat) == "transitorio":
+                        registrar_retry(_gto, resumo.get("conta"), resumo.get("data"), _mot, _cat)
+            except Exception as e:
+                print(f"[db] sync retry_fila falhou: {e}", flush=True)
             # AVISOS 'exame sem guia' — laudo pronto sem GTO (particular/esquecido)
             try:
                 avisos_info = []
@@ -847,6 +857,130 @@ def classificar_pendencia(motivo: str, categoria: str = "") -> tuple:
 
 
 _NOSSO = "Nós"   # responsavel cujas pendencias vao para a FILA TECNICA
+
+
+# ── Classe de RETRY (Fase 0) ─────────────────────────────────────────────────
+# Diz se uma falha e infra transitoria (o loop retenta sozinho), esperando algo
+# EXTERNO (pendencia, sem retry) ou de LOGICA (conserto/leitura, NAO retry cego).
+# Regra: o loop de retry SO retenta 'transitorio'.
+_TRANSITORIO_RE = __import__("re").compile(
+    r"gemini\s*:|UNAVAILABLE|time.?out|timed out|net::|ERR_|tunnel|"
+    r"context was destroyed|translate host|throttl|rate.?limit|TE-BFF-GTO|"
+    r"falha t[ée]cnica|leitura indispon|pacientes com o nome.{0,40}n[ãa]o foi poss|"
+    r"hom[ôo]nimo|mais de um paciente",
+    __import__("re").I)
+
+
+def classe_retry(motivo: str, categoria: str = "") -> str:
+    """'transitorio' | 'externo' | 'logica'. O loop de retry so retenta o
+    transitorio. Transitorio = infra (gemini/rede/throttle) OU homonimo (o
+    nascimento, agora com retry no fetch, desempata numa boa rodada). Externo =
+    responsavel Radiologista/Clinica/Cadastro. Resto = logica (nome/ilegivel/
+    revisao/desconhecido) — precisa conserto ou humano, nunca retry cego."""
+    m = str(motivo or "")
+    if _TRANSITORIO_RE.search(m):
+        return "transitorio"
+    _chave, quem, _acao = classificar_pendencia(m, categoria)
+    if quem in ("Radiologista", "Clínica", "Cadastro"):
+        return "externo"
+    return "logica"
+
+
+# Loop de retry do transitorio: teto de tentativas + backoff exponencial (satura 8h).
+MAX_RETRIES_TRANSITORIO = 6
+_BACKOFF_MIN = [15, 30, 60, 120, 240, 480]
+
+
+def retry_backoff_min(tentativa: int) -> int:
+    """Minutos ate o proximo retry da tentativa N (0-based). Exponencial, satura 8h.
+    A maioria dos transitorios (gemini 503) some em minutos -> as 1as pegam quase
+    tudo; as espacadas pegam queda longa (PRORADIS/proxy fora)."""
+    i = max(0, int(tentativa))
+    return _BACKOFF_MIN[i] if i < len(_BACKOFF_MIN) else _BACKOFF_MIN[-1]
+
+
+def deve_retentar(classe: str, tentativas: int) -> bool:
+    """O loop SO retenta 'transitorio', ate o teto. Externo/logica nunca (externo
+    espera terceiro; logica precisa conserto/humano — retry cego so gasta recurso)."""
+    return classe == "transitorio" and int(tentativas) < MAX_RETRIES_TRANSITORIO
+
+
+class RetryFila(Base):
+    """Fila de retry do transitorio (Fase 3): guias que falharam por INFRA e devem
+    ser re-tentadas sozinhas, com backoff, ate recuperar ou esgotar o teto."""
+    __tablename__ = "retry_fila"
+    id = Column(Integer, primary_key=True)
+    gto = Column(String(30), index=True)
+    conta = Column(String(20))
+    dia = Column(String(12))
+    classe = Column(String(20), default="transitorio")
+    tentativas = Column(Integer, default=0)
+    proximo_em = Column(DateTime(timezone=True), index=True)
+    ultimo_erro = Column(Text)
+    resolvido = Column(Boolean, default=False)  # recuperou OU esgotou o teto
+    criado_em = Column(DateTime(timezone=True), default=_now)
+    atualizado_em = Column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+def registrar_retry(gto, conta, dia, motivo, categoria: str = "") -> bool:
+    """Enfileira um TRANSITORIO pra re-tentar (agenda a 1a tentativa com backoff).
+    Externo/logica sao ignorados (nao retenta cego). Idempotente: se ja esta na
+    fila (nao resolvido), so atualiza o ultimo_erro. Retorna True se entrou."""
+    if classe_retry(motivo, categoria) != "transitorio":
+        return False
+    from datetime import timedelta
+    with SessionLocal() as s:
+        it = (s.query(RetryFila)
+              .filter(RetryFila.gto == str(gto), RetryFila.resolvido == False)  # noqa: E712
+              .first())
+        if it is None:
+            s.add(RetryFila(gto=str(gto), conta=str(conta), dia=str(dia),
+                            classe="transitorio", tentativas=0,
+                            ultimo_erro=str(motivo or "")[:300],
+                            proximo_em=_now() + timedelta(minutes=retry_backoff_min(0))))
+        else:
+            it.ultimo_erro = str(motivo or "")[:300]
+        s.commit()
+    return True
+
+
+def resolver_retry(gto) -> None:
+    """Guia recuperou (faturou) -> sai da fila."""
+    with SessionLocal() as s:
+        for it in (s.query(RetryFila)
+                   .filter(RetryFila.gto == str(gto), RetryFila.resolvido == False)):  # noqa: E712
+            it.resolvido = True
+        s.commit()
+
+
+def bump_retry(gto) -> None:
+    """Uma tentativa foi feita e falhou de novo -> incrementa e re-agenda (ou esgota
+    o teto -> resolvido=True, vira pendencia 'nossa, nao recuperou')."""
+    from datetime import timedelta
+    with SessionLocal() as s:
+        it = (s.query(RetryFila)
+              .filter(RetryFila.gto == str(gto), RetryFila.resolvido == False)  # noqa: E712
+              .first())
+        if not it:
+            return
+        it.tentativas = (it.tentativas or 0) + 1
+        if not deve_retentar("transitorio", it.tentativas):
+            it.resolvido = True
+        else:
+            it.proximo_em = _now() + timedelta(minutes=retry_backoff_min(it.tentativas))
+        s.commit()
+
+
+def retries_devidos(limite: int = 50) -> list:
+    """Itens prontos pra re-tentar agora (proximo_em <= agora, nao resolvido).
+    O worker agrupa por (dia, conta) e re-roda a esteira com apenas_gtos."""
+    with SessionLocal() as s:
+        q = (s.query(RetryFila)
+             .filter(RetryFila.resolvido == False,                      # noqa: E712
+                     RetryFila.proximo_em <= _now())
+             .order_by(RetryFila.proximo_em.asc()).limit(limite))
+        return [{"gto": r.gto, "conta": r.conta, "dia": r.dia,
+                 "tentativas": r.tentativas} for r in q.all()]
 
 
 _TITULO_GRUPO = {

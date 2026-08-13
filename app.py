@@ -577,6 +577,30 @@ if os.environ.get("ANEXACAO_AUTO_UPDATE", "0") == "1":
     threading.Thread(target=_anexacao_scheduler, daemon=True).start()
 
 
+def _retry_scheduler():
+    """LOOP DE RETRY do transitório (Fase 3): a cada ~20min re-tenta, DIRECIONADO, as
+    guias que falharam por INFRA (gemini/rede/throttle/JWT) e estão devidas. Só o
+    transitório entra na fila (classe_retry); externo/lógica NUNCA. Backoff
+    exponencial + teto — depois de esgotar, vira pendência 'nossa, não recuperou'.
+    Desligado por padrão (igual o faturar cron); ligue com RETRY_CRON=1."""
+    while not _glosa_stop.is_set():
+        try:
+            import esteira
+            res = esteira.processar_retries(
+                gemini_key=os.environ.get("GEMINI_API_KEY"), k_attach=3,
+                log=lambda m: app.logger.info("%s", m))
+            if res.get("devidos"):
+                app.logger.info("Retry loop: %s devida(s) em %s grupo(s).",
+                                res.get("devidos"), res.get("grupos"))
+        except Exception as e:
+            app.logger.error("Retry scheduler: %s", e)
+        _glosa_stop.wait(1200)   # ~20 min entre ciclos
+
+
+if os.environ.get("RETRY_CRON", "0") == "1":
+    threading.Thread(target=_retry_scheduler, daemon=True).start()
+
+
 # ── Faturamento automático diário (cron D-3 + reprocessa pendências) ────────────
 def _faturar_rodou_hoje() -> bool:
     """Já rodou o faturamento automático hoje? (compara a última marca em Brasília)."""
