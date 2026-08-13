@@ -130,16 +130,19 @@ Tudo com LLM lendo e **código decidindo** (princípios 1–5).
     Carteirinha NÃO é pesquisável no PRORADIS (testado 06/08). Logo a **chave forte
     é o NASCIMENTO** (que já temos, via `dataNascimento`). CPF só se a LLM ler do
     corpo do pedido (Fase 2) — pro caso da mãe (JOCASTA).
-  - **Raiz da ALESSANDRA (homônimo):** `esteira.py:~1452` — quando a worklist acha
-    2 pacientes com nome compatível, retorna **AMBIGUO na hora, SEM tentar o
-    nascimento** (o comentário diz "desempata a jusante", mas não há jusante nesse
-    caminho). O outro site (prontuário, `_cards_por_nascimento`) usa nascimento; a
-    worklist não. **Conserta num site, esquece no outro — o padrão recorrente.**
-  - **Bloqueio:** a worklist (`reports_list/get_list`) só traz `{accession, nome,
-    rows_html}` — **sem nascimento**. Então o fix precisa SOURCEAR o nascimento de
-    cada candidato pelo prontuário/cadastro (que tem) e casar com `g["nascimento"]`.
-    Isso CONECTA os dois sites (worklist ambígua → desempate por nascimento do
-    prontuário). É determinístico, zero LLM.
+  - **Raiz REAL da ALESSANDRA (via reprodução, 12/08):** a disambiguação por
+    nascimento **JÁ EXISTE** no prontuário (`extrair_anexos_dia`
+    `_cards_por_nascimento`/`_card_wl_por_nome_nascimento`). O que falhava era o
+    **INPUT**: o `g["nascimento"]` vinha de um GET ÚNICO SEM RETRY em
+    `/v1/gto/detalhada` (`esteira.py:~2581`). Um rate-limit/queda (comum neste
+    ambiente) deixava nascimento="" → nem encurtava a busca, nem desempatava → o
+    homônimo morria. **É a classe TRANSITÓRIO disfarçada de "lógica".**
+  - **FIX FEITO + DEPLOYADO (12/08):** o fetch do nascimento passou a usar
+    `_get_json_com_retry` (6 tentativas, backoff). A chave forte chega confiável e o
+    desempate existente acontece. Determinístico, sem LLM.
+  - **Lição:** vários "nosso_logica" são, na verdade, TRANSITÓRIO intermitente
+    (fetch/rede/Gemini). O **loop de retry (Fase 3) + hardening dos fetches** é o de
+    maior alavanca — mais do que caçar cada site de match à mão.
 - **[Fase 2] Extração LLM das chaves fortes:** o Gemini passa a extrair CPF/
   nascimento/carteirinha de cada doc (LEITURA), pro código casar por identidade.
 - **[Fase 3] Loop de retry do transitório:** tabela `(gto,conta,dia,classe,
