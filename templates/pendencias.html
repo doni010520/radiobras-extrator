@@ -88,6 +88,24 @@
     border-bottom:1px solid var(--rb-border);font-size:12.5px}
   details.interno .il:last-child{border-bottom:0}
   details.interno .il .g{font-weight:700;white-space:nowrap}
+  /* linha enxuta + detalhe que abre ao clicar */
+  tr.prow{cursor:pointer}
+  tr.prow:hover td{background:var(--rb-surface-2)}
+  td.tit{font-weight:600;color:var(--rb-fg)}
+  td.qa{white-space:nowrap}
+  td.qa .ttag{margin-bottom:6px;margin-right:6px}
+  td.chev{color:var(--rb-fg-muted);font-size:20px;font-weight:700;text-align:center;line-height:1;
+    transition:transform .18s;transform-origin:center}
+  tr.prow.exp td.chev{transform:rotate(90deg);color:var(--rb-primary)}
+  tr.prow.exp td{background:var(--rb-surface-2)}
+  tr.det{display:none}
+  tr.det.open{display:table-row}
+  tr.det>td{background:var(--rb-surface-2);border-top:0;padding:0}
+  .det-in{padding:4px 16px 16px 52px;max-width:820px}
+  .det-motivo{font-size:13px;line-height:1.55;color:var(--rb-fg)}
+  .det-acao{margin-top:10px;font-size:12.5px;color:var(--rb-fg-muted);line-height:1.45}
+  .det-acao b{color:var(--rb-fg)}
+  tr.done td.tit{text-decoration:line-through;opacity:.6}
 </style>
 </head>
 <body>
@@ -185,38 +203,35 @@
         <span class="c">{{ g.abertas }} aberta(s) · {{ g.total }} no total</span>
       </div>
       <table>
-        <tr><th style="width:36px"></th><th>GTO</th><th>Paciente</th><th>Unidade</th><th>Dia</th><th>Motivo</th><th>Quem age</th></tr>
+        <tr><th style="width:36px"></th><th>GTO</th><th>Paciente</th><th>Unidade</th><th>Motivo</th><th>Quem age</th><th style="width:26px"></th></tr>
         {% for p in g.itens %}
-        <tr data-id="{{ p.id }}" class="{{ 'done' if p.resolvido }}">
-          <td>
-            <input type="checkbox" class="chk" {{ 'checked' if p.resolvido }}
-                   onchange="marcar({{ p.id }}, this)" title="Marcar como resolvido">
-          </td>
+        <tr data-id="{{ p.id }}" class="prow {{ 'done' if p.resolvido }}" onclick="toggleDet(this)">
+          <td><input type="checkbox" class="chk" {{ 'checked' if p.resolvido }}
+                     onclick="event.stopPropagation()" onchange="marcar({{ p.id }}, this)" title="Marcar como resolvido"></td>
           <td class="gto">{{ p.gto }}</td>
           <td>{{ p.paciente or '—' }}</td>
           <td class="mut">{{ p.unidade }}</td>
-          <td class="mut">{{ p.dia or '—' }}</td>
-          <td class="motivo">{{ p.motivo or '—' }}
-            {% if p.exames_gto or p.exames_lidos %}
-            <div class="evid">
-              {% if p.exames_gto %}<span class="ev-k">Guia pede:</span> {{ p.exames_gto }}{% endif %}
-              {% if p.exames_lidos %}<span class="ev-sep">·</span> <span class="ev-k">IA leu na solicitação:</span> {{ p.exames_lidos }}
-              {% elif p.exames_gto %}<span class="ev-sep">·</span> <span class="ev-k">IA leu na solicitação:</span> <i>nada legível</i>{% endif %}
-            </div>
-            {% endif %}
-            {% if p.lido %}
-            <details class="evid-det"><summary>🔍 O que a IA leu, por anexo</summary><div class="evid-raw">{{ p.lido }}</div></details>
-            {% endif %}
-          </td>
-          <td>
+          <td class="tit">{{ p.titulo }}</td>
+          <td class="qa">
             {% if p.tipo == 'conferir' %}<span class="ttag conferir">👁 conferir</span>
             {% elif p.tipo == 'aguardar' %}<span class="ttag aguardar">⏳ aguardar</span>{% endif %}
-            <span class="who-pill {{ 'reproc' if p.responsavel in ('Reprocessar','Investigar') }}"
-                  title="{{ p.acao }}">→ {{ p.responsavel }}</span>
-            {% if p.acao %}<div style="font-size:11px;color:#5a6472;margin-top:4px;max-width:320px;line-height:1.35">{{ p.acao }}</div>{% endif %}
-            {% if p.resolvido %}<div class="who">✓ {{ p.resolvido_por }}{% if p.resolvido_em %} · {{ p.resolvido_em.strftime('%d/%m %H:%M') }}{% endif %}</div>{% endif %}
+            <span class="who-pill {{ 'reproc' if p.responsavel in ('Reprocessar','Investigar') }}">→ {{ p.responsavel }}</span>
           </td>
+          <td class="chev">›</td>
         </tr>
+        <tr class="det"><td colspan="7"><div class="det-in">
+          <div class="det-motivo">{{ p.motivo or '—' }}</div>
+          {% if p.exames_gto or p.exames_lidos %}
+          <div class="evid">
+            {% if p.exames_gto %}<span class="ev-k">Guia pede:</span> {{ p.exames_gto }}{% endif %}
+            {% if p.exames_lidos %}<span class="ev-sep">·</span> <span class="ev-k">IA leu na solicitação:</span> {{ p.exames_lidos }}
+            {% elif p.exames_gto %}<span class="ev-sep">·</span> <span class="ev-k">IA leu na solicitação:</span> <i>nada legível</i>{% endif %}
+          </div>
+          {% endif %}
+          {% if p.lido %}<details class="evid-det"><summary>🔍 O que a IA leu, por anexo</summary><div class="evid-raw">{{ p.lido }}</div></details>{% endif %}
+          {% if p.acao %}<div class="det-acao"><b>O que fazer:</b> {{ p.acao }}</div>{% endif %}
+          {% if p.resolvido %}<div class="who">✓ {{ p.resolvido_por }}{% if p.resolvido_em %} · {{ p.resolvido_em.strftime('%d/%m %H:%M') }}{% endif %}</div>{% endif %}
+        </div></td></tr>
         {% endfor %}
       </table>
     </div>
@@ -224,6 +239,13 @@
   {% endif %}
 </div>
 <script>
+function toggleDet(row){
+  var det = row.nextElementSibling;
+  if(det && det.classList.contains('det')){
+    var open = det.classList.toggle('open');
+    row.classList.toggle('exp', open);
+  }
+}
 async function marcar(id, el){
   const resolver = el.checked;
   const url = '/pendencias/'+id+(resolver?'/resolver':'/reabrir');
@@ -237,11 +259,13 @@ async function marcar(id, el){
     var c = document.getElementById('cAb'); if(c && typeof j.abertas!=='undefined') c.textContent = j.abertas;
     var badge = document.getElementById('rbNavPend');
     if(badge && typeof j.abertas!=='undefined'){ badge.textContent = j.abertas; badge.style.display = (j.abertas>0?'':'none'); }
-    // na aba "Abertas", some com a linha resolvida (e o grupo, se esvaziar)
+    // na aba "Abertas", some com a linha resolvida + a linha de detalhe (e o grupo, se esvaziar)
     if(resolver && location.search.indexOf('resolvidas')<0 && location.search.indexOf('todas')<0){
       var grp = tr.closest('.grp');
+      var det = tr.nextElementSibling;
       tr.style.transition='opacity .4s'; tr.style.opacity='0';
       setTimeout(function(){
+        if(det && det.classList.contains('det')) det.remove();
         tr.remove();
         if(grp && grp.querySelectorAll('tr[data-id]').length===0) grp.remove();
       }, 420);

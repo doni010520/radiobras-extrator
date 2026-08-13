@@ -1242,6 +1242,9 @@ def pendencias_page():
         p["bucket"] = _sla_bucket(p["sla"])
         _chave, _quem, _acao = db.classificar_pendencia(p.get("motivo"), p.get("categoria") or "")
         p["acao"] = _acao
+        # título CURTO do motivo (headline) — a linha fica enxuta; o texto completo
+        # abre ao clicar. Ex.: "Paciente não encontrado no PRORADIS".
+        p["titulo"] = getattr(db, "_TITULO_GRUPO", {}).get(_chave) or "Pendência"
         # TIPO — regra do dono: NOSSO (transitório em reprocessamento) NÃO é do front;
         # DELES é 'aguardar' (terceiro) ou 'conferir' (humano). Esgotado deixou de ser
         # nosso → vira 'conferir/investigar' no front.
