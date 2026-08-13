@@ -70,7 +70,7 @@ arriscar — porque o portal <b>não deixa remover anexo</b>: anexar errado é d
   <li><b>Entrada</b> — quem dispara e se vai <b>simular</b> ou <b>anexar de verdade</b>.</li>
   <li><b>Login &amp; descoberta</b> — entra no OdontoPrev (via proxy) e no PRORADIS; lista as guias do dia.</li>
   <li><b>Match / identidade</b> — acha o paciente certo e os exames dele (dois “lados” de busca).</li>
-  <li><b>Leitura + Canon + Cobertura</b> — a IA lê o pedido; o código normaliza os exames e decide se o pedido cobre a guia.</li>
+  <li><b>Leitura + Canon + Cobertura</b> — a IA lê o solicitação; o código normaliza os exames e decide se o solicitação cobre a guia.</li>
   <li><b>Anexação</b> — simula (DRY) ou anexa (REAL), com 3 travas antes da escrita.</li>
   <li><b>Fechamento</b> — faturou / pendência / aviso / fila de retry.</li>
 </ol>
@@ -85,7 +85,7 @@ arriscar — porque o portal <b>não deixa remover anexo</b>: anexar errado é d
   <tr><td><b>Loop de retry</b> (automático)</td><td>Se ligado (<code>RETRY_CRON=1</code>), a cada ~20 min re-tenta só as guias “nossas” que falharam por infra</td><td><b>FATURA DE VERDADE</b> (REAL), mas só as guias devidas.</td></tr>
 </table>
 <div class="box"><span class="k">Trava de concorrência:</span> antes de rodar, o sistema <b>reserva</b> o par (dia, unidade). <span class="se"><b>SE</b> já há uma execução naquele dia/unidade → <b>recusa</b> (“já existe execução em andamento”, HTTP 409)</span>, pra duas esteiras não anexarem a mesma guia ao mesmo tempo. A reserva expira sozinha em 2 h (rede de segurança). <span class="ref">app.py:772–799</span></div>
-<div class="box"><span class="k">Chave-mestra da anexação:</span> só existe etapa de anexação se <b>houver IA disponível E</b> o pedido de faturar for real (<code>k_attach&gt;0</code>). Sem isso, o sistema roda, decide e <b>mostra</b> o que faria — mas <b>não anexa nada</b>. <span class="ref">esteira.py:2400</span></div>
+<div class="box"><span class="k">Chave-mestra da anexação:</span> só existe etapa de anexação se <b>houver IA disponível E</b> o comando de faturar for real (<code>k_attach&gt;0</code>). Sem isso, o sistema roda, decide e <b>mostra</b> o que faria — mas <b>não anexa nada</b>. <span class="ref">esteira.py:2400</span></div>
 
 <!-- ══════════════ ETAPA 2 ══════════════ -->
 <h2><span class="step">2</span> Login &amp; descoberta das guias</h2>
@@ -99,7 +99,7 @@ arriscar — porque o portal <b>não deixa remover anexo</b>: anexar errado é d
   <p><b>SE</b> o login do OdontoPrev falhar <b>por proxy</b> (túnel/datacenter/saldo) → <b>para tudo</b> com a mensagem certa: “é o <b>proxy residencial</b> que falhou (saldo/dados/credencial), não a senha do portal”. <span class="ref">esteira.py:3059–3066</span> ⚠️ é o problema atual em produção.</p>
   <p><b>SE</b> o login falhar por <b>senha</b> do portal → para com “verifique/cadastre a senha do portal”. <span class="ref">esteira.py:3067–3069</span></p>
   <p><b>SE</b> o PRORADIS não trouxer laudos do dia → para com “nada a faturar”. <span class="ref">esteira.py:3072–3077</span></p>
-  <p><b>SE</b> a consulta trouxe guias mas <b>nenhuma com liberação no dia pedido</b> → <b>para</b> (“o filtro de período não foi aplicado”), em vez de processar o período inteiro. Num sistema que anexa, “não achei nada” é mais seguro que “processa tudo”. <span class="ref">esteira.py:2443–2448</span></p>
+  <p><b>SE</b> a consulta trouxe guias mas <b>nenhuma com liberação no dia consultado</b> → <b>para</b> (“o filtro de período não foi aplicado”), em vez de processar o período inteiro. Num sistema que anexa, “não achei nada” é mais seguro que “processa tudo”. <span class="ref">esteira.py:2443–2448</span></p>
   <p><b>SE</b> o token de acesso não foi capturado e há guias → <b>para</b> (“nada foi processado”), pra não decidir às cegas. <span class="ref">esteira.py:3089–3093</span></p>
 </div>
 <p>Das guias do dia, o sistema só olha as em <b>REPASSE</b> (as que faltam faturar). Para cada uma, na descoberta:</p>
@@ -114,7 +114,7 @@ arriscar — porque o portal <b>não deixa remover anexo</b>: anexar errado é d
 <p>O sistema faz <b>duas buscas de identidade</b> separadas, e as duas usam o <b>nascimento</b> como chave forte:</p>
 <ul>
   <li><b>Lado A — analítico/worklist:</b> acha os <b>exames</b> do paciente (accessions/laudos/imagens). <span class="ref">esteira.py:1396</span></li>
-  <li><b>Lado B — prontuário:</b> acha os <b>documentos</b> do paciente (o pedido do dentista, RG). <span class="ref">extrair_anexos_dia.py:322</span></li>
+  <li><b>Lado B — prontuário:</b> acha os <b>documentos</b> do paciente (o solicitação do dentista, RG). <span class="ref">extrair_anexos_dia.py:322</span></li>
 </ul>
 <table>
   <tr><th>Cenário</th><th>O que o sistema decide</th></tr>
@@ -131,30 +131,30 @@ arriscar — porque o portal <b>não deixa remover anexo</b>: anexar errado é d
 
 <!-- ══════════════ ETAPA 4 ══════════════ -->
 <h2><span class="step">4</span> Leitura + Canon + Cobertura — o coração da decisão</h2>
-<p class="flow"><b>A IA lê</b> (transcreve) → <b>o código normaliza</b> os exames (canon) → <b>o código decide</b> se o pedido cobre a guia.</p>
+<p class="flow"><b>A IA lê</b> (transcreve) → <b>o código normaliza</b> os exames (canon) → <b>o código decide</b> se o solicitação cobre a guia.</p>
 <h3>4.1 — A IA lê (só transcreve)</h3>
-<p>Para cada anexo, a IA devolve: tipo (pedido/laudo/documento…), se está legível, <b>o nome do paciente</b>, o <b>dentista</b> e o <b>CRO</b> do carimbo, a <b>lista de exames</b> pedidos e a <b>transcrição literal</b> do texto + a <b>data</b>. Ela <b>não</b> decide nada. <span class="ref">esteira.py:784–802</span></p>
+<p>Para cada anexo, a IA devolve: tipo (solicitação/laudo/documento…), se está legível, <b>o nome do paciente</b>, o <b>dentista</b> e o <b>CRO</b> do carimbo, a <b>lista de exames</b> solicitados e a <b>transcrição literal</b> do texto + a <b>data</b>. Ela <b>não</b> decide nada. <span class="ref">esteira.py:784–802</span></p>
 <h3>4.2 — O código normaliza (canon)</h3>
-<p>O texto lido vira exames <b>canônicos</b> (“FOTOS INTRA BUCAIS” → <code>fotografia</code>; “Doc Orto” → <code>documentacao</code>) por 3 camadas determinísticas: dicionário de sinônimos, aproximação por erro de digitação (tolerância de 1 letra) e — só em pedido manuscrito — recuperação por prefixo. <span class="ref">solicitacao_utils.py:197–210</span></p>
-<div class="box"><span class="k">Documentação ortodôntica ≠ periapical.</span> Um pedido de “documentação” <b>não</b> vira periapical. Logo, se a guia autoriza periapical à parte e o pedido só tem documentação, o sistema diz <b>“não cobre”</b> (decisão do dono, 13/08 — são exames diferentes). <span class="ref">test_decisao.py:264–270</span></div>
+<p>O texto lido vira exames <b>canônicos</b> (“FOTOS INTRA BUCAIS” → <code>fotografia</code>; “Doc Orto” → <code>documentacao</code>) por 3 camadas determinísticas: dicionário de sinônimos, aproximação por erro de digitação (tolerância de 1 letra) e — só em solicitação manuscrito — recuperação por prefixo. <span class="ref">solicitacao_utils.py:197–210</span></p>
+<div class="box"><span class="k">Documentação ortodôntica ≠ periapical.</span> Um solicitação de “documentação” <b>não</b> vira periapical. Logo, se a guia autoriza periapical à parte e o solicitação só tem documentação, o sistema diz <b>“não cobre”</b> (decisão do dono, 13/08 — são exames diferentes). <span class="ref">test_decisao.py:264–270</span></div>
 <h3>4.3 — O código decide a cobertura</h3>
-<p>Regra central: o pedido cobre a guia <b>SE</b> os exames da guia estão contidos nos exames do pedido. Avalia <b>o pedido mais recente</b> (pedido novo vence antigo).</p>
+<p>Regra central: o solicitação cobre a guia <b>SE</b> os exames da guia estão contidos nos exames do solicitação. Avalia <b>o solicitação mais recente</b> (solicitação novo vence antigo).</p>
 <table>
   <tr><th>Cenário</th><th>Decisão</th></tr>
-  <tr><td>O pedido mais recente cobre a guia</td><td>✅ <b>FATURA</b> (segue para anexar). <span class="ref">esteira.py:672–675</span></td></tr>
+  <tr><td>O solicitação mais recente cobre a guia</td><td>✅ <b>FATURA</b> (segue para anexar). <span class="ref">esteira.py:672–675</span></td></tr>
   <tr><td>Sozinho não cobre, mas <b>duas folhas do mesmo dia/dentista juntas</b> cobrem</td><td>✅ <b>FATURA (união)</b> — ex.: panorâmica numa folha, periapical+interproximal noutra. <span class="ref">esteira.py:696–710</span></td></tr>
   <tr><td>Não cobre, mas outra guia do mesmo paciente tem folha que cobre (30 dias)</td><td>✅ <b>FATURA (pareamento)</b>. <span class="ref">esteira.py:729–741</span></td></tr>
-  <tr><td>Não cobre e não há união/pareamento</td><td><b>Pendência “não cobre”</b> — o motivo já diz <b>o que a guia pede</b> e <b>o que o pedido listou</b>, e o que falta. <span class="ref">esteira.py:1680–1684</span></td></tr>
-  <tr><td>A caligrafia do pedido está ilegível (a IA não decifrou)</td><td><b>Pendência “ilegível”</b> — “é limitação de leitura nossa, conferir e anexar à mão” (não culpa a clínica). <span class="ref">esteira.py:1674–1679</span></td></tr>
+  <tr><td>Não cobre e não há união/pareamento</td><td><b>Pendência “não cobre”</b> — o motivo já diz <b>o que a guia pede</b> e <b>o que o solicitação listou</b>, e o que falta. <span class="ref">esteira.py:1680–1684</span></td></tr>
+  <tr><td>A caligrafia do solicitação está ilegível (a IA não decifrou)</td><td><b>Pendência “ilegível”</b> — “é limitação de leitura nossa, conferir e anexar à mão” (não culpa a clínica). <span class="ref">esteira.py:1674–1679</span></td></tr>
   <tr><td>Não deu para ler o que a <b>própria guia</b> autoriza</td><td><b>Pendência “guia ilegível”</b> (falha nossa). <span class="ref">esteira.py:750–751</span></td></tr>
   <tr><td>Documentação ortodôntica <b>sem o laudo da telerradiografia</b> (traçado)</td><td><b>Segura</b> (não fatura) — pendência “esperando o traçado”; anexa sozinho quando o laudo sair. <span class="ref">esteira.py:1258–1278</span></td></tr>
-  <tr><td>Pedido certo, mas com <b>data vencida</b> (&gt;60 dias)</td><td>✅ <b>Ajusta a data</b> do exame por cima da imagem e segue. Só vira revisão se não conseguir reescrever (ex.: PDF de várias páginas). <span class="ref">esteira.py:486–497, 2123–2158</span></td></tr>
+  <tr><td>Solicitação certo, mas com <b>data vencida</b> (&gt;60 dias)</td><td>✅ <b>Ajusta a data</b> do exame por cima da imagem e segue. Só vira revisão se não conseguir reescrever (ex.: PDF de várias páginas). <span class="ref">esteira.py:486–497, 2123–2158</span></td></tr>
 </table>
 <p>Quando a 1ª decisão dá “não cobre” ou “paciente incompatível”, o sistema faz uma <b>2ª leitura dirigida</b> (um anexo por vez, com atenção) antes de desistir. <span class="ref">esteira.py:1980–1995</span></p>
 
 <!-- ══════════════ ETAPA 5 ══════════════ -->
 <h2><span class="step">5</span> Anexação — simular (DRY) ou anexar (REAL) 🔒</h2>
-<p>Só entra aqui a guia que passou no <b>portão</b>: tem laudo válido (ou dispensa), tem pedido/justificativa, e não falta o traçado da tele. <span class="ref">esteira.py:2717–2734</span></p>
+<p>Só entra aqui a guia que passou no <b>portão</b>: tem laudo válido (ou dispensa), tem solicitação/justificativa, e não falta o traçado da tele. <span class="ref">esteira.py:2717–2734</span></p>
 <div class="box"><span class="k">SE for DRY (simulação):</span> marca <b>“ANEXARIA”</b>, mostra o plano e <b>não escreve nada</b>. Simulação <b>nunca</b> conta como faturado.</div>
 <div class="box"><span class="k">SE for REAL:</span> antes do único ponto de escrita irreversível, passa por <b>3 travas</b>:</div>
 <ol>
@@ -174,11 +174,11 @@ arriscar — porque o portal <b>não deixa remover anexo</b>: anexar errado é d
   <tr><td>Esperando o traçado (tele)</td><td>Doc ortodôntica com panorâmica, falta o laudo da telerradiografia</td><td>Radiologista</td><td>Não (espera o laudo)</td></tr>
   <tr><td>Esperando o laudo</td><td>Falta o laudo do exame no PRORADIS</td><td>Radiologista</td><td>Não</td></tr>
   <tr><td>Exame sem laudo e sem imagem</td><td>Nada a anexar</td><td>Radiologista</td><td>Não</td></tr>
-  <tr><td>Não cobre</td><td>O pedido não inclui um exame que a guia autoriza</td><td>Clínica</td><td>Não</td></tr>
-  <tr><td>Sem pedido</td><td>Não há pedido do dentista no prontuário</td><td>Clínica</td><td>Não</td></tr>
+  <tr><td>Não cobre</td><td>O solicitação não inclui um exame que a guia autoriza</td><td>Clínica</td><td>Não</td></tr>
+  <tr><td>Sem solicitação</td><td>Não há solicitação do dentista no prontuário</td><td>Clínica</td><td>Não</td></tr>
   <tr><td>Paciente não encontrado</td><td>Cadastro não bate com o PRORADIS</td><td>Cadastro</td><td>Não</td></tr>
-  <tr><td>Pedido ilegível</td><td>A IA não decifrou a caligrafia</td><td>Conferência</td><td>Não</td></tr>
-  <tr><td>Data vencida (não ajustou)</td><td>Pedido certo, data antiga não reescrita</td><td>Conferência</td><td>Não</td></tr>
+  <tr><td>Solicitação ilegível</td><td>A IA não decifrou a caligrafia</td><td>Conferência</td><td>Não</td></tr>
+  <tr><td>Data vencida (não ajustou)</td><td>Solicitação certo, data antiga não reescrita</td><td>Conferência</td><td>Não</td></tr>
   <tr><td>Exame em mais de um dia</td><td>Ambíguo entre dias vizinhos</td><td>Conferência</td><td>Não</td></tr>
   <tr><td>Homônimo</td><td>Mais de um paciente com o mesmo nome</td><td>Conferência</td><td>⚠️ marcado como “nosso” (ver abaixo)</td></tr>
   <tr><td>Nome não bate</td><td>Docs do prontuário são de outra pessoa</td><td>Nós (conferir)</td><td>Não (recusa correta)</td></tr>

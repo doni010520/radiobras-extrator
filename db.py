@@ -831,6 +831,14 @@ _GRUPOS_PENDENCIA = [
      r"caligrafia do pedido.{0,40}ileg[íi]vel|n[ãa]o conseguiu ler os exames escritos",
      "Conferência", "A letra do pedido do dentista não foi lida pelo robô — não é "
      "falta de pedido. Conferir o pedido no prontuário e anexar à mão."),
+    # CARINA (28/07): HÁ documento no nome do paciente, mas a solicitação está mal-lida
+    # ou pede exame diferente — não é falta de pedido nem nome errado. Caía em "Outros"
+    # (fallback sem ação); a reconciliação 13/08 achou 9 guias assim.
+    ("solic_nao_confirmada",
+     r"solicita[çc][ãa]o do dentista n[ãa]o p[ôo]de ser confirmada",
+     "Conferência", "Há documento no nome do paciente, mas a solicitação está mal-lida "
+     "ou pede exame diferente do que a guia autoriza. Conferir o pedido no prontuário "
+     "e, se cobrir, anexar à mão."),
     ("pedido_nao_cobre", r"n[ãa]o cobre tudo que a guia autoriza|FALTA no pedido",
      "Clínica", "Pedir à clínica um pedido que inclua o exame que falta."),
     ("sem_pedido", r"nenhum pedido do dentista|n[ãa]o h[áa] nenhum pedido|sem anexo candidato"
@@ -866,6 +874,14 @@ _GRUPOS_PENDENCIA = [
      "Dizer qual é o dia certo e rodar esse dia."),
     ("homonimo", r"mais de um paciente|hom[ôo]nimo",
      "Conferência", "Dois pacientes com o mesmo nome. Dizer qual é o certo."),
+    # Genéricos que caíam em "Outros" (reconciliação 13/08): revisão humana (6) e a
+    # nota de data ajustada (1) que sobrava como pendência.
+    ("revisao_humana", r"revis[ãa]o humana",
+     "Conferência", "O robô marcou para revisão humana. Abrir a execução, conferir a "
+     "solicitação e a guia e decidir."),
+    ("data_ajustada", r"[Dd]ata ajustada automaticamente",
+     "Conferência", "O robô ajustou a data da solicitação automaticamente. Conferir "
+     "se a guia faturou ou se precisa reprocessar o dia."),
 ]
 
 
@@ -1045,7 +1061,10 @@ _TITULO_GRUPO = {
     "pedido_nao_cobre": "O pedido do dentista não cobre a guia",
     "sem_pedido": "Não há pedido do dentista no prontuário",
     "data_vencida": "Pedido certo, mas com data vencida — anexar à mão",
-    "nome_nao_bate": "O nome do pedido não bate com o da guia",
+    "nome_nao_bate": "O nome da solicitação não bate com o da guia",
+    "solic_nao_confirmada": "Solicitação não confirmada — conferir",
+    "revisao_humana": "Revisão humana",
+    "data_ajustada": "Data ajustada — conferir",
     "guia_ilegivel": "Não conseguimos ler o que a guia autoriza",
     "anexacao": "A anexação foi barrada",
     "falha_tecnica": "Falha técnica do robô",
