@@ -1,7 +1,7 @@
 # RadioBras — Decisões, Arquitetura e Estado (doc vivo)
 
 > Fonte única de verdade das **decisões duras** e do **estado** do sistema de
-> faturamento RadioBras/OdontoPrev. Atualizado em 12/08/2026. Leia isto ANTES de
+> faturamento RadioBras/OdontoPrev. Atualizado em 13/08/2026. Leia isto ANTES de
 > propor mudanças — várias decisões abaixo já foram tomadas e não devem ser
 > re-perguntadas.
 
@@ -68,6 +68,8 @@
 ### Corrigido e DEPLOYADO (correto)
 - **Causa raiz "enviei ≠ grudou":** o anexador confirma por identidade (`_chave_anexo`) que CADA arquivo persistiu na guia antes de marcar OK (não confia no toast "sucesso"+contador). Só derruba o OK quando a leitura foi real.
 - **Gate da TELE:** documentação ortodôntica não fatura sem o **laudo do traçado**. É por LAUDO (PDF `LAUDO_TELERRADIOGRAFIA_<acc>_CEPH`, nome por exame) — **não** é imagem/composto, então é seguro.
+- **Nascimento com retry (Fase 1):** o `g["nascimento"]` (chave forte) passou a usar `_get_json_com_retry` (6 tentativas) — antes um rate-limit deixava nascimento="" e o desempate por homônimo morria (caso ALESSANDRA).
+- **Taxonomia + loop de retry (Fases 0+3, DEPLOYADO 13/08):** `classe_retry(motivo)` → `transitorio|externo|logica`. Tabela `retry_fila` + `apenas_gtos` na esteira (retry DIRECIONADO, só as guias devidas) + worker `esteira.processar_retries` + scheduler `_retry_scheduler` (a cada 20min). **DESLIGADO por padrão** — liga com `RETRY_CRON=1` (mesmo padrão do `FATURAR_CRON`). Backoff 15m→8h, teto 6. Só `transitorio` retenta; anexação real com a mesma trava de identidade (idempotente, não duplica). Suite 241→249.
 
 ### REVERTIDO (estava errado)
 - **Gate de imagem por accession** (commit revertido 12/08): entregável é composto → over-bloqueava. NÃO reintroduzir sem resolver o problema do composto.
@@ -112,8 +114,10 @@ Os "66" eram contagem por-rodada (com repetição). Únicas = **40**:
 - 10 **"Outros"** (bug do classificador): 6 = "revisão humana", 3 = "solicitação ilegível/pede exame diferente", 1 = CAUA ("data ajustada", suspeito).
 - 6 **Clínica** (3 sem pedido c/ prontuário=0 = real; 3 "não cobre" = guia pede periapical/interproximal que o pedido de documentação não lista → **dúvida de domínio pendente**: doc ortodôntica cobre periapical?).
 - 4 **Cadastro** (paciente não achado no PRORADIS).
-- 3 **Nós** (EVELYN=gemini 503 transitório → re-run recupera; ALESSANDRA=homônimo → nascimento; JOCASTA=docs no nome do responsável → CPF/identidade).
+- 3 **Nós** (EVELYN=gemini 503 transitório → re-run recupera; ALESSANDRA=homônimo → nascimento, JÁ CORRIGIDO Fase 1; ~~JOCASTA~~ **reclassificada** → ver abaixo).
 - 2 **Conferência** (ilegível).
+
+**JOCASTA (verificado 13/08 — NÃO era "nossa"):** a hipótese "docs no nome do responsável/CPF" estava **ERRADA**. Reprodução pelo registro salvo (`ExecucaoItem`): o prontuário da guia da JOCASTA (nasc. 1993-03-20) só tinha docs de **outras duas pessoas** — um pedido de "Lara da Costa" e um documento de "Maria de Fátima" (nasc. 01/01/2000). Nomes E nascimentos diferentes. **Não existe documento da JOCASTA lá.** Logo a recusa está **CORRETA** — anexar qualquer um seria glosa (paciente errado). É **externo/clínica** (falta a clínica anexar o pedido certo), não bug nosso. Correção feita: a mensagem da pendência deixou de sugerir "(mãe, responsável)" e "corrigir o nome no cadastro" (instrução perigosa que levaria a colar doc de terceiro) → agora manda **solicitar o pedido à clínica e nunca anexar doc de outra pessoa**.
 
 ---
 
@@ -122,9 +126,10 @@ Os "66" eram contagem por-rodada (com repetição). Únicas = **40**:
 **Objetivo:** o app resolve o NOSSO sozinho em produção; só o EXTERNO vira pendência.
 Tudo com LLM lendo e **código decidindo** (princípios 1–5).
 
-- **[Fase 0] Taxonomia de retry** (`nosso_transitorio`/`nosso_logica`/`externo`) —
-  lógica pura, TDD, e mostrar o selo nas pendências. Zero risco, alicerce.
-- **[Fase 1] Identidade determinística em TODOS os sites de match.** Achados (12/08):
+- **[Fase 0 ✅ FEITA+DEPLOYADA 13/08] Taxonomia de retry** (`classe_retry` →
+  `transitorio`/`logica`/`externo`) — lógica pura, TDD (`test_classe_retry`). Usada
+  pelo hook em `salvar_execucao` pra alimentar a fila de retry.
+- **[Fase 1 ✅ FEITA+DEPLOYADA 12/08] Identidade determinística nos sites de match.** Achados (12/08):
   - **CPF NÃO vem do OdontoPrev.** `/v1/gto/detalhada → beneficiario` só tem
     `codigo, codigoPlano, dataNascimento, isBradesco, nome, nomeEmpresa, plano`.
     Carteirinha NÃO é pesquisável no PRORADIS (testado 06/08). Logo a **chave forte
@@ -143,13 +148,26 @@ Tudo com LLM lendo e **código decidindo** (princípios 1–5).
   - **Lição:** vários "nosso_logica" são, na verdade, TRANSITÓRIO intermitente
     (fetch/rede/Gemini). O **loop de retry (Fase 3) + hardening dos fetches** é o de
     maior alavanca — mais do que caçar cada site de match à mão.
-- **[Fase 2] Extração LLM das chaves fortes:** o Gemini passa a extrair CPF/
-  nascimento/carteirinha de cada doc (LEITURA), pro código casar por identidade.
-- **[Fase 3] Loop de retry do transitório:** tabela `(gto,conta,dia,classe,
-  tentativas,proximo_em,ultimo_erro)` + filtro `apenas_gtos` na esteira (retry
-  DIRECIONADO, não re-rodar o dia todo) + worker no scheduler. Teto sugerido: 6
-  tentativas, backoff 15m→30m→1h→2h→4h→8h, limitado ao prazo de 7 dias; estourou →
-  pendência "nossa, não recuperou".
+- **[Fase 2 ✅ VERIFICADA 13/08 — veredito: NÃO construir matcher]** A ideia era "LLM
+  extrai a identidade da criança do pedido → casa por identidade" (caso JOCASTA).
+  **A verificação matou a premissa:** JOCASTA não é caso de mãe/menor — os docs no
+  prontuário são de **outras pessoas** (nomes E nascimentos diferentes; ver seção 5).
+  Forçar um match ali **causaria glosa** — seria o erro do gate de imagem de novo. O
+  correto é o que o sistema **já faz**: recusar e virar pendência. Entregue: (a)
+  mensagem da pendência tornada honesta/segura ("nunca anexar doc de terceiro;
+  solicitar o pedido à clínica"), (b) confirmação de que a trava por nome já barra
+  esses casos, (c) o loop (Fase 3) corretamente NÃO retenta essa classe (`logica`).
+  **Chave forte extra (CPF/carteirinha lidos do pedido) fica como melhoria FUTURA
+  opcional** — só ajudaria o caso genuíno de menor (pedido nomeia a criança), que já
+  casa por `paciente_lido`; não vale o risco de mexer no prompt sem um caso real que
+  precise disso.
+- **[Fase 3 ✅ FEITA+DEPLOYADA 13/08] Loop de retry do transitório:** tabela
+  `retry_fila (gto,conta,dia,classe,tentativas,proximo_em,ultimo_erro,resolvido)` +
+  filtro `apenas_gtos` na esteira (retry DIRECIONADO) + worker `processar_retries` +
+  scheduler `_retry_scheduler` (20min, `RETRY_CRON=1` liga). Backoff
+  15m→30m→1h→2h→4h→8h, teto 6; estourou → fica pendência "nossa, não recuperou".
+  Hook em `salvar_execucao`: faturado → `resolver_retry`; falha `transitorio` →
+  `registrar_retry`. TDD `test_retry_loop`.
 - **[Aberto] Proxy FlameProxies (produção):** precisa da URL atual (ou resultado do
   `/portal/testar`) pra diagnosticar (saldo? sessão expirada? credencial?). Sem
   proxy vivo, o usuário não roda pela tela do VPS.

@@ -2071,10 +2071,15 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                         _motivo = (
                             "NÃO FATUROU porque nenhum documento do prontuário está no nome "
                             "deste paciente. O prontuário tem anexos, mas o nome lido em cada "
-                            "um não confere com o nome da guia — pode ser pedido em nome de "
-                            "outra pessoa (mãe, responsável) ou cadastro divergente. "
-                            "O QUE FAZER: conferir no prontuário se o pedido é mesmo deste "
-                            "paciente e, se for, corrigir o nome no cadastro.")
+                            "um é de OUTRA pessoa — provavelmente o pedido desta paciente "
+                            "ainda não foi anexado, e o que está lá pertence a outros "
+                            "pacientes. O QUE FAZER: conferir no prontuário; se NENHUM anexo "
+                            "for mesmo desta paciente (nome/nascimento de outra pessoa), NÃO "
+                            "anexe nada — solicite à clínica o pedido correto desta paciente. "
+                            "Nunca anexar documento de terceiro (gera glosa). Caso verificado: "
+                            "JOCASTA (08/08) — o prontuário tinha pedido de 'Lara da Costa' e "
+                            "documento de 'Maria de Fátima', nascimentos diferentes; recusa "
+                            "correta.")
                 elif _motivo == "GTO_ILEGIVEL":
                     _motivo = (
                         "NÃO FATUROU porque o sistema não conseguiu ler quais exames a "
