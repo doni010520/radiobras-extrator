@@ -905,6 +905,20 @@ def deve_retentar(classe: str, tentativas: int) -> bool:
     return classe == "transitorio" and int(tentativas) < MAX_RETRIES_TRANSITORIO
 
 
+def classe_efetiva(motivo: str, categoria: str = "", tentativas: int = 0) -> str:
+    """A etiqueta HONESTA, agora com ESTADO (o furo que o dono achou 13/08): um
+    'transitorio' que JA falhou o teto de vezes NAO pode continuar se anunciando
+    como 'nossa, auto-recuperavel' — ele vira 'esgotado' (nossa, o retry nao
+    resolveu -> investigar, nao e mais retry cego). `classe_retry` sozinha e
+    stateless (olha so o texto de UMA rodada) e por isso rotulava de 'transitorio'
+    algo que ja provou nao se recuperar (195831154 falhou a leitura 4x seguidas).
+    'externo'/'logica' independem de tentativas (nunca foram retentaveis)."""
+    base = classe_retry(motivo, categoria)
+    if base == "transitorio" and int(tentativas or 0) >= MAX_RETRIES_TRANSITORIO:
+        return "esgotado"
+    return base
+
+
 class RetryFila(Base):
     """Fila de retry do transitorio (Fase 3): guias que falharam por INFRA e devem
     ser re-tentadas sozinhas, com backoff, ate recuperar ou esgotar o teto."""
@@ -922,10 +936,23 @@ class RetryFila(Base):
     atualizado_em = Column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+def _tentativas_ja_falhou(s, gto) -> int:
+    """Quantas vezes a esteira JA olhou esta guia e NAO faturou (historico real, de
+    qualquer execucao). Semeia o contador da fila pra o teto refletir a REALIDADE —
+    nao reiniciar do zero uma guia que ja falhou N vezes (o furo que o dono achou
+    13/08: 195831154 falhou a leitura 4x e ainda se dizia 'transitorio, do zero')."""
+    return (s.query(ExecucaoItem)
+            .filter(ExecucaoItem.gto == str(gto),
+                    ExecucaoItem.faturado == False)  # noqa: E712
+            .count())
+
+
 def registrar_retry(gto, conta, dia, motivo, categoria: str = "") -> bool:
-    """Enfileira um TRANSITORIO pra re-tentar (agenda a 1a tentativa com backoff).
-    Externo/logica sao ignorados (nao retenta cego). Idempotente: se ja esta na
-    fila (nao resolvido), so atualiza o ultimo_erro. Retorna True se entrou."""
+    """Enfileira um TRANSITORIO pra re-tentar. Externo/logica sao ignorados (nao
+    retenta cego). Idempotente: se ja esta na fila (nao resolvido), so atualiza o
+    ultimo_erro. O contador ja NASCE semeado com as falhas historicas (nao do zero),
+    entao uma guia que ja falhou o teto de vezes entra ja ESGOTADA (nao vira retry
+    cego). Retorna True se entrou (ou ja estava)."""
     if classe_retry(motivo, categoria) != "transitorio":
         return False
     from datetime import timedelta
@@ -934,10 +961,13 @@ def registrar_retry(gto, conta, dia, motivo, categoria: str = "") -> bool:
               .filter(RetryFila.gto == str(gto), RetryFila.resolvido == False)  # noqa: E712
               .first())
         if it is None:
+            _seed = _tentativas_ja_falhou(s, gto)
+            _esgotou = not deve_retentar("transitorio", _seed)
             s.add(RetryFila(gto=str(gto), conta=str(conta), dia=str(dia),
-                            classe="transitorio", tentativas=0,
+                            classe="transitorio", tentativas=_seed,
+                            resolvido=_esgotou,   # ja nasceu esgotada -> nao retenta cego
                             ultimo_erro=str(motivo or "")[:300],
-                            proximo_em=_now() + timedelta(minutes=retry_backoff_min(0))))
+                            proximo_em=_now() + timedelta(minutes=retry_backoff_min(_seed))))
         else:
             it.ultimo_erro = str(motivo or "")[:300]
         s.commit()
