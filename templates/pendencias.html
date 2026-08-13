@@ -116,7 +116,6 @@
   <div class="tipo-sum">
     <span class="ts ts-conf" title="Precisam de você olhar e decidir">👁 <b>{{ tipo_ct.conferir }}</b>&nbsp;a conferir</span>
     <span class="ts ts-agu" title="Aguardando laudo/pedido/cadastro — resolve quando o terceiro age">⏳ <b>{{ tipo_ct.aguardar }}</b>&nbsp;aguardando terceiros</span>
-    {% if n_interno %}<span class="ts ts-int" title="Falha nossa — o sistema reprocessa sozinho">🔄 {{ n_interno }} o sistema resolve</span>{% endif %}
   </div>
   {% endif %}
 
@@ -222,18 +221,6 @@
       </table>
     </div>
     {% endfor %}
-  {% endif %}
-
-  {% if interno and status == 'abertas' %}
-  <details class="interno">
-    <summary>🔄 {{ n_interno }} resolvendo internamente <span>— falha nossa (robô/leitura); o sistema reprocessa sozinho. Não é tarefa da recepção.</span></summary>
-    {% for p in interno %}
-    <div class="il">
-      <span><span class="g">{{ p.gto }}</span> · {{ p.paciente or '—' }} <span class="mut">· {{ p.dia }} · {{ p.unidade }}</span></span>
-      <span class="mut" style="max-width:420px;text-align:right">{{ p.motivo|truncate(90) }}</span>
-    </div>
-    {% endfor %}
-  </details>
   {% endif %}
 </div>
 <script>
