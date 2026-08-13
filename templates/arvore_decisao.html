@@ -151,6 +151,7 @@ arriscar — porque o portal <b>não deixa remover anexo</b>: anexar errado é d
   <tr><td>Solicitação certo, mas com <b>data vencida</b> (&gt;60 dias)</td><td>✅ <b>Ajusta a data</b> do exame por cima da imagem e segue. Só vira revisão se não conseguir reescrever (ex.: PDF de várias páginas). <span class="ref">esteira.py:486–497, 2123–2158</span></td></tr>
 </table>
 <p>Quando a 1ª decisão dá “não cobre” ou “paciente incompatível”, o sistema faz uma <b>2ª leitura dirigida</b> (um anexo por vez, com atenção) antes de desistir. <span class="ref">esteira.py:1980–1995</span></p>
+<div class="box"><span class="k">Sinal verde humano (feature 13/08):</span> nas pendências de <b>ilegível / nome não bate</b>, o usuário abre, confere que a solicitação é do paciente e clica <b>“✔ Confirmei”</b>. Isso libera <b>só a trava do nome (e a cobertura)</b> — o robô re-roda aquela guia e fatura. As outras travas ficam: precisa ser solicitação legível e o <b>laudo continua obrigatório</b>. Grava quem confirmou (a responsabilidade é dele). <span class="ref">esteira.py:_escolher_solicitacao(nome_confirmado); db.confirmacoes_nome</span></div>
 
 <!-- ══════════════ ETAPA 5 ══════════════ -->
 <h2><span class="step">5</span> Anexação — simular (DRY) ou anexar (REAL) 🔒</h2>
