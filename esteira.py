@@ -551,7 +551,8 @@ def _carimbar_imagem(blob, nova_data, tipo, box_data, box_assinatura, reler_box_
 
 
 def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
-                          detalhe=None, gto_txt="", prontuario_confirmado=False):
+                          detalhe=None, gto_txt="", prontuario_confirmado=False,
+                          nome_confirmado=False):
     """NÍVEL 2 — o CÓDIGO escolhe a solicitação certa entre as leituras que o Gemini
     transcreveu (uma por anexo). Determinístico: tipo solicitação, legível, paciente
     compatível (tokens) e exames que COBREM os da GTO. Desempate: mais exames em
@@ -593,7 +594,13 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         if not bool(a.get("legivel", True)):
             continue
         _lido = a.get("paciente_lido") or ""
-        if _nomes_compat(_lido, nome_gto):
+        if nome_confirmado:
+            # SINAL VERDE HUMANO (feature 13/08): o usuário abriu a pendência, conferiu
+            # a solicitação e confirmou que é o paciente. A trava do NOME é liberada
+            # (aceita ilegível/mal-lido/nome de outra leitura). As outras travas ficam:
+            # tem de ser 'solicitacao' legível, e o LAUDO segue obrigatório no chamador.
+            a["_via"] = "confirmado_humano"
+        elif _nomes_compat(_lido, nome_gto):
             a["_via"] = "nome"
         elif _nome_ausente(_lido, nome_gto):
             # NOME NAO LIDO — nao e prova contra. Aceita se houver OUTRO sinal: o
@@ -669,7 +676,10 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         if isinstance(detalhe, dict):
             detalhe["escolhida_idx"] = recente["idx"]
             detalhe["outras"] = len(cands_ok) - 1
-        if recente["cobre"]:
+        # Confirmação humana também libera a COBERTURA: o usuário vouchou que a
+        # solicitação é do paciente e vale pra esta guia (na ilegível os exames nem
+        # sempre são lidos, então "cobre" seria falso à toa). O laudo ainda é exigido.
+        if recente["cobre"] or nome_confirmado:
             if isinstance(detalhe, dict):
                 detalhe["idxs"] = [recente["idx"]]
             return recente["idx"], recente["a"], None
@@ -1685,7 +1695,8 @@ def _motivo_nao_cobre(pede, falta, cn):
 
 
 def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
-             eventos_portal=None, gto_blob=None, gto_mime="", data_exame=None):
+             eventos_portal=None, gto_blob=None, gto_mime="", data_exame=None,
+             confirmados=None):
     """ESTÁGIO 3 (decisão): baixa anexos do prontuário, extrai os exames da GTO e
     manda TUDO pro Gemini escolher a solicitação certa + decidir. NÃO anexa.
     Devolve plano (laudo+imgs sempre; solicitação se a IA confiar) + a decisão.
@@ -1967,11 +1978,15 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             # documento aceito, e para uma ação IRREVERSÍVEL preferimos a prova
             # forte (a GTO da guia presente).
             _pront_ok = (_gtos_desta > 0)
+            # SINAL VERDE HUMANO: esta guia foi confirmada por um usuário na tela de
+            # pendências (ilegível/nome não bate) -> libera a trava do nome/cobertura.
+            _nome_conf = bool(confirmados and gto is not None and str(gto) in confirmados)
             _det = {}
             idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
                                                     len(cands), out.get("dentista_gto") or "",
                                                     _det, out.get("gto_texto") or "",
-                                                    prontuario_confirmado=_pront_ok)
+                                                    prontuario_confirmado=_pront_ok,
+                                                    nome_confirmado=_nome_conf)
             # Falhou na cobertura OU na identidade? Releitura dirigida e nova
             # decisão. NAO_COBRE: manuscrito sub-lido (leu "periapical", perdeu
             # "panorâmica"). PACIENTE_INCOMPATIVEL: um pedido IMPRESSO que lê o
@@ -1992,7 +2007,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
             idx, a, _motivo = _escolher_solicitacao(leituras, pac["nome"], _alvo_ex,
                                                     len(cands), out.get("dentista_gto") or "",
                                                     _det, out.get("gto_texto") or "",
-                                                    prontuario_confirmado=_pront_ok)
+                                                    prontuario_confirmado=_pront_ok,
+                                                    nome_confirmado=_nome_conf)
             candidato_valido = idx is not None
             if candidato_valido:
                 dec = {"indice_solicitacao": idx, "paciente_lido": a.get("paciente_lido"),
@@ -2401,6 +2417,13 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             _t(f"Gemini indisponível ({str(e)[:80]}) — roda sem leitura")
 
     anexar_on = bool(gem) and k_attach > 0
+    # SINAL VERDE HUMANO (feature 13/08): guias que um usuário confirmou na tela de
+    # pendências (conferiu que a solicitação é do paciente) -> a decisão libera a
+    # trava do nome/cobertura pra elas. Carrega uma vez por execução.
+    try:
+        _confirmados = db.confirmacoes_set()
+    except Exception:
+        _confirmados = set()
     fila_pend = queue.Queue()
     fila_leit = queue.Queue()
     fila_anexar = queue.Queue()
@@ -2704,7 +2727,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                    eventos_portal=item.get("eventos_portal"),
                                    gto_blob=item.get("gto_portal_blob"),
                                    gto_mime=item.get("gto_portal_mime") or "",
-                                   data_exame=(item.get("data_exame_real") or data))
+                                   data_exame=(item.get("data_exame_real") or data),
+                                   confirmados=_confirmados)
                 except Exception as e:
                     dec = {"erro": str(e)[:100], "decisao": None, "anexos": 0,
                            "gto_exames": [], "plano_laudo_imgs": [], "plano_solicitacao": None}

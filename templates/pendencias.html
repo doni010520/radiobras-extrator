@@ -119,6 +119,15 @@
   details.venc-sec>summary{cursor:pointer;font-weight:700;font-size:14px;color:var(--rb-danger,#b3261e);user-select:none}
   details.venc-sec>summary span{font-weight:400;font-size:12.5px;color:var(--rb-fg-muted)}
   .venc-in{margin-top:12px}
+  /* sinal verde humano — botao de confirmar faturamento */
+  .conf-box{margin-top:12px;padding:11px 13px;border:1px solid var(--rb-success,#0b6b4f);
+    border-radius:10px;background:var(--rb-success-bg,#e7f5ef)}
+  .conf-btn{font-size:13px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;
+    border:1px solid var(--rb-success,#0b6b4f);background:var(--rb-success,#0b6b4f);color:#fff}
+  .conf-btn:disabled{opacity:.7;cursor:default}
+  .conf-msg{font-size:12.5px;margin-left:10px;font-weight:600}
+  .conf-warn{margin-top:8px;font-size:11.5px;color:var(--rb-fg-muted);line-height:1.45}
+  .conf-warn b{color:var(--rb-fg)}
 </style>
 </head>
 <body>
@@ -193,6 +202,13 @@
           {% endif %}
           {% if p.lido %}<details class="evid-det"><summary>🔍 O que a IA leu, por anexo</summary><div class="evid-raw">{{ p.lido }}</div></details>{% endif %}
           {% if p.acao %}<div class="det-acao"><b>O que fazer:</b> {{ p.acao }}</div>{% endif %}
+          {% if p.chave in ('pedido_ilegivel','solic_nao_confirmada','nome_nao_bate') and not p.resolvido %}
+          <div class="conf-box">
+            <button class="conf-btn" onclick="confirmar({{ p.id }}, this, event)">✔ Confirmei que é o paciente — pode faturar</button>
+            <span class="conf-msg"></span>
+            <div class="conf-warn">⚠ Isso <b>libera o faturamento</b> desta guia (anexação real, irreversível). Confirme só depois de <b>abrir a solicitação e conferir que o nome é do paciente</b>. O laudo ainda é exigido — se não tiver, fatura quando sair.</div>
+          </div>
+          {% endif %}
           {% if p.resolvido %}<div class="who">✓ {{ p.resolvido_por }}{% if p.resolvido_em %} · {{ p.resolvido_em.strftime('%d/%m %H:%M') }}{% endif %}</div>{% endif %}
         </div></td></tr>
         {% endfor %}
@@ -259,6 +275,21 @@ async function marcar(id, el){
   }catch(e){
     el.checked = !resolver; alert('Falha ao atualizar. Tente de novo.');
   }finally{ el.disabled = false; }
+}
+async function confirmar(id, btn, ev){
+  ev.stopPropagation();
+  if(!confirm('Você conferiu a solicitação e é MESMO o paciente?\n\nIsso libera o faturamento desta guia (anexação REAL e irreversível no portal).')) return;
+  btn.disabled = true;
+  var msg = btn.parentElement.querySelector('.conf-msg');
+  msg.style.color = '#5a6472'; msg.textContent = 'Enviando…';
+  try{
+    const r = await fetch('/pendencias/'+id+'/confirmar', {method:'POST', headers:{'X-Requested-With':'fetch'}});
+    const j = await r.json();
+    msg.style.color = j.ok ? '#0b6b4f' : '#b3261e';
+    msg.textContent = j.msg || (j.ok ? 'Confirmado.' : (j.error || 'Falhou.'));
+    if(j.ok){ btn.textContent = '✔ Confirmado — faturando'; }
+    else { btn.disabled = false; }
+  }catch(e){ msg.style.color='#b3261e'; msg.textContent='Erro de rede.'; btn.disabled=false; }
 }
 </script>
 </body>

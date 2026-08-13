@@ -2277,3 +2277,20 @@ def test_ha_leitura_no_nome_sem_nome_guia_ou_sem_leituras():
     assert _ha_leitura_no_nome([_leitura(0, "Fulano de Tal", [])], "") is False
     assert _ha_leitura_no_nome([], "CARINA DE JESUS DOS SANTOS") is False
     assert _ha_leitura_no_nome(None, "CARINA DE JESUS DOS SANTOS") is False
+
+
+def test_nome_confirmado_libera_nome_e_cobertura():
+    # Feature (dono 13/08): quando o humano CONFERE que a solicitacao e do paciente,
+    # o botao da sinal verde -> _escolher_solicitacao aceita mesmo com nome que nao
+    # bate (ou ilegivel) e sem "cobrir". A trava do LAUDO fica no CHAMADOR, nao aqui.
+    leituras = [_sol(0, ["panoramica"], paciente="PESSOA DIFERENTE")]
+    idx, _a, m = _escolher_solicitacao(leituras, "ANA LIMA COSTA", {"panoramica"}, 1)
+    assert idx is None and m == "PACIENTE_INCOMPATIVEL"          # sem confirmacao: barra
+    idx2, _a2, m2 = _escolher_solicitacao(leituras, "ANA LIMA COSTA", {"panoramica"}, 1,
+                                          nome_confirmado=True)
+    assert idx2 == 0 and m2 is None                              # confirmado: aceita
+    # ilegivel: exames nao lidos (nao cobre) — confirmado tambem libera
+    ileg = [_sol(0, [], paciente="OUTRA PESSOA")]
+    idx3, _a3, m3 = _escolher_solicitacao(ileg, "ANA LIMA COSTA", {"panoramica"}, 1,
+                                          nome_confirmado=True)
+    assert idx3 == 0 and m3 is None

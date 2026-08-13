@@ -1317,6 +1317,54 @@ def pendencias_reabrir(pid):
     return redirect(url_for("pendencias_page", status=request.args.get("status", "abertas")))
 
 
+@app.route("/pendencias/<int:pid>/confirmar", methods=["POST"])
+def pendencias_confirmar(pid):
+    """SINAL VERDE HUMANO (feature 13/08): o usuário abriu a pendência (ilegível /
+    nome não bate), conferiu que a solicitação É do paciente e libera o faturamento.
+    Registra a confirmação (a responsabilidade é dele) e dispara um faturamento REAL
+    só desta guia — a decisão libera a trava do nome/cobertura; o LAUDO segue
+    obrigatório. POST (anexa no portal, irreversível)."""
+    if not session.get("uid"):
+        return jsonify({"error": "faça login"}), 403
+    with db.SessionLocal() as s:
+        p = s.get(db.Pendencia, pid)
+        if not p:
+            return jsonify({"error": "pendência não encontrada"}), 404
+        gto, conta, dia = str(p.gto), p.conta, p.dia
+    quem = session.get("username") or session.get("nome") or "?"
+    db.confirmar_nome(gto, conta, dia, quem)   # o sinal verde fica gravado
+    # dispara faturamento REAL só desta guia (background). Se o portal não estiver
+    # acessível agora (proxy), a confirmação fica gravada e o próximo processamento
+    # fatura. Idempotente: se já anexado, não duplica.
+    jid = uuid.uuid4().hex[:8]
+    if not _esteira_reservar(dia, conta, jid):
+        return jsonify({"ok": True, "confirmado": True,
+                        "msg": "Confirmado ✔ — já há uma execução em andamento nessa "
+                               "unidade; vai faturar nela."})
+    gkey = os.environ.get("GEMINI_API_KEY")
+    senha = db.get_portal_senha(conta or None)
+
+    def _go():
+        try:
+            from esteira import rodar_esteira
+            r = rodar_esteira(dia, m_download=3, n_desc=3, k_leitura=5, log=None,
+                              gemini_key=gkey, k_attach=3, dry_run=False,
+                              conta=(conta or None), senha_portal=senha,
+                              apenas_gtos=[gto])
+            if r:
+                db.salvar_execucao(r, None)
+        except Exception:
+            pass
+        finally:
+            _esteira_liberar(dia, conta, jid)
+
+    threading.Thread(target=_go, daemon=True).start()
+    return jsonify({"ok": True, "confirmado": True,
+                    "msg": "Confirmado ✔ — faturando esta guia em segundo plano "
+                           "(atualize em ~1 min). Se ainda faltar o laudo, fatura "
+                           "quando o laudo sair."})
+
+
 # ── Avisos "exame sem guia" (laudo pronto sem GTO) — aviso, não pendência ──────
 @app.route("/api/avisos")
 def api_avisos():

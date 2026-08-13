@@ -1043,6 +1043,52 @@ class RetryFila(Base):
     atualizado_em = Column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class ConfirmacaoNome(Base):
+    """SINAL VERDE HUMANO (feature 13/08): o usuário abriu uma pendência de
+    ilegível/nome-não-bate, conferiu que a solicitação É do paciente e confirmou.
+    A esteira lê isto e libera a trava do nome/cobertura SÓ pra esses gtos — o
+    laudo continua obrigatório. Reversível (desconfirmar apaga a linha)."""
+    __tablename__ = "confirmacoes_nome"
+    id = Column(Integer, primary_key=True)
+    gto = Column(String(30), unique=True, index=True)
+    conta = Column(String(20))
+    dia = Column(String(12))
+    quem = Column(String(60))       # username que confirmou (a responsabilidade é dele)
+    criado_em = Column(DateTime(timezone=True), default=_now)
+
+
+def confirmar_nome(gto, conta, dia, quem) -> bool:
+    """Registra o sinal verde do humano p/ uma guia. Idempotente (1 por gto)."""
+    with SessionLocal() as s:
+        ja = s.query(ConfirmacaoNome).filter(ConfirmacaoNome.gto == str(gto)).first()
+        if ja is None:
+            s.add(ConfirmacaoNome(gto=str(gto), conta=str(conta), dia=str(dia),
+                                  quem=str(quem or "?")[:60]))
+            s.commit()
+    return True
+
+
+def desconfirmar_nome(gto) -> None:
+    """Desfaz o sinal verde (o humano se enganou)."""
+    with SessionLocal() as s:
+        s.query(ConfirmacaoNome).filter(ConfirmacaoNome.gto == str(gto)).delete()
+        s.commit()
+
+
+def nome_confirmado(gto) -> bool:
+    with SessionLocal() as s:
+        return s.query(ConfirmacaoNome).filter(ConfirmacaoNome.gto == str(gto)).first() is not None
+
+
+def confirmacoes_set() -> set:
+    """Todos os gtos com sinal verde — a esteira carrega uma vez por execução."""
+    try:
+        with SessionLocal() as s:
+            return {str(c.gto) for c in s.query(ConfirmacaoNome.gto).all()}
+    except Exception:
+        return set()
+
+
 def _tentativas_ja_falhou(s, gto) -> int:
     """Quantas vezes a esteira JA olhou esta guia e NAO faturou (historico real, de
     qualquer execucao). Semeia o contador da fila pra o teto refletir a REALIDADE —
