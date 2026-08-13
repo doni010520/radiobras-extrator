@@ -37,6 +37,21 @@ def test_logica_precisa_conserto_ou_leitura():
     assert classe_retry("revisão humana") == "logica"
 
 
+def test_homonimo_mesmo_dia_e_conferencia_nao_nosso():
+    # 195904169 (dry-run 13/08): "mais de um paciente no mesmo dia" (lado analítico)
+    # NÃO se resolve com retry — precisa de humano -> Conferência (vai pro FRONT),
+    # não 'nosso'. A ALESSANDRA ("2 pacientes com o nome ... não foi possível") segue
+    # transitório (o nascimento desempata num re-run).
+    from db import eh_pendencia_front, classificar_pendencia
+    m = ("NÃO FATUROU porque há mais de um paciente com esse nome no PRORADIS no "
+         "mesmo dia, e o sistema não tem como saber qual é o certo.")
+    assert classe_retry(m) != "transitorio"
+    assert eh_pendencia_front(m, "revisao") is True
+    assert classificar_pendencia(m)[1] == "Conferência"
+    # a ALESSANDRA NÃO regride: continua transitório
+    assert classe_retry("2 pacientes com o nome 'ALESSANDRA' no PRORADIS — não foi possível") == "transitorio"
+
+
 def test_vazio_ou_desconhecido_nao_e_transitorio():
     # sem sinal claro NÃO vira transitorio (não retenta cegamente algo que não é infra)
     assert classe_retry("") != "transitorio"

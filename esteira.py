@@ -3254,11 +3254,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         d = dec.get("decisao") or {}
         _tem_laudo = any(str(f).upper().startswith("LAUDO_")
                          for f in dec.get("plano_laudo_imgs", []))
+        # GATE DA TELE tambem no RELATORIO (13/08): antes so o ANEXADOR barrava a
+        # documentacao-orto-sem-tracado; a categorizacao final NAO recalculava
+        # _falta_tele, entao a guia (que tem panoramica) saia como "auto" (faturaria)
+        # no relatorio, embora o gate a tivesse barrado. Agora o relatorio bate com o
+        # anexador: falta a tele -> conta como sem laudo -> pendencia 'esperando_tele'.
+        _falta_tele = _laudo_tele_faltando(
+            dec.get("gto_exames_desta") or dec.get("gto_exames") or set(),
+            dec.get("plano_laudo_imgs", []))
         # LAUDO obrigatorio p/ exames RADIOLOGICOS (mesmo com justificativa). Excecao:
         # GTO so de MODELO/FOTOGRAFIA dispensa laudo. Justificativa dispensa so a solic.
-        _laudo_falta = not _tem_laudo and not dec.get("dispensa_laudo")
+        _laudo_falta = (not _tem_laudo and not dec.get("dispensa_laudo")) or _falta_tele
         if _laudo_falta and (dec.get("justificativa") or dec.get("plano_solicitacao")):
-            cat = "sem_laudo"          # tem solic/justif mas falta laudo -> pendência
+            cat = "sem_laudo"          # tem solic/justif mas falta laudo (ou a tele) -> pendência
         elif dec.get("justificativa"):
             cat = "justificativa"      # laudo ok (ou dispensado)
         elif dec.get("plano_solicitacao"):
@@ -3283,6 +3291,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             cat = "revisao"
         decisoes.append({
             "gto": r["gto"], "paciente": r["nome"], "categoria": cat,
+            "falta_tele": bool(_falta_tele),   # p/ o motivo dizer que é o traçado
             "data_exame_real": r.get("data_exame_real"),
             "anexado": r.get("anexado"),
             "anexar_erro": r.get("anexar_erro"),   # p/ o motivo da pendência ser o REAL

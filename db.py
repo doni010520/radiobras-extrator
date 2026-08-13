@@ -768,6 +768,13 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
                 motivo = f"Documentação OK, mas a anexação falhou: {x['anexar_erro']}"
             elif cat == "sem_solicitacao":
                 motivo = g.get("motivo") or x.get("erro") or "Sem solicitação e sem justificativa (campo 49 vazio)"
+            elif cat == "sem_laudo" and x.get("falta_tele"):
+                # Doc ortodôntica com a panorâmica, mas sem o traçado. Motivo específico
+                # (o classificador reconhece como 'esperando_tele' → Radiologista).
+                motivo = ("Documentação ortodôntica com a panorâmica anexada, mas SEM o "
+                          "LAUDO da telerradiografia (traçado cefalométrico). O robô anexa "
+                          "sozinho assim que o traçado sair no PRORADIS — cobrar a emissão "
+                          "do traçado.")
             elif cat == "sem_laudo":
                 motivo = "Solicitação OK, mas falta o LAUDO válido no PRORADIS (anexos sem laudo, ou laudo veio em branco/não pronto)"
             elif cat == "justificativa":
@@ -949,9 +956,12 @@ _NOSSO = "Nós"   # responsavel cujas pendencias vao para a FILA TECNICA
 _TRANSITORIO_RE = __import__("re").compile(
     r"gemini\s*:|UNAVAILABLE|time.?out|timed out|net::|ERR_|tunnel|"
     r"context was destroyed|translate host|throttl|rate.?limit|TE-BFF-GTO|"
-    r"falha t[ée]cnica|leitura indispon|pacientes com o nome.{0,40}n[ãa]o foi poss|"
-    r"hom[ôo]nimo|mais de um paciente",
+    r"falha t[ée]cnica|leitura indispon|pacientes com o nome.{0,40}n[ãa]o foi poss",
     __import__("re").I)
+# NOTA: 'homônimo/mais de um paciente' saiu do transitório (13/08). O caso "mesmo dia"
+# (lado analítico, 195904169) NÃO se resolve com retry — é Conferência (vai pro front).
+# A ALESSANDRA ("N pacientes com o nome ... não foi possível") segue transitório pelo
+# padrão 'pacientes com o nome ... não foi poss' (o nascimento desempata num re-run).
 
 
 def classe_retry(motivo: str, categoria: str = "") -> str:
