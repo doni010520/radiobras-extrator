@@ -2577,13 +2577,17 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             # (caso FILIPE). A carteirinha do OdontoPrev NAO e pesquisavel no PRORADIS
             # (testado 06/08); o nascimento SIM (guia 1981-12-02 = card 02/12/1981).
             # Vem do /v1/gto/detalhada -> beneficiario.dataNascimento.
-            try:
-                _rd = sess.get(f"{_ODO_API}/v1/gto/detalhada?numeroFicha={g['gto']}",
-                               timeout=20)
-                if _rd.status_code == 200:
-                    _ben = (_rd.json() or {}).get("beneficiario") or {}
-                    g["nascimento"] = str(_ben.get("dataNascimento") or "")
-            except Exception:
+            # RETRY no fetch do nascimento: ele é a CHAVE FORTE que desempata
+            # homônimo (a disambiguação por nascimento existe em extrair_anexos_dia,
+            # mas depende deste valor). Sem retry, um único rate-limit/queda deixava
+            # nascimento="" e o homônimo morria em AMBIGUO (caso ALESSANDRA). Com
+            # retry+backoff, a chave chega de forma confiável e o desempate acontece.
+            _jdet, _ = _get_json_com_retry(
+                sess, f"{_ODO_API}/v1/gto/detalhada?numeroFicha={g['gto']}", timeout=20)
+            if _jdet:
+                _ben = (_jdet or {}).get("beneficiario") or {}
+                g["nascimento"] = str(_ben.get("dataNascimento") or "")
+            else:
                 g["nascimento"] = g.get("nascimento", "")
             # A GUIA VEM DO PORTAL, NAO DO PRONTUARIO. Ate aqui, dentista e CRO da
             # guia so existiam se o PDF dela estivesse anexado no prontuario do
