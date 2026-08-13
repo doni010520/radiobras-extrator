@@ -172,8 +172,21 @@ Tudo com LLM lendo e **código decidindo** (princípios 1–5).
   `/portal/testar`) pra diagnosticar (saldo? sessão expirada? credencial?). Sem
   proxy vivo, o usuário não roda pela tela do VPS.
 - **[Aberto] NILSON** (ver seção 4).
-- **[Aberto] Dúvida de domínio:** documentação ortodôntica (no pedido) cobre o
-  periapical/interproximal que a guia autoriza à parte? (decide 3 pendências "não cobre").
+- **[✅ RESOLVIDA 13/08] Dúvida de domínio — documentação ortodôntica × periapical:**
+  o dono decidiu: **doc ortodôntica NÃO cobre periapical/interproximal — são exames
+  DIFERENTES.** Um pedido só de documentação **não autoriza** uma guia de periapical.
+  Consequência: as pendências "não cobre" (guia pede periapical, pedido só tem doc)
+  estão **CORRETAS** → externo/Clínica (pedir à clínica um pedido que inclua o
+  periapical, ou o periapical vai em guia própria com pedido próprio). **O código já
+  faz certo** nessa direção: `expande_documentacao` nunca promove um pedido de doc a
+  periapical (testes `test_decisao.py:261/267`) — nenhuma mudança necessária.
+  - **Ponto adjacente a vigiar (NÃO mexido):** `_DOC_COMPONENTES` inclui `periapical`
+    em `solicitacao_utils.py`, mas na direção OPOSTA — `componentes_da_documentacao`
+    (esteira.py:1353) — que serve pra **não descartar laudos do entregável composto**
+    (a folha da doc pode ter periapical dentro; caso ALANA/LOARA). É billing≠entregável:
+    a decisão acima é de AUTORIZAÇÃO; essa é de reconhecimento de arquivo. Não rebati
+    por conta própria (lição do gate de imagem). Se o dono quiser, avaliar se algum
+    caminho faz um laudo de periapical "pegar carona" numa guia de doc.
 
 ---
 
