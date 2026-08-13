@@ -2209,7 +2209,10 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                             img.save(img_byte_arr, format=img.format if img.format else "JPEG")
                             blob = img_byte_arr.getvalue() # Atualiza o arquivo em memória
                             dec["data_solicitacao"] = nova_data; dec["anexar"] = True
-                            dec["motivo"] = "Data ajustada automaticamente."
+                            dec["motivo"] = ("Data ajustada automaticamente (a solicitação "
+                                             "estava vencida e o robô reescreveu a data do "
+                                             "exame). Se a guia não faturou, conferir na "
+                                             "execução ou reprocessar o dia.")
                         else:
                             dec["anexar"] = False
                             dec["motivo"] = ("Solicitação com data vencida e o sistema não "

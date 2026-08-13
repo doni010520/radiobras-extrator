@@ -780,7 +780,11 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
             elif cat == "justificativa":
                 motivo = ""  # foi faturado por justificativa (se anexado)
             else:
-                motivo = g.get("motivo") or x.get("erro") or "revisão humana"
+                motivo = g.get("motivo") or x.get("erro") or (
+                    "NÃO FATUROU: guia enviada para REVISÃO HUMANA — o robô não "
+                    "conseguiu confirmar automaticamente a solicitação/laudo desta "
+                    "guia (ficou ambígua). O QUE FAZER: abrir a execução do dia, "
+                    "conferir a solicitação e a guia no prontuário e decidir.")
             ex.itens.append(ExecucaoItem(
                 gto=str(x.get("gto")), paciente=x.get("paciente"),
                 categoria=cat, faturado=faturado, motivo=motivo,
