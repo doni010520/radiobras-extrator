@@ -422,6 +422,49 @@ def contar_pendencias_abertas() -> int:
         return 0
 
 
+def tentativas_por_gtos(gtos: list) -> dict:
+    """{gto: nº de vezes que a esteira olhou e NÃO faturou}. Alimenta classe_efetiva
+    p/ saber se um transitório já esgotou o retry (aí deixa de ser 'nosso')."""
+    from sqlalchemy import func
+    gs = {str(g) for g in (gtos or []) if g}
+    if not gs:
+        return {}
+    with SessionLocal() as s:
+        rows = (s.query(ExecucaoItem.gto, func.count(ExecucaoItem.id))
+                .filter(ExecucaoItem.gto.in_(gs),
+                        ExecucaoItem.faturado == False)  # noqa: E712
+                .group_by(ExecucaoItem.gto).all())
+        return {str(g): int(n) for g, n in rows}
+
+
+def eh_pendencia_front(motivo: str, categoria: str, tentativas: int = 0) -> bool:
+    """Regra do dono (13/08): a lista que o USUÁRIO vê no front tem SÓ o que é DELES
+    (aguardando terceiro OU a conferir). O que é NOSSO (transitório que o sistema
+    reprocessa sozinho) NÃO entra. Quando o transitório ESGOTA o retry, deixa de ser
+    nosso → `esgotado` → volta pro front. Ou seja: front = tudo, exceto o transitório
+    ainda em andamento."""
+    return classe_efetiva(motivo, categoria, tentativas) != "transitorio"
+
+
+def contar_pendencias_front() -> int:
+    """Nº de pendências que o usuário VÊ no front (só as DELES; sem as nossas em
+    reprocessamento). É o número honesto pro badge — não assusta com o que o sistema
+    já resolve sozinho."""
+    try:
+        with SessionLocal() as s:
+            rows = s.query(Pendencia).filter(Pendencia.resolvido == False).all()  # noqa: E712
+        uniq = {}
+        for r in rows:
+            uniq[(r.conta, r.dia, r.gto)] = r
+        itens = list(uniq.values())
+        tent = tentativas_por_gtos([r.gto for r in itens])
+        return sum(1 for r in itens
+                   if eh_pendencia_front(r.motivo or "", r.categoria or "",
+                                         tent.get(str(r.gto), 0)))
+    except Exception:
+        return 0
+
+
 def listar_pendencias(status: str = "abertas", limit: int = 5000) -> list:
     with SessionLocal() as s:
         q = s.query(Pendencia)

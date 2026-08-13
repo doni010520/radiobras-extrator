@@ -66,6 +66,28 @@
   .evid-raw{margin-top:5px;padding:8px 10px;background:var(--rb-surface-2);border:1px solid var(--rb-border);
     border-radius:8px;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;line-height:1.5;
     white-space:pre-wrap;word-break:break-word;color:var(--rb-fg)}
+  /* resumo honesto por tipo — o que assusta vira leitura calma */
+  .tipo-sum{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:2px 0 16px}
+  .ts{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600;
+    padding:9px 15px;border-radius:var(--rb-r-lg);border:1px solid var(--rb-border)}
+  .ts b{font-size:18px;font-variant-numeric:tabular-nums}
+  .ts-conf{background:var(--rb-warning-bg,#fff4e0);color:var(--rb-warning,#9a6400);border-color:transparent}
+  .ts-agu{background:var(--rb-surface);color:var(--rb-fg-muted)}
+  .ts-int{background:transparent;color:var(--rb-fg-muted);font-weight:500;font-size:12.5px;border-style:dashed}
+  /* tag de tipo por linha */
+  .ttag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:800;padding:2px 8px;
+    border-radius:999px;text-transform:uppercase;letter-spacing:.03em;white-space:nowrap;margin-bottom:4px}
+  .ttag.conferir{background:var(--rb-warning-bg,#fff4e0);color:var(--rb-warning,#9a6400)}
+  .ttag.aguardar{background:var(--rb-surface-2);color:var(--rb-fg-muted)}
+  /* seção interna (nossas) — calma, fora do número */
+  details.interno{margin-top:26px;border:1px dashed var(--rb-border);border-radius:var(--rb-r-lg);
+    padding:14px 18px;background:var(--rb-surface)}
+  details.interno summary{cursor:pointer;font-weight:700;font-size:13.5px;color:var(--rb-fg-muted);user-select:none}
+  details.interno summary span{font-weight:400;font-size:12px}
+  details.interno .il{display:flex;justify-content:space-between;gap:12px;padding:8px 0;
+    border-bottom:1px solid var(--rb-border);font-size:12.5px}
+  details.interno .il:last-child{border-bottom:0}
+  details.interno .il .g{font-weight:700;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -89,6 +111,14 @@
     <a class="tab {{ 'on' if status=='todas' }}" href="/pendencias?status=todas">
       <svg class="rb-ico"><use href="#i-grid"/></svg> Todas</a>
   </div>
+
+  {% if status == 'abertas' %}
+  <div class="tipo-sum">
+    <span class="ts ts-conf" title="Precisam de você olhar e decidir">👁 <b>{{ tipo_ct.conferir }}</b>&nbsp;a conferir</span>
+    <span class="ts ts-agu" title="Aguardando laudo/pedido/cadastro — resolve quando o terceiro age">⏳ <b>{{ tipo_ct.aguardar }}</b>&nbsp;aguardando terceiros</span>
+    {% if n_interno %}<span class="ts ts-int" title="Falha nossa — o sistema reprocessa sozinho">🔄 {{ n_interno }} o sistema resolve</span>{% endif %}
+  </div>
+  {% endif %}
 
   {% set urg = sla_ct.venc + sla_ct.d1 + sla_ct.d2 + sla_ct.d3 %}
   {% if urg > 0 and status != 'resolvidas' %}
@@ -171,8 +201,8 @@
             {% if p.exames_gto or p.exames_lidos %}
             <div class="evid">
               {% if p.exames_gto %}<span class="ev-k">Guia pede:</span> {{ p.exames_gto }}{% endif %}
-              {% if p.exames_lidos %}<span class="ev-sep">·</span> <span class="ev-k">IA leu no pedido:</span> {{ p.exames_lidos }}
-              {% elif p.exames_gto %}<span class="ev-sep">·</span> <span class="ev-k">IA leu no pedido:</span> <i>nada legível</i>{% endif %}
+              {% if p.exames_lidos %}<span class="ev-sep">·</span> <span class="ev-k">IA leu na solicitação:</span> {{ p.exames_lidos }}
+              {% elif p.exames_gto %}<span class="ev-sep">·</span> <span class="ev-k">IA leu na solicitação:</span> <i>nada legível</i>{% endif %}
             </div>
             {% endif %}
             {% if p.lido %}
@@ -180,7 +210,9 @@
             {% endif %}
           </td>
           <td>
-            <span class="who-pill {{ 'reproc' if p.responsavel == 'Reprocessar' }}"
+            {% if p.tipo == 'conferir' %}<span class="ttag conferir">👁 conferir</span>
+            {% elif p.tipo == 'aguardar' %}<span class="ttag aguardar">⏳ aguardar</span>{% endif %}
+            <span class="who-pill {{ 'reproc' if p.responsavel in ('Reprocessar','Investigar') }}"
                   title="{{ p.acao }}">→ {{ p.responsavel }}</span>
             {% if p.acao %}<div style="font-size:11px;color:#5a6472;margin-top:4px;max-width:320px;line-height:1.35">{{ p.acao }}</div>{% endif %}
             {% if p.resolvido %}<div class="who">✓ {{ p.resolvido_por }}{% if p.resolvido_em %} · {{ p.resolvido_em.strftime('%d/%m %H:%M') }}{% endif %}</div>{% endif %}
@@ -190,6 +222,18 @@
       </table>
     </div>
     {% endfor %}
+  {% endif %}
+
+  {% if interno and status == 'abertas' %}
+  <details class="interno">
+    <summary>🔄 {{ n_interno }} resolvendo internamente <span>— falha nossa (robô/leitura); o sistema reprocessa sozinho. Não é tarefa da recepção.</span></summary>
+    {% for p in interno %}
+    <div class="il">
+      <span><span class="g">{{ p.gto }}</span> · {{ p.paciente or '—' }} <span class="mut">· {{ p.dia }} · {{ p.unidade }}</span></span>
+      <span class="mut" style="max-width:420px;text-align:right">{{ p.motivo|truncate(90) }}</span>
+    </div>
+    {% endfor %}
+  </details>
   {% endif %}
 </div>
 <script>

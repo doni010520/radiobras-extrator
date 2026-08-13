@@ -119,7 +119,7 @@ def _injeta_usuario():
                              "nome": session.get("nome"),
                              "role": session.get("role")} if session.get("uid") else None,
             "usuario_atual_id": session.get("uid"),
-            "pendencias_abertas": db.contar_pendencias_abertas() if session.get("uid") else 0,
+            "pendencias_abertas": db.contar_pendencias_front() if session.get("uid") else 0,
             "avisos_sem_guia": db.contar_avisos_nao_vistos() if session.get("uid") else 0}
 
 
@@ -1233,63 +1233,73 @@ def pendencias_page():
     if status not in ("abertas", "resolvidas", "todas"):
         status = "abertas"
     itens = db.listar_pendencias(status=status)
-    # O QUE A IA LEU em cada guia (evidência) — 1 consulta em lote p/ a tela ser explicativa.
-    _leituras = db.leituras_por_gtos([p.get("gto") for p in itens])
+    _gtos = [p.get("gto") for p in itens]
+    _leituras = db.leituras_por_gtos(_gtos)   # o que a IA leu (evidência)
+    _tent = db.tentativas_por_gtos(_gtos)      # p/ saber se um transitório já esgotou
     for p in itens:
         p["unidade"] = _plano_nome(p.get("conta")) or (p.get("conta") or "—")
         p["sla"] = _sla_dias_restantes(p.get("dia"))   # dias p/ o prazo (None/negativo=vencido)
         p["bucket"] = _sla_bucket(p["sla"])
-        # responsável / ação — reaproveita a classificação do relatório de pendências.
         _chave, _quem, _acao = db.classificar_pendencia(p.get("motivo"), p.get("categoria") or "")
         p["acao"] = _acao
-        # "Nós" = fila técnica que o cron reprocessa sozinho → rótulo "Reprocessar".
-        p["responsavel"] = "Reprocessar" if _quem == getattr(db, "_NOSSO", "Nós") else _quem
-        # evidência: o que a guia pede × o que a IA leu no pedido (o dono quer ver isso)
+        # TIPO — regra do dono: NOSSO (transitório em reprocessamento) NÃO é do front;
+        # DELES é 'aguardar' (terceiro) ou 'conferir' (humano). Esgotado deixou de ser
+        # nosso → vira 'conferir/investigar' no front.
+        _classe = db.classe_efetiva(p.get("motivo") or "", p.get("categoria") or "",
+                                    _tent.get(str(p.get("gto")), 0))
+        p["classe"] = _classe
+        if _classe == "transitorio":
+            p["tipo"] = "interno";  p["responsavel"] = "Reprocessar"
+        elif _classe == "externo":
+            p["tipo"] = "aguardar"; p["responsavel"] = _quem
+        else:                                   # logica | esgotado
+            p["tipo"] = "conferir"
+            p["responsavel"] = "Investigar" if _classe == "esgotado" else _quem
         _l = _leituras.get(str(p.get("gto"))) or {}
         p["exames_gto"] = _l.get("exames_gto")
         p["exames_lidos"] = _l.get("exames_lidos")
         p["lido"] = _l.get("lido")
-    # barra-resumo de SLA (só as abertas contam)
+    # SEPARA: front (deles, o usuário vê) × interno (nosso, o sistema reprocessa)
+    front = [p for p in itens if p["tipo"] != "interno"]
+    interno = [p for p in itens if p["tipo"] == "interno"]
+    tipo_ct = {"aguardar": sum(1 for p in front if p["tipo"] == "aguardar" and not p.get("resolvido")),
+               "conferir": sum(1 for p in front if p["tipo"] == "conferir" and not p.get("resolvido"))}
+    # barra-resumo de SLA (só as abertas do FRONT contam)
     sla_ct = {"venc": 0, "d1": 0, "d2": 0, "d3": 0}
-    for p in itens:
+    for p in front:
         if p.get("resolvido"):
             continue
         s = p.get("sla")
         if s is None:
             continue
-        if s <= 0:
-            sla_ct["venc"] += 1
-        elif s == 1:
-            sla_ct["d1"] += 1
-        elif s == 2:
-            sla_ct["d2"] += 1
-        elif s == 3:
-            sla_ct["d3"] += 1
-    # AGRUPA POR DATA (pedido do dono: "pendências separadas por data"). Um grupo por
-    # dia do exame, do mais urgente (dia mais antigo, prazo mais perto de estourar) ao
-    # menos. O prazo/urgência do dia continua no selo do grupo; a ação e o "quem age"
-    # ficam por linha. Resolvidas somem da aba "abertas" (fica fiel e sem lixo).
+        if s <= 0:      sla_ct["venc"] += 1
+        elif s == 1:    sla_ct["d1"] += 1
+        elif s == 2:    sla_ct["d2"] += 1
+        elif s == 3:    sla_ct["d3"] += 1
+    # AGRUPA O FRONT POR DATA (mais antigo/urgente primeiro). O interno vai numa seção
+    # à parte, calma, fora do número que assusta.
     _ordem_bucket = {"venc": 0, "d1": 1, "d2": 2, "d3": 3, "no_prazo": 4}
+    _ordem_tipo = {"aguardar": 0, "conferir": 1}
     _dias_sem = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
     por_dia = {}
-    for p in itens:
+    for p in front:
         por_dia.setdefault(p.get("dia") or "—", []).append(p)
     grupos = []
     for dia, lst in por_dia.items():
         lst.sort(key=lambda p: (_ordem_bucket.get(p["bucket"], 9),
+                                _ordem_tipo.get(p["tipo"], 9),
                                 (p.get("unidade") or "").lower(), p.get("gto") or ""))
         _d = db._parse_ddmmaaaa(dia)
         titulo = (f"{dia} · {_dias_sem[_d.weekday()]}" if _d else (dia or "sem data"))
-        # o PIOR SLA do dia manda no selo do grupo (todas as guias do dia têm o mesmo prazo)
         pior = min((p["bucket"] for p in lst), key=lambda b: _ordem_bucket.get(b, 9))
         grupos.append({"chave": pior, "titulo": titulo, "dia": dia, "itens": lst,
                        "abertas": sum(1 for p in lst if not p.get("resolvido")),
                        "total": len(lst)})
-    # ordena por DATA: mais antigo (mais urgente p/ faturar) primeiro
     grupos.sort(key=lambda g: db._parse_ddmmaaaa(g["dia"]) or _dt.date.max)
-    return render_template("pendencias.html", grupos=grupos, itens=itens, status=status,
-                           prazo=_prazo_dias(), sla_ct=sla_ct,
-                           n_abertas=db.contar_pendencias_abertas())
+    return render_template("pendencias.html", grupos=grupos, itens=front, interno=interno,
+                           status=status, prazo=_prazo_dias(), sla_ct=sla_ct, tipo_ct=tipo_ct,
+                           n_abertas=sum(1 for p in front if not p.get("resolvido")),
+                           n_interno=sum(1 for p in interno if not p.get("resolvido")))
 
 
 @app.route("/pendencias/<int:pid>/resolver", methods=["POST"])
@@ -1297,7 +1307,7 @@ def pendencias_resolver(pid):
     obs = (request.form.get("obs") or (request.json.get("obs") if request.is_json else None)) if (request.form or request.is_json) else None
     db.resolver_pendencia(pid, session.get("username") or session.get("nome") or "?", obs=obs)
     if request.is_json or request.headers.get("X-Requested-With") == "fetch":
-        return jsonify({"ok": True, "abertas": db.contar_pendencias_abertas()})
+        return jsonify({"ok": True, "abertas": db.contar_pendencias_front()})
     return redirect(url_for("pendencias_page", status=request.args.get("status", "abertas")))
 
 
@@ -1305,7 +1315,7 @@ def pendencias_resolver(pid):
 def pendencias_reabrir(pid):
     db.reabrir_pendencia(pid)
     if request.is_json or request.headers.get("X-Requested-With") == "fetch":
-        return jsonify({"ok": True, "abertas": db.contar_pendencias_abertas()})
+        return jsonify({"ok": True, "abertas": db.contar_pendencias_front()})
     return redirect(url_for("pendencias_page", status=request.args.get("status", "abertas")))
 
 
