@@ -52,7 +52,7 @@
 {% endif %}
 
 <h1>Árvore de Decisão do Faturamento</h1>
-<div class="sub">RadioBras / OdontoPrev · do clique em <b>“Faturar”</b> até o fim · todas as decisões do sistema e o que ele faz em cada cenário.</div>
+<div class="sub">RadioBras / OdontoPrev · do clique em <b>“Faturar”</b> até o fim · todas as decisões do sistema e o que ele faz em cada cenário. · <b>Atualizado em 13/08/2026.</b></div>
 
 <div class="leg">
   <span class="k">Legenda:</span>
@@ -102,7 +102,7 @@ arriscar — porque o portal <b>não deixa remover anexo</b>: anexar errado é d
   <p><b>SE</b> a consulta trouxe guias mas <b>nenhuma com liberação no dia consultado</b> → <b>para</b> (“o filtro de período não foi aplicado”), em vez de processar o período inteiro. Num sistema que anexa, “não achei nada” é mais seguro que “processa tudo”. <span class="ref">esteira.py:2443–2448</span></p>
   <p><b>SE</b> o token de acesso não foi capturado e há guias → <b>para</b> (“nada foi processado”), pra não decidir às cegas. <span class="ref">esteira.py:3089–3093</span></p>
 </div>
-<p>Das guias do dia, o sistema só olha as em <b>REPASSE</b> (as que faltam faturar). Para cada uma, na descoberta:</p>
+<p>Das guias do dia, o sistema só olha as em <b>REPASSE</b> (status <i>“GTO encaminhada para análise de repasse”</i> = <b>falta anexar o laudo/docs pra ser paga</b>). Guias <b>“cancelada”</b> ou já pagas ficam de fora. <b>Atenção (achado 13/08):</b> se uma guia é <b>cancelada DEPOIS</b> de já ter virado pendência, ela <b>não fecha sozinha</b> — o reprocessamento só mexe nas REPASSE. Fica de “fantasma” até uma reconciliação por status (foi o caso da guia cancelada encontrada na varredura). Para cada guia em REPASSE, na descoberta:</p>
 <div class="se">
   <p><b>SE</b> a guia <b>já tem documento anexado</b> (além da própria cópia da GTO) → marca <b>“já anexada”</b>, <b>não</b> envia nada. <span class="ref">esteira.py:2531–2554</span></p>
   <p><b>SE</b> não conseguiu ler os anexos da guia (mesmo após 6 tentativas) → marca <b>“não verificada”</b> e <b>não</b> enfileira — “não arrisco duplicar; reprocesse o dia”. <span class="ref">esteira.py:2493–2528</span></p>
@@ -177,15 +177,18 @@ arriscar — porque o portal <b>não deixa remover anexo</b>: anexar errado é d
   <tr><td>Não cobre</td><td>O solicitação não inclui um exame que a guia autoriza</td><td>Clínica</td><td>Não</td></tr>
   <tr><td>Sem solicitação</td><td>Não há solicitação do dentista no prontuário</td><td>Clínica</td><td>Não</td></tr>
   <tr><td>Paciente não encontrado</td><td>Cadastro não bate com o PRORADIS</td><td>Cadastro</td><td>Não</td></tr>
-  <tr><td>Solicitação ilegível</td><td>A IA não decifrou a caligrafia</td><td>Conferência</td><td>Não</td></tr>
-  <tr><td>Data vencida (não ajustou)</td><td>Solicitação certo, data antiga não reescrita</td><td>Conferência</td><td>Não</td></tr>
+  <tr><td>Solicitação ilegível</td><td>A IA <b>não conseguiu ler</b> a caligrafia (≠ nome não bate)</td><td>Conferência</td><td>Não</td></tr>
+  <tr><td>Solicitação não confirmada</td><td>Há doc no nome, mas mal-lido ou pede exame diferente (caso CARINA)</td><td>Conferência</td><td>Não</td></tr>
+  <tr><td>Revisão humana</td><td>O robô não confirmou automaticamente e mandou conferir</td><td>Conferência</td><td>Não</td></tr>
+  <tr><td>Data ajustada / vencida</td><td>Data antiga; ajustou automático (ou não conseguiu)</td><td>Conferência</td><td>Não</td></tr>
   <tr><td>Exame em mais de um dia</td><td>Ambíguo entre dias vizinhos</td><td>Conferência</td><td>Não</td></tr>
-  <tr><td>Homônimo</td><td>Mais de um paciente com o mesmo nome</td><td>Conferência</td><td>⚠️ marcado como “nosso” (ver abaixo)</td></tr>
-  <tr><td>Nome não bate</td><td>Docs do prontuário são de outra pessoa</td><td>Nós (conferir)</td><td>Não (recusa correta)</td></tr>
-  <tr><td>Guia ilegível</td><td>Não lemos o que a guia autoriza</td><td>Nós</td><td>Não</td></tr>
+  <tr><td>Homônimo</td><td>Mais de um paciente com o mesmo nome no mesmo dia</td><td>Conferência</td><td>Não (✔ 13/08: virou conferência, não é mais “nosso”)</td></tr>
+  <tr><td>Nome não bate</td><td>Docs do prontuário são <b>legíveis</b>, mas de <b>outra pessoa</b> (≠ ilegível)</td><td>Nós/Conferência</td><td>Não (recusa correta)</td></tr>
+  <tr><td>Guia ilegível</td><td>Não lemos o que a própria guia autoriza</td><td>Nós</td><td>Não</td></tr>
   <tr><td>Falha técnica</td><td>Gemini/rede/leitura falhou</td><td>Nós</td><td><b>Sim</b> (transitório)</td></tr>
   <tr><td>Anexação barrada</td><td>Decisão passou, upload não grudou</td><td>Nós</td><td>Às vezes (se foi throttle/rede)</td></tr>
 </table>
+<p style="font-size:12px;color:#333"><b>Onde aparece:</b> só o que é <b>de vocês</b> (aguardando / a conferir) entra na lista do front, agrupado por dia. O <b>“nosso”</b> (transitório em reprocessamento) fica fora — quando o retry <b>esgota</b>, aí sim volta pro front pra investigar.</p>
 <h3>6.1 — Aviso ≠ Pendência ≠ Fila técnica</h3>
 <ul>
   <li><b>Pendência</b> = alguém precisa agir (clínica, radiologista, cadastro, conferência).</li>
@@ -193,7 +196,7 @@ arriscar — porque o portal <b>não deixa remover anexo</b>: anexar errado é d
   <li><b>Fila técnica</b> = falha <b>nossa</b> (robô); fica visível mas <b>fora</b> das tarefas da recepção — o reprocessamento do dia resolve sozinho.</li>
 </ul>
 <h3>6.2 — Loop de retry do “nosso” (transitório)</h3>
-<p><span class="se"><b>SE</b> a falha é <b>transitório</b> (gemini/rede/throttle/homônimo) → entra na fila de retry, re-tenta sozinho com espera crescente (15 min → 8 h), até <b>6</b> tentativas.</span> <span class="se"><b>SE</b> estourar as 6 → vira <b>“esgotado”</b> (“nossa, mas o retry não resolveu — investigar”), não fica retentando cego.</span> O contador nasce semeado com as falhas já ocorridas, então uma guia que já falhou demais <b>nasce esgotada</b>. <span class="ref">db.py:874–919, 950–1013</span></p>
+<p><span class="se"><b>SE</b> a falha é <b>transitório</b> (gemini/rede/throttle/JWT/falha de leitura) → entra na fila de retry, re-tenta sozinho com espera crescente (15 min → 8 h), até <b>6</b> tentativas.</span> <span class="se"><b>SE</b> estourar as 6 → vira <b>“esgotado”</b> (“nossa, mas o retry não resolveu — investigar”), não fica retentando cego.</span> O contador nasce semeado com as falhas já ocorridas, então uma guia que já falhou demais <b>nasce esgotada</b>. <span class="ref">db.py:874–919, 950–1013</span></p>
 
 <!-- ══════════════ PONTOS A CONFERIR ══════════════ -->
 <h2>⚠️ Pontos a conferir — “ele está decidindo certo?”</h2>
