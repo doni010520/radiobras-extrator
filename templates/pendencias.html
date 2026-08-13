@@ -112,6 +112,11 @@
   .arv-link:hover{text-decoration:underline}
   .tipo-leg{font-size:12px;color:var(--rb-fg-muted);line-height:1.55;margin:2px 0 16px;max-width:860px}
   .tipo-leg b{color:var(--rb-fg)}
+  details.venc-sec{margin-top:28px;border:1px dashed var(--rb-danger,#b3261e);border-radius:var(--rb-r-lg);
+    padding:12px 16px;background:var(--rb-danger-bg,#fdecea)}
+  details.venc-sec>summary{cursor:pointer;font-weight:700;font-size:14px;color:var(--rb-danger,#b3261e);user-select:none}
+  details.venc-sec>summary span{font-weight:400;font-size:12.5px;color:var(--rb-fg-muted)}
+  .venc-in{margin-top:12px}
 </style>
 </head>
 <body>
@@ -136,33 +141,17 @@
       <svg class="rb-ico"><use href="#i-grid"/></svg> Todas</a>
   </div>
 
-  {% if status == 'abertas' %}
-  <div class="tipo-sum">
-    <span class="ts ts-conf">👁 <b>{{ tipo_ct.conferir }}</b>&nbsp;para conferir</span>
-    <span class="ts ts-agu">⏳ <b>{{ tipo_ct.aguardar }}</b>&nbsp;aguardando terceiros</span>
-  </div>
-  <div class="tipo-leg"><b>👁 conferir</b> = a equipe RadioBras olha e decide (homônimo, nome não bate, ilegível). &nbsp;·&nbsp; <b>⏳ aguardando terceiros</b> = depende do radiologista (emitir o laudo) ou da clínica (anexar o pedido / corrigir o cadastro) — não dá pra resolver aqui sozinho.</div>
-  {% endif %}
-
-  {% set urg = sla_ct.venc + sla_ct.d1 + sla_ct.d2 + sla_ct.d3 %}
+  {% set urg = sla_ct.d1 + sla_ct.d2 + sla_ct.d3 %}
   {% if urg > 0 and status != 'resolvidas' %}
   <div class="slabar">
     <b>⚠ Prazo de faturamento (janela de {{ prazo }} dias):</b>
-    {% if sla_ct.venc %}<span class="chip">{{ sla_ct.venc }} vencida(s)</span>{% endif %}
     {% if sla_ct.d1 %}<span class="chip">{{ sla_ct.d1 }} vence(m) amanhã</span>{% endif %}
     {% if sla_ct.d2 %}<span class="chip">{{ sla_ct.d2 }} em 2 dias</span>{% endif %}
     {% if sla_ct.d3 %}<span class="chip">{{ sla_ct.d3 }} em 3 dias</span>{% endif %}
   </div>
   {% endif %}
 
-  {% if not grupos %}
-    <div class="empty">
-      <svg><use href="#i-check-circle"/></svg>
-      {% if status=='abertas' %}<b>Nenhuma pendência aberta</b>Tudo em dia — nada aguardando ação.
-      {% else %}<b>Nada por aqui</b>Nenhum item neste filtro.{% endif %}
-    </div>
-  {% else %}
-    {% for g in grupos %}
+  {% macro render_grupo(g) %}
     <div class="grp" data-grp="{{ g.chave }}">
       <div class="grp-h">
         {% if g.chave == 'venc' %}<span class="sla venc">⚠ vencidas</span>
@@ -171,7 +160,7 @@
         {% elif g.chave == 'd3' %}<span class="sla d3">faltam 3 dias</span>
         {% else %}<span class="sla ok">no prazo</span>{% endif %}
         <span class="u">{{ g.titulo }}</span>
-        <span class="c">{{ g.abertas }} aberta(s) · {{ g.total }} no total</span>
+        <span class="c">{{ g.abertas }} guia(s)</span>
       </div>
       <table>
         <tr><th style="width:36px"></th><th>GTO</th><th>Paciente</th><th>Unidade</th><th>Motivo</th><th>Quem age</th><th style="width:26px"></th></tr>
@@ -183,11 +172,7 @@
           <td>{{ p.paciente or '—' }}</td>
           <td class="mut">{{ p.unidade }}</td>
           <td class="tit">{{ p.titulo }}</td>
-          <td class="qa">
-            {% if p.tipo == 'conferir' %}<span class="ttag conferir">👁 conferir</span>
-            {% elif p.tipo == 'aguardar' %}<span class="ttag aguardar">⏳ aguardar</span>{% endif %}
-            <span class="who-pill {{ 'reproc' if p.responsavel in ('Reprocessar','Investigar') }}">→ {{ p.responsavel }}</span>
-          </td>
+          <td class="qa"><span class="who-pill {{ 'reproc' if p.responsavel in ('Reprocessar','Investigar') }}">→ {{ p.responsavel }}</span></td>
           <td class="chev">›</td>
         </tr>
         <tr class="det"><td colspan="7"><div class="det-in">
@@ -206,7 +191,30 @@
         {% endfor %}
       </table>
     </div>
-    {% endfor %}
+  {% endmacro %}
+
+  {% if not grupos and not grupos_venc %}
+    <div class="empty">
+      <svg><use href="#i-check-circle"/></svg>
+      {% if status=='abertas' %}<b>Nenhuma pendência no prazo</b>Tudo em dia — nada aguardando ação.
+      {% else %}<b>Nada por aqui</b>Nenhum item neste filtro.{% endif %}
+    </div>
+  {% elif not grupos and status == 'abertas' %}
+    <div class="empty">
+      <svg><use href="#i-check-circle"/></svg>
+      <b>Nada no prazo</b>Só há guias vencidas (abaixo).
+    </div>
+  {% else %}
+    {% for g in grupos %}{{ render_grupo(g) }}{% endfor %}
+  {% endif %}
+
+  {% if grupos_venc %}
+  <details class="venc-sec">
+    <summary>⏰ {{ n_vencidas }} vencida(s) — fora do prazo de {{ prazo }} dias <span>· clique para ver e tratar</span></summary>
+    <div class="venc-in">
+      {% for g in grupos_venc %}{{ render_grupo(g) }}{% endfor %}
+    </div>
+  </details>
   {% endif %}
 </div>
 <script>

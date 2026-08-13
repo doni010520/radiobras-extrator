@@ -446,10 +446,12 @@ def eh_pendencia_front(motivo: str, categoria: str, tentativas: int = 0) -> bool
     return classe_efetiva(motivo, categoria, tentativas) != "transitorio"
 
 
-def contar_pendencias_front() -> int:
-    """Nº de pendências que o usuário VÊ no front (só as DELES; sem as nossas em
-    reprocessamento). É o número honesto pro badge — não assusta com o que o sistema
-    já resolve sozinho."""
+def contar_pendencias_front(so_no_prazo: bool = False, prazo: int = 7) -> int:
+    """Nº de pendências que o usuário VÊ no front (sem as nossas em reprocessamento).
+    `so_no_prazo=True` conta SÓ as dentro do prazo (exclui as vencidas) — é o
+    'número atual' que o dono pediu (13/08): o topo não mistura o que ainda dá pra
+    fazer com o que já venceu."""
+    import datetime as _dt
     try:
         with SessionLocal() as s:
             rows = s.query(Pendencia).filter(Pendencia.resolvido == False).all()  # noqa: E712
@@ -458,9 +460,17 @@ def contar_pendencias_front() -> int:
             uniq[(r.conta, r.dia, r.gto)] = r
         itens = list(uniq.values())
         tent = tentativas_por_gtos([r.gto for r in itens])
-        return sum(1 for r in itens
-                   if eh_pendencia_front(r.motivo or "", r.categoria or "",
-                                         tent.get(str(r.gto), 0)))
+        hoje = _dt.date.today()
+        n = 0
+        for r in itens:
+            if not eh_pendencia_front(r.motivo or "", r.categoria or "", tent.get(str(r.gto), 0)):
+                continue
+            if so_no_prazo:
+                d = _parse_ddmmaaaa(r.dia)
+                if d and (hoje - d).days >= int(prazo):   # vencida -> fora do 'atual'
+                    continue
+            n += 1
+        return n
     except Exception:
         return 0
 
