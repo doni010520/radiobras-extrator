@@ -1255,6 +1255,44 @@ def _exame_do_laudo(p):
     return canon_exames(m.group(1)) if m else set()
 
 
+def _acc_do_studyuid(suid) -> str:
+    """A accession fica embutida no studyUID DICOM do PRORADIS, como o penultimo
+    segmento pontuado: '1.2.640.0.31017449.3.2.101.9.<ACCESSION>.<n>'. Permite
+    mapear cada imagem (studyUID na URL do viewer) ao exame (accession). None se
+    o formato nao casar."""
+    parts = str(suid or "").split(".")
+    if len(parts) >= 2 and re.fullmatch(r"\d{6,}", parts[-2] or ""):
+        return parts[-2]
+    return None
+
+
+# Exames RADIOLOGICOS que tem imagem entregavel PROPRIA (cada um com sua accession).
+# A tele entra pelo tracado (laudo, _laudo_tele_faltando); documentacao e bundle;
+# fotografia/modelo nao sao radiografia com accession. Conservador: so os que
+# comprovadamente geram uma radiografia entregavel por exame.
+_EXAMES_COM_IMAGEM = {"panoramica", "periapical", "interproximal", "oclusal"}
+
+
+def _exame_precisa_imagem(exame) -> bool:
+    """O exame autorizado exige a imagem entregavel da sua accession na guia?"""
+    return str(exame or "").strip().lower() in _EXAMES_COM_IMAGEM
+
+
+def exames_sem_imagem(exames_com_acc, accs_com_imagem) -> list:
+    """Exames autorizados (com accession) cuja accession NAO tem imagem entregavel
+    (com logo) capturada -> a 'foto' daquele exame nao subiu = guia incompleta.
+
+    exames_com_acc: [(exame_canon, accession)] — so os que precisam de imagem.
+    accs_com_imagem: set de accessions com >=1 imagem entregavel.
+    Sem accession -> nao afirma nada (nao inventa pendencia). Causa ALANA."""
+    accs_ok = set(accs_com_imagem or ())
+    faltam = []
+    for exame, acc in (exames_com_acc or []):
+        if acc and str(acc) not in accs_ok:
+            faltam.append((exame, str(acc)))
+    return faltam
+
+
 def _laudo_tele_faltando(exames_canon, laudos_no_plano) -> bool:
     """A guia autoriza telerradiografia mas NAO ha laudo de tele (traçado/CEPH) no
     plano? -> o gate deve SEGURAR (pendencia 'esperando_tele'), nunca faturar so com
@@ -1503,6 +1541,10 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
     status = "BAIXADO" if nf > 0 else "SEM_ARQUIVOS"
     return {"gto": g["gto"], "nome": pac["nome"], "status": status,
             "arquivos": nf, "imgs": res.get("imagens", {}).get("qtd", 0),
+            # exames radiológicos autorizados cuja IMAGEM entregável não subiu
+            # (a 'foto' daquele exame não foi gerada/capturada) — o gate segura
+            # como pendência 'falta_imagem'. Regra do dono (caso ALANA).
+            "exames_sem_imagem": res.get("exames_sem_imagem") or [],
             "_pac": pac, "_pasta": pasta, "dt_dl": time.monotonic() - t0,
             # accessions que NÃO vieram do analítico (podem ser exame particular).
             # Vazio no fallback por nome (cod 'WL*'), onde não há analítico pra
@@ -2715,7 +2757,14 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 _falta_tele = _laudo_tele_faltando(_exames_da_guia,
                                                    dec.get("plano_laudo_imgs", []))
                 _laudo_ok = _laudo_base_ok and not _falta_tele
-                anexa = _laudo_ok and _tem_solic_ou_justif
+                # GATE DE IMAGEM-POR-EXAME (regra do dono, caso ALANA): exame
+                # radiológico autorizado cuja IMAGEM entregável não subiu (a 'foto'
+                # daquele exame não foi gerada/capturada no PRORADIS) -> guia
+                # incompleta -> NÃO fatura -> pendência 'falta_imagem'. Falha SEGURA:
+                # imagem faltando nunca deixa faturar (a mesma classe da tele).
+                _sem_img = item.get("exames_sem_imagem") or []
+                _falta_imagem = bool(_sem_img)
+                anexa = _laudo_ok and _tem_solic_ou_justif and not _falta_imagem
                 if anexar_on and anexa:
                     fila_anexar.put(item)
                 else:
@@ -2737,6 +2786,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 elif _falta_tele:
                     # tem a panoramica, falta o laudo da telerradiografia (traçado)
                     _falta.append("o LAUDO da telerradiografia (traçado cefalométrico)")
+                if _falta_imagem:
+                    _nomes_img = ", ".join(sorted({str(e) for e, _a in _sem_img}))
+                    _falta.append(f"a IMAGEM do exame: {_nomes_img}")
                 if not _tem_solic_ou_justif:
                     _falta.append("SOLICITAÇÃO/JUSTIFICATIVA")
                 _mot = d.get("motivo") or dec.get("erro") or ""

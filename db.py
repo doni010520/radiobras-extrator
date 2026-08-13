@@ -788,6 +788,14 @@ _GRUPOS_PENDENCIA = [
      "Radiologista", "Documentação ortodôntica com a panorâmica anexada, mas SEM o "
      "laudo da telerradiografia (traçado cefalométrico). O robô anexa sozinho assim "
      "que o traçado sair no PRORADIS — cobrar a emissão do traçado."),
+    # IMAGEM (radiografia) de um exame autorizado não gerada como entregável no
+    # PRORADIS — vem ANTES de falta_laudo. A guia tem o laudo; falta a FOTO daquele
+    # exame (caso ALANA: periapical sem imagem entregável).
+    ("falta_imagem",
+     r"a IMAGEM do exame|falta.{0,12}imagem|imagem.*n[ãa]o (subiu|foi gerada|gerada)",
+     "Radiologista", "A imagem (radiografia) de um exame autorizado não foi gerada como "
+     "entregável no PRORADIS (sem a logo/cabeçalho RadioBras). O robô anexa sozinho "
+     "assim que a imagem entregável daquele exame sair — cobrar a geração da imagem."),
     ("falta_laudo", r"falta o LAUDO|sem laudo|laudo veio em branco|laudo.*n[ãa]o pronto",
      "Radiologista", "O robô anexa sozinho assim que o laudo sair. Só cobrar."),
     # PEDIDO ILEGÍVEL (caso MARIA CLARA): o robô não leu a caligrafia dos exames.
@@ -852,6 +860,7 @@ _NOSSO = "Nós"   # responsavel cujas pendencias vao para a FILA TECNICA
 _TITULO_GRUPO = {
     "sem_entregavel": "Exame sem laudo e sem imagem",
     "esperando_tele": "Esperando o laudo da telerradiografia (traçado)",
+    "falta_imagem": "Falta a imagem (entregável) de um exame",
     "falta_laudo": "Esperando o laudo do radiologista",
     "pedido_ilegivel": "Pedido do dentista com caligrafia ilegível",
     "pedido_nao_cobre": "O pedido do dentista não cobre a guia",

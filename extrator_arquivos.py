@@ -531,6 +531,16 @@ def _eh_duplicata(h, seen_hashes: set) -> bool:
 
 # ── Download de imagens ───────────────────────────────────────────────────────
 
+def _acc_do_studyuid(suid) -> str:
+    """Accession embutida no studyUID DICOM do PRORADIS (penultimo segmento):
+    '1.2.640.0.31017449.3.2.101.9.<ACCESSION>.<n>'. None se nao casar. (Espelha
+    esteira._acc_do_studyuid; duplicado aqui para evitar import circular.)"""
+    parts = str(suid or "").split(".")
+    if len(parts) >= 2 and re.fullmatch(r"\d{6,}", parts[-2] or ""):
+        return parts[-2]
+    return None
+
+
 def baixar_imagens(
     page,
     ctx,
@@ -565,8 +575,8 @@ def baixar_imagens(
             return
         if body[:2] == b"\xff\xd8":
             q = dict(re.findall(r"[?&]([^=&]+)=([^&]+)", r.url))
-            tail = q.get("studyUID", "").split(".")[-1]
-            captured.append((tail, body))
+            suid = q.get("studyUID", "")   # completo: '...9.<ACCESSION>.<n>'
+            captured.append((suid, body))
 
     _ABRE_POPUP = """([s, sc]) => {
         const f = document.createElement('form');
@@ -620,7 +630,8 @@ def baixar_imagens(
     arquivos: list = []
     salvos = 0
     total_capturadas = 0
-    for tail, body in captured:
+    accs_com_imagem: set = set()   # accessions que geraram imagem ENTREGAVEL (logo)
+    for suid, body in captured:
         total_capturadas += 1
         # Criterio deterministico: so entregaveis tem a logo VERDE RadioBras.
         if not tem_logo_radiobras(body):
@@ -632,6 +643,11 @@ def baixar_imagens(
         if _eh_duplicata(h, seen_hashes):
             continue
         seen_hashes.add(h)
+        # A accession do exame fica no studyUID ('...9.<ACCESSION>.<n>'): registra
+        # que ESTE exame teve imagem entregavel, pro gate de imagem-por-exame.
+        _acc = _acc_do_studyuid(suid)
+        if _acc:
+            accs_com_imagem.add(_acc)
         n += 1
         salvos += 1
         # NOME DERIVADO DO CONTEUDO. Antes era um contador posicional
@@ -649,6 +665,7 @@ def baixar_imagens(
     return {
         "qtd": salvos, "arquivos": arquivos, "pendencias": pendencias,
         "next_n": n, "total_capturadas": total_capturadas,
+        "accs_com_imagem": sorted(accs_com_imagem),
     }
 
 
@@ -973,6 +990,7 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
         n = 0
         arquivos: list = []
         img_pendencias: list = []
+        accs_com_imagem: set = set()
         for d in docs:
             try:
                 img_res = baixar_imagens(
@@ -983,9 +1001,11 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
                 continue
             n = img_res["next_n"]
             arquivos.extend(img_res["arquivos"])
+            accs_com_imagem.update(img_res.get("accs_com_imagem", []))
             if img_res["qtd"] > 0:
                 break  # reports_doc retorna todos os grupos -> uma chamada basta
         resultado["imagens"] = {"qtd": n, "arquivos": arquivos}
+        resultado["accs_com_imagem"] = sorted(accs_com_imagem)
         # Imagens sao best-effort: capturamos TODAS no padrao de entrega (logo).
         # Ausencia de imagem entregavel e nota, nao pendencia (o laudo e o entregavel
         # obrigatorio). Ex.: panoramica sem lamina gerada ainda.
@@ -1008,6 +1028,30 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
                 )
     except Exception as e:
         resultado["pendencias"].append(f"erro laudos: {e}")
+
+    # GATE DE IMAGEM-POR-EXAME (regra do dono, caso ALANA): cada exame radiologico
+    # autorizado tem a imagem entregavel da SUA accession? Lista os que ficaram sem
+    # (a 'foto' daquele exame nao subiu). A accession sai do studyUID de cada imagem
+    # entregavel capturada; o exame vem do token da worklist. So os que precisam de
+    # imagem (pan/periapical/interproximal/oclusal); tele=laudo, doc=bundle ficam de
+    # fora. Falha ao computar -> lista vazia (nao inventa pendencia).
+    try:
+        from esteira import _exame_precisa_imagem, exames_sem_imagem
+        from solicitacao_utils import canon_exames
+        _accs_img = set(resultado.get("accs_com_imagem", []))
+        _exames_com_acc, _seen = [], set()
+        for t in tokens_list:
+            acc = t.get("acc")
+            if not acc:
+                continue
+            for canon in canon_exames(t.get("exame") or ""):
+                if _exame_precisa_imagem(canon) and (canon, str(acc)) not in _seen:
+                    _seen.add((canon, str(acc)))
+                    _exames_com_acc.append((canon, str(acc)))
+        resultado["exames_sem_imagem"] = exames_sem_imagem(_exames_com_acc, _accs_img)
+    except Exception as e:
+        resultado["exames_sem_imagem"] = []
+        resultado["notas"].append(f"imagem-por-exame nao avaliado: {str(e)[:60]}")
 
     # Status final — 'notas' NAO contam como pendencia. As imagens sao best-effort
     # (capturamos todas no padrao de entrega); o entregavel OBRIGATORIO e o laudo.
