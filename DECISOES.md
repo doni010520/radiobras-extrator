@@ -124,11 +124,22 @@ Tudo com LLM lendo e **código decidindo** (princípios 1–5).
 
 - **[Fase 0] Taxonomia de retry** (`nosso_transitorio`/`nosso_logica`/`externo`) —
   lógica pura, TDD, e mostrar o selo nas pendências. Zero risco, alicerce.
-- **[Fase 1] Identidade determinística em TODOS os sites de match:** wire do
-  desempate por `nascimento` (já disponível no OdontoPrev via `dataNascimento`) e
-  `carteirinha` (na guia) no site que falta (conserta ALESSANDRA, determinístico,
-  zero risco). **Verificar se CPF está disponível** (pedido/cadastro) — chave que
-  resolve o caso da mãe (JOCASTA).
+- **[Fase 1] Identidade determinística em TODOS os sites de match.** Achados (12/08):
+  - **CPF NÃO vem do OdontoPrev.** `/v1/gto/detalhada → beneficiario` só tem
+    `codigo, codigoPlano, dataNascimento, isBradesco, nome, nomeEmpresa, plano`.
+    Carteirinha NÃO é pesquisável no PRORADIS (testado 06/08). Logo a **chave forte
+    é o NASCIMENTO** (que já temos, via `dataNascimento`). CPF só se a LLM ler do
+    corpo do pedido (Fase 2) — pro caso da mãe (JOCASTA).
+  - **Raiz da ALESSANDRA (homônimo):** `esteira.py:~1452` — quando a worklist acha
+    2 pacientes com nome compatível, retorna **AMBIGUO na hora, SEM tentar o
+    nascimento** (o comentário diz "desempata a jusante", mas não há jusante nesse
+    caminho). O outro site (prontuário, `_cards_por_nascimento`) usa nascimento; a
+    worklist não. **Conserta num site, esquece no outro — o padrão recorrente.**
+  - **Bloqueio:** a worklist (`reports_list/get_list`) só traz `{accession, nome,
+    rows_html}` — **sem nascimento**. Então o fix precisa SOURCEAR o nascimento de
+    cada candidato pelo prontuário/cadastro (que tem) e casar com `g["nascimento"]`.
+    Isso CONECTA os dois sites (worklist ambígua → desempate por nascimento do
+    prontuário). É determinístico, zero LLM.
 - **[Fase 2] Extração LLM das chaves fortes:** o Gemini passa a extrair CPF/
   nascimento/carteirinha de cada doc (LEITURA), pro código casar por identidade.
 - **[Fase 3] Loop de retry do transitório:** tabela `(gto,conta,dia,classe,
