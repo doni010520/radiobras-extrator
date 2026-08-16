@@ -594,7 +594,10 @@ def _retry_scheduler():
                                 res.get("devidos"), res.get("grupos"))
         except Exception as e:
             app.logger.error("Retry scheduler: %s", e)
-        _glosa_stop.wait(1200)   # ~20 min entre ciclos
+        # ~1 min entre ciclos: a 2a tentativa é IMEDIATA (backoff 0), então o poll
+        # precisa ser curto pra "imediato" valer de verdade. Ciclo sem item devido é
+        # só uma query barata (retries_devidos); anexa só quando há transitório na hora.
+        _glosa_stop.wait(60)
 
 
 if os.environ.get("RETRY_CRON", "0") == "1":

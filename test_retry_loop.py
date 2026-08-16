@@ -5,15 +5,17 @@ from db import (retry_backoff_min, deve_retentar, MAX_RETRIES_TRANSITORIO,
                 classe_efetiva)
 
 
-def test_backoff_exponencial():
-    # tentativa 0 (1a) -> 15min; dobra até 8h; satura em 8h
-    assert retry_backoff_min(0) == 15
-    assert retry_backoff_min(1) == 30
-    assert retry_backoff_min(2) == 60
-    assert retry_backoff_min(3) == 120
-    assert retry_backoff_min(4) == 240
-    assert retry_backoff_min(5) == 480
-    assert retry_backoff_min(9) == 480   # satura, nunca passa de 8h
+def test_backoff_imediato_depois_escala():
+    # Regra do dono (17/08): a 2a tentativa (1o retry) é IMEDIATA — o que só depende
+    # de reprocessar não espera 15min. Índices 0 e 1 = 0min (imediato); depois escala
+    # para dar tempo ao 503/throttle limpar, sem estourar o teto em segundos.
+    assert retry_backoff_min(0) == 0      # imediato
+    assert retry_backoff_min(1) == 0      # 2a tentativa também imediata (seed=1)
+    assert retry_backoff_min(2) == 5
+    assert retry_backoff_min(3) == 20
+    assert retry_backoff_min(4) == 60
+    assert retry_backoff_min(5) == 240
+    assert retry_backoff_min(9) == 240    # satura no último, nunca passa de 4h
 
 
 def test_so_transitorio_retenta():

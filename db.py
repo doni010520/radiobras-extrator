@@ -993,15 +993,19 @@ def classe_retry(motivo: str, categoria: str = "") -> str:
     return "logica"
 
 
-# Loop de retry do transitorio: teto de tentativas + backoff exponencial (satura 8h).
+# Loop de retry do transitorio: teto de tentativas + backoff. A 2a tentativa (1o
+# retry) e IMEDIATA (regra do dono 17/08: o que so depende de reprocessar nao espera
+# 15min). Depois escala pra dar tempo ao 503/throttle limpar sem estourar o teto em
+# segundos: imediato -> imediato -> 5m -> 20m -> 1h -> 4h. Teto 6 -> janela ~5.5h.
 MAX_RETRIES_TRANSITORIO = 6
-_BACKOFF_MIN = [15, 30, 60, 120, 240, 480]
+_BACKOFF_MIN = [0, 0, 5, 20, 60, 240]
 
 
 def retry_backoff_min(tentativa: int) -> int:
-    """Minutos ate o proximo retry da tentativa N (0-based). Exponencial, satura 8h.
-    A maioria dos transitorios (gemini 503) some em minutos -> as 1as pegam quase
-    tudo; as espacadas pegam queda longa (PRORADIS/proxy fora)."""
+    """Minutos ate o proximo retry da tentativa N (0-based). As 2 primeiras sao
+    imediatas (0min); depois escala e satura em 4h. A maioria dos transitorios
+    (gemini 503) some em minutos -> a 1a imediata ja pega quase tudo; as espacadas
+    pegam queda longa (PRORADIS/proxy fora)."""
     i = max(0, int(tentativa))
     return _BACKOFF_MIN[i] if i < len(_BACKOFF_MIN) else _BACKOFF_MIN[-1]
 
