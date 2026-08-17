@@ -976,7 +976,11 @@ _TRANSITORIO_RE = __import__("re").compile(
     # retentar (antes caia em 'logica' e ficava parado). Trace 17/08: 503 por-candidato
     # virava leitura vazia -> nao retentava. So casa a frase que o codigo emite; nao
     # pega 'sem pedido'/'nao cobre' (que dizem 'pedir a clinica', nunca 'reprocessar').
-    r"leitura.{0,40}n[ãa]o retornou|falha tempor[áa]ria",
+    r"leitura.{0,40}n[ãa]o retornou|falha tempor[áa]ria|"
+    # ANEXAÇÃO falhou por INFRA (17/08): o JWT do OdontoPrev expira em rodada longa e
+    # o anexador, sem conseguir CONTAR os anexos, NÃO envia (anti-duplicação). Rodada
+    # nova com token fresco resolve. NÃO casa 'laudo de outro exame' (dado -> conferência).
+    r"Jwt is expired|jwt.{0,6}expir|n[ãa]o consegui ler quantos anexos",
     __import__("re").I)
 # NOTA: 'homônimo/mais de um paciente' saiu do transitório (13/08). O caso "mesmo dia"
 # (lado analítico, 195904169) NÃO se resolve com retry — é Conferência (vai pro front).
