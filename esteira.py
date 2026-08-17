@@ -2391,6 +2391,20 @@ def _anexos_portal_split(imgs):
     return copias, docs
 
 
+def _carregar_confirmados():
+    """Conjunto de gtos com SINAL VERDE HUMANO (✔ Confirmei). `esteira` não importa
+    `db` no topo (evita import circular), então o import é LOCAL aqui.
+    BUG até 17/08/26: rodar_esteira chamava db.confirmacoes_set() direto, sem `import
+    db` no escopo -> NameError -> caía no except -> confirmados SEMPRE vazio -> o
+    '✔ Confirmei' nunca liberava a guia (nome/cobertura). set() vazio só é legítimo em
+    falha REAL do banco, nunca por import."""
+    try:
+        import db
+        return db.confirmacoes_set()
+    except Exception:
+        return set()
+
+
 def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_key=None,
                   review_dir=None, k_attach=0, dry_run=True, conta=None, senha_portal=None,
                   apenas_gtos=None):
@@ -2446,10 +2460,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     # SINAL VERDE HUMANO (feature 13/08): guias que um usuário confirmou na tela de
     # pendências (conferiu que a solicitação é do paciente) -> a decisão libera a
     # trava do nome/cobertura pra elas. Carrega uma vez por execução.
-    try:
-        _confirmados = db.confirmacoes_set()
-    except Exception:
-        _confirmados = set()
+    _confirmados = _carregar_confirmados()
     fila_pend = queue.Queue()
     fila_leit = queue.Queue()
     fila_anexar = queue.Queue()
