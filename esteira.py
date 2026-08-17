@@ -1694,6 +1694,33 @@ def _motivo_nao_cobre(pede, falta, cn):
             f"{lista_amigavel(falta)}.")
 
 
+def _motivo_sem_candidatos(n_prontuario, descartados):
+    """Motivo quando NENHUM anexo do prontuário virou candidato a pedido. DISTINGUE:
+      - prontuário REALMENTE vazio (n_prontuario==0): a clínica não anexou nada —
+        espera a clínica (externo, sem retry);
+      - prontuário COM documentos, mas nenhum reconhecido como pedido: causa provável
+        é LEITURA NOSSA (manuscrito/leitura instável/503 intermitente). NUNCA acusar a
+        clínica de 'não anexou nenhum documento' (é FALSO — há docs). Diz 'falha
+        temporária da leitura' (que classe_retry trata como transitório -> o loop
+        re-lê) e manda conferir se persistir.
+    Trace 17/08: KAUA/ALINE tinham o pedido (funil cand=2) e saíam 'não encontrou
+    NENHUM documento'; na releitura saíram 'auto'. A distinção é o funil prontuario>0."""
+    desc = descartados or []
+    _suf = (f" ({len(desc)} anexo(s) não puderam ser lidos: {'; '.join(desc)[:160]})"
+            if desc else "")
+    if int(n_prontuario or 0) <= 0:
+        return ("NÃO FATUROU porque não há nenhum pedido do dentista anexado ao "
+                "prontuário deste paciente. O sistema abriu o prontuário e não "
+                "encontrou nenhum documento que sirva como pedido" + _suf
+                + ". O QUE FAZER: pedir à clínica que anexe o pedido no prontuário.")
+    return (f"NÃO FATUROU porque o prontuário tem {int(n_prontuario)} documento(s), mas "
+            "nenhum foi reconhecido como pedido do dentista — provavelmente falha "
+            "temporária da leitura (documento manuscrito/ilegível ou leitura instável)"
+            + _suf + ". O QUE FAZER: reprocessar o dia; se persistir, conferir no "
+            "prontuário e, havendo pedido, anexar à mão. (Pode ser leitura nossa — "
+            "não necessariamente falta da clínica.)")
+
+
 def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
              eventos_portal=None, gto_blob=None, gto_mime="", data_exame=None,
              confirmados=None):
@@ -1921,14 +1948,13 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     "candidatos": len(cands), "descartados": len(out.get("descartados") or []),
                     "convertidos": len(out.get("convertidos") or [])}
     if not cands:
-        out["decisao"] = {"anexar": False, "motivo": (
-            "NÃO FATUROU porque não há nenhum pedido do dentista anexado ao "
-            "prontuário deste paciente. O sistema abriu o prontuário e não "
-            f"encontrou nenhum documento que sirva como pedido"
-            + (f" ({len(out.get('descartados') or [])} anexo(s) não puderam ser "
-               f"lidos: {'; '.join(out.get('descartados') or [])[:160]})"
-               if out.get("descartados") else "")
-            + ". O QUE FAZER: pedir à clínica que anexe o pedido no prontuário.")}
+        # 'sem pedido' só ACUSA a clínica se o prontuário está REALMENTE vazio. Com
+        # documentos presentes (len(lista)>0) e nenhum reconhecido como pedido, a causa
+        # provável é leitura nossa (manuscrito/leitura instável) -> _motivo_sem_candidatos
+        # marca como 'falha temporária da leitura' (transitório: o loop re-lê), nunca
+        # 'a clínica não anexou'. Trace 17/08 (KAUA/ALINE: prontuário cheio -> falso 'sem pedido').
+        out["decisao"] = {"anexar": False,
+                          "motivo": _motivo_sem_candidatos(len(lista), out.get("descartados"))}
         return out
     if _gem_estado["fatal"]:
         # já sabemos que a leitura está fora do ar nesta execução: falha na hora
