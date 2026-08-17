@@ -52,6 +52,17 @@ def test_homonimo_mesmo_dia_e_conferencia_nao_nosso():
     assert classe_retry("2 pacientes com o nome 'ALESSANDRA' no PRORADIS — não foi possível") == "transitorio"
 
 
+def test_leitura_vazia_e_transitorio():
+    # Trace 17/08: um 503 na leitura de um candidato fazia a leitura "não retornar
+    # nada" — e o código JÁ rotula isso como "falha temporária da leitura, reprocessar
+    # o dia (falha nossa, não da clínica)". Mas classe_retry caía em 'logica' e o loop
+    # NÃO reprocessava. Se o robô manda reprocessar, o retry TEM que pegar.
+    m = ("NÃO FATUROU porque a leitura dos anexos do prontuário não retornou nada. "
+         "Normalmente é falha temporária da leitura. O QUE FAZER: reprocessar o dia. "
+         "(Falha nossa, não da clínica.)")
+    assert classe_retry(m) == "transitorio", m
+
+
 def test_vazio_ou_desconhecido_nao_e_transitorio():
     # sem sinal claro NÃO vira transitorio (não retenta cegamente algo que não é infra)
     assert classe_retry("") != "transitorio"

@@ -970,7 +970,13 @@ _NOSSO = "Nós"   # responsavel cujas pendencias vao para a FILA TECNICA
 _TRANSITORIO_RE = __import__("re").compile(
     r"gemini\s*:|UNAVAILABLE|time.?out|timed out|net::|ERR_|tunnel|"
     r"context was destroyed|translate host|throttl|rate.?limit|TE-BFF-GTO|"
-    r"falha t[ée]cnica|leitura indispon|pacientes com o nome.{0,40}n[ãa]o foi poss",
+    r"falha t[ée]cnica|leitura indispon|pacientes com o nome.{0,40}n[ãa]o foi poss|"
+    # Leitura que "nao retornou nada" / "falha temporaria da leitura": o proprio
+    # relatorio ja manda "reprocessar o dia (falha nossa)" — entao o loop TEM que
+    # retentar (antes caia em 'logica' e ficava parado). Trace 17/08: 503 por-candidato
+    # virava leitura vazia -> nao retentava. So casa a frase que o codigo emite; nao
+    # pega 'sem pedido'/'nao cobre' (que dizem 'pedir a clinica', nunca 'reprocessar').
+    r"leitura.{0,40}n[ãa]o retornou|falha tempor[áa]ria",
     __import__("re").I)
 # NOTA: 'homônimo/mais de um paciente' saiu do transitório (13/08). O caso "mesmo dia"
 # (lado analítico, 195904169) NÃO se resolve com retry — é Conferência (vai pro front).
