@@ -45,7 +45,21 @@ def consultar_demo_repasse(page, guia) -> dict:
     REPASSE (necessária pro prazo). {tem_dados, bruto, glosado, pago, data_repasse}."""
     out = {"tem_dados": False, "bruto": None, "glosado": None, "pago": False,
            "data_repasse": None}
-    if not _demo_set_guia(page, guia):
+    # ENTRADA DA GUIA (fix 19/08): o campo "Informe os números das guias" é um
+    # chip-input do Vuetify — digitar NÃO basta, precisa ENTER pra virar chip, senão o
+    # CONSULTAR não acha guia e volta o formulário vazio (lido como 'aguardando'). E o
+    # campo certo é input[type=text] (o primeiro input VISÍVEL é o radio).
+    inp = page.query_selector('input[type="text"]')
+    if not inp:
+        return out
+    try:
+        inp.evaluate("el=>el.focus()")
+        page.wait_for_timeout(120)
+        page.keyboard.type(str(guia), delay=60)
+        page.wait_for_timeout(200)
+        page.keyboard.press("Enter")     # commita o número como chip
+        page.wait_for_timeout(400)
+    except Exception:
         return out
     page.mouse.move(1100, 650); page.wait_for_timeout(150)
     btn = _btn_por_texto(page, "CONSULTAR")
@@ -119,7 +133,13 @@ def extrair_desfechos_conta(pw, conta, unidade, guias, dia_str, hoje=None, log=p
                 demo = consultar_demo_repasse(page, gto)
             except Exception:
                 demo = None
-            status = _d.classificar_desfecho(cancelada=False, demo=demo)
+            # GLOSADA vem do RELATÓRIO DE GLOSA (confiável, independe do pagamento), NÃO
+            # do Demonstrativo (que só popula depois do repasse). Sem isso, uma glosada
+            # com repasse pendente cairia em 'aguardando' e o motivo/recurso sumiria.
+            if gto in glosa_por_ficha:
+                status = "GLOSADA"
+            else:
+                status = _d.classificar_desfecho(cancelada=False, demo=demo)
             itens.append({"conta": conta, "unidade": unidade, "gto": gto,
                           "paciente": g.get("paciente"), "dia_faturado": g.get("dia_faturado"),
                           "status": status,
