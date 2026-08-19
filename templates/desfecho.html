@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desfecho na RedeUna — RADIOBRAS</title>
+{% include '_head.html' %}
+<script>(function(){try{var t=localStorage.getItem('rb-theme')||'light';document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','light');}})();</script>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--rb-bg);color:var(--rb-fg)}
+  .wrap{max-width:1240px;margin:0 auto;padding:20px 18px 70px}
+  .head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:6px 0 4px}
+  .head h1{font-size:21px;margin:0;font-weight:750}
+  .sub{color:var(--rb-fg-muted);font-size:13px;margin:2px 0 16px}
+  .toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
+  .toolbar .spacer{flex:1}
+  .btn{border:1px solid var(--rb-border);background:var(--rb-surface-2);color:var(--rb-fg);
+    border-radius:var(--rb-r);padding:8px 13px;font-size:13px;font-weight:600;cursor:pointer;
+    text-decoration:none;display:inline-flex;align-items:center;gap:7px;transition:.16s}
+  .btn:hover{border-color:var(--rb-primary);transform:translateY(-1px)}
+  .btn.primary{background:var(--rb-primary);border-color:var(--rb-primary);color:var(--rb-on-primary);box-shadow:var(--rb-shadow-1)}
+  .btn:disabled{opacity:.55;cursor:default;transform:none}
+  input[type=date]{background:var(--rb-surface);color:var(--rb-fg);border:1px solid var(--rb-border-strong);
+    border-radius:var(--rb-r);padding:8px 10px;font-size:13px}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+  .kpi{background:var(--rb-surface);border:1px solid var(--rb-border);border-radius:var(--rb-r-lg);padding:14px 16px;box-shadow:var(--rb-shadow-1)}
+  .kpi .n{font-size:27px;font-weight:750;line-height:1.1;font-variant-numeric:tabular-nums}
+  .kpi .l{color:var(--rb-fg-muted);font-size:12.5px;margin-top:3px}
+  .kpi .bar{height:4px;border-radius:3px;margin-top:9px}
+  .chips{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+  .chip{border:1px solid var(--rb-border);background:var(--rb-surface);color:var(--rb-fg);
+    border-radius:999px;padding:6px 12px;font-size:12.5px;font-weight:600;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+  .chip[aria-pressed=true]{background:var(--rb-primary);border-color:var(--rb-primary);color:var(--rb-on-primary)}
+  .chip .c{width:9px;height:9px;border-radius:50%}
+  .panel{background:var(--rb-surface);border:1px solid var(--rb-border);border-radius:var(--rb-r-lg);box-shadow:var(--rb-shadow-1);overflow:hidden}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--rb-border)}
+  th{font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--rb-fg-muted);font-weight:700;position:sticky;top:0;background:var(--rb-surface-2)}
+  tbody tr:hover{background:var(--rb-surface-2)}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .st{display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:12px;padding:3px 9px;border-radius:999px}
+  .st .c{width:8px;height:8px;border-radius:50%}
+  .st-ok{background:color-mix(in srgb,var(--rb-primary) 16%,transparent);color:var(--rb-primary-600)}
+  .st-ok .c{background:var(--rb-primary)}
+  .st-bad{background:color-mix(in srgb,var(--rb-danger) 15%,transparent);color:var(--rb-danger)}
+  .st-bad .c{background:var(--rb-danger)}
+  .st-info{background:color-mix(in srgb,var(--rb-info) 15%,transparent);color:var(--rb-info)}
+  .st-info .c{background:var(--rb-info)}
+  .st-neutral{background:var(--rb-surface-2);color:var(--rb-fg-subtle)}
+  .st-neutral .c{background:var(--rb-fg-subtle)}
+  .prazo{font-weight:700}
+  .prazo.urgente{color:var(--rb-warning)}
+  .prazo.prescrito{color:var(--rb-danger)}
+  .det{color:var(--rb-fg-muted);font-size:12px;max-width:420px}
+  .det b{color:var(--rb-fg);font-weight:700}
+  .empty{padding:44px;text-align:center;color:var(--rb-fg-muted)}
+  .muted{color:var(--rb-fg-muted)}
+  /* modal atualizar */
+  .ov{position:fixed;inset:0;background:rgba(0,0,0,.42);display:none;align-items:center;justify-content:center;z-index:60}
+  .ov.on{display:flex}
+  .modal{background:var(--rb-surface);border:1px solid var(--rb-border);border-radius:var(--rb-r-lg);
+    padding:20px;max-width:520px;width:92%;box-shadow:var(--rb-shadow-2)}
+  .modal h3{margin:0 0 6px;font-size:16px}
+  .modal .logbox{background:var(--rb-surface-2);border:1px solid var(--rb-border);border-radius:var(--rb-r);
+    padding:10px;font:12px/1.5 ui-monospace,monospace;max-height:230px;overflow:auto;white-space:pre-wrap;margin-top:12px}
+</style>
+</head>
+<body>
+{% include '_topnav.html' %}
+<div class="wrap">
+  <div class="head">
+    <h1>Desfecho na RedeUna</h1>
+    <span class="muted" id="loteInfo"></span>
+  </div>
+  <p class="sub">O que aconteceu com cada guia que <b>nós</b> faturamos, na ponta da operadora:
+    pago, glosado (com motivo, recurso e prazo), cancelado ou aguardando repasse.</p>
+
+  <div class="toolbar">
+    <input type="date" id="desde" title="Considerar guias faturadas a partir desta data">
+    <button class="btn primary" id="btnAtualizar">↻ Atualizar status</button>
+    <a class="btn" href="/glosas">Ver painel de glosas</a>
+    <span class="spacer"></span>
+    <span class="muted" id="totInfo"></span>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+  <div class="chips" id="chips"></div>
+
+  <div class="panel">
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th>Guia</th><th>Paciente</th><th>Unidade</th><th>Faturada</th>
+          <th>Status</th><th class="num">Bruto</th><th class="num">Glosado</th>
+          <th>Motivo / recurso / prazo</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="empty" id="empty" style="display:none"></div>
+  </div>
+</div>
+
+<div class="ov" id="ov">
+  <div class="modal">
+    <h3>Atualizar desfecho</h3>
+    <p class="muted" id="ovmsg" style="font-size:13px;margin:0">Consultando o Demonstrativo de Pagamento guia a guia na RedeUna. Pode levar alguns minutos.</p>
+    <div class="logbox" id="ovlog"></div>
+    <div style="text-align:right;margin-top:12px"><button class="btn" id="ovclose">Fechar</button></div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const BRL=v=>{const n=parseFloat(v);return isNaN(n)||n===0?'—':n.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});};
+const STCLS={PAGA:'st-ok',GLOSADA:'st-bad',CANCELADA:'st-neutral',AGUARDANDO:'st-info'};
+let DATA={pan:{},guias:[],meta:{}}, FILTRO=null;
+
+function kpis(p){
+  const m=DATA.meta, s=p.por_status||{};
+  const card=(n,l,color)=>`<div class="kpi"><div class="n">${n}</div><div class="l">${l}</div><div class="bar" style="background:${color}"></div></div>`;
+  $('kpis').innerHTML=[
+    card(p.total||0,'Guias faturadas por nós','var(--rb-fg-subtle)'),
+    card(s.PAGA||0,'Pagas','var(--rb-primary)'),
+    card(s.GLOSADA||0,'Glosadas','var(--rb-danger)'),
+    card(p.a_recorrer||0,'A recorrer (no prazo)','var(--rb-warning)'),
+    card(p.prescritas||0,'Prazo prescrito','var(--rb-danger)'),
+    card(s.AGUARDANDO||0,'Aguardando repasse','var(--rb-info)'),
+    card(BRL(p.total_pago),'Recebido','var(--rb-primary)'),
+    card(BRL(p.total_glosado),'Glosado','var(--rb-danger)'),
+  ].join('');
+}
+function chips(p){
+  const s=p.por_status||{}, m=DATA.meta;
+  const order=['PAGA','GLOSADA','CANCELADA','AGUARDANDO'];
+  let h=`<button class="chip" data-st="" aria-pressed="${FILTRO?'false':'true'}">Todas (${p.total||0})</button>`;
+  order.forEach(k=>{const meta=m[k]||{};h+=`<button class="chip" data-st="${k}" aria-pressed="${FILTRO===k}"><span class="c" style="background:${cvar(k)}"></span>${(meta.label||k)} (${s[k]||0})</button>`;});
+  $('chips').innerHTML=h;
+  document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>{FILTRO=b.dataset.st||null;render();});
+}
+function cvar(k){return {PAGA:'var(--rb-primary)',GLOSADA:'var(--rb-danger)',CANCELADA:'var(--rb-fg-subtle)',AGUARDANDO:'var(--rb-info)'}[k]||'var(--rb-fg-subtle)';}
+function prazoCell(g){
+  if(g.status!=='GLOSADA')return '<span class="muted">—</span>';
+  let motivo=g.glosa_motivo?`<b>${g.glosa_cod||''} ${g.glosa_motivo}</b><br>`:'';
+  let rec=g.como_recursar?`${g.como_recursar}<br>`:'';
+  let prazo='';
+  if(g.prescrito) prazo=`<span class="prazo prescrito">⛔ Prazo prescrito${g.prazo_limite?' (venceu '+g.prazo_limite+')':''}</span>`;
+  else if(g.prazo_dias!=null){const cls=g.prazo_dias<=15?'urgente':'';prazo=`<span class="prazo ${cls}">⏳ ${g.prazo_dias} dia(s) p/ recorrer${g.prazo_limite?' (até '+g.prazo_limite+')':''}</span>`;}
+  else prazo='<span class="muted">prazo definido após o repasse</span>';
+  return `<div class="det">${motivo}${rec}${prazo}</div>`;
+}
+function render(){
+  const gs=DATA.guias.filter(g=>!FILTRO||g.status===FILTRO);
+  const meta=DATA.meta;
+  if(!gs.length){$('rows').innerHTML='';$('empty').style.display='block';
+    $('empty').textContent=DATA.guias.length?'Nenhuma guia neste filtro.':'Sem dados ainda — clique em “Atualizar status”.';return;}
+  $('empty').style.display='none';
+  $('rows').innerHTML=gs.map(g=>{
+    const st=STCLS[g.status]||'st-neutral', lab=(meta[g.status]||{}).label||g.status;
+    return `<tr>
+      <td><b>${g.gto}</b></td>
+      <td>${g.paciente||''}</td>
+      <td class="muted">${g.unidade||''}</td>
+      <td class="muted">${g.dia_faturado||''}</td>
+      <td><span class="st ${st}"><span class="c"></span>${lab}</span></td>
+      <td class="num">${BRL(g.valor_bruto)}</td>
+      <td class="num">${BRL(g.valor_glosado)}</td>
+      <td>${prazoCell(g)}</td>
+    </tr>`;}).join('');
+}
+function load(){
+  fetch('/api/desfecho').then(r=>r.json()).then(d=>{
+    if(d.error){$('empty').style.display='block';$('empty').textContent='Erro: '+d.error;return;}
+    DATA=d; kpis(d.pan||{}); chips(d.pan||{}); render();
+    $('totInfo').textContent=(d.pan&&d.pan.total)?`${d.pan.total} guia(s) no último balanço`:'';
+    $('loteInfo').textContent=(d.pan&&d.pan.lote)?`atualizado em ${d.pan.lote.slice(6,8)}/${d.pan.lote.slice(4,6)} ${d.pan.lote.slice(8,10)}:${d.pan.lote.slice(10,12)}`:'';
+  });
+}
+// atualizar
+let POLL=null;
+$('btnAtualizar').onclick=()=>{
+  const desde=$('desde').value; // yyyy-mm-dd
+  let br=null; if(desde){const[a,b,c]=desde.split('-');br=`${c}/${b}/${a}`;}
+  $('ov').classList.add('on');$('ovlog').textContent='iniciando…';
+  fetch('/desfecho/atualizar',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({desde:br})}).then(r=>r.json()).then(j=>{
+    if(j.error){$('ovlog').textContent='erro: '+j.error;return;}
+    POLL=setInterval(()=>poll(j.job_id),2500);
+  });
+};
+function poll(id){
+  fetch('/desfecho/atualizar/status/'+id).then(r=>r.json()).then(j=>{
+    $('ovlog').textContent=(j.log||[]).join('\n');
+    $('ovlog').scrollTop=$('ovlog').scrollHeight;
+    if(j.status==='done'||j.status==='error'){clearInterval(POLL);
+      if(j.status==='done'){$('ovmsg').textContent='Concluído. Atualizando a tela…';setTimeout(()=>{$('ov').classList.remove('on');load();},1200);}
+      else $('ovmsg').textContent='Falhou: '+(j.error||'');}
+  });
+}
+$('ovclose').onclick=()=>{$('ov').classList.remove('on');if(POLL)clearInterval(POLL);};
+load();
+</script>
+</body>
+</html>

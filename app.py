@@ -420,6 +420,44 @@ def _run_glosa_job(job_id: str, dia: str, contas: list, checar: bool,
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
 
 
+def _run_desfecho_job(job_id: str, desde: str, contas: list) -> None:
+    """Job da atualização do desfecho (status na RedeUna das guias que faturamos)."""
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "running"
+
+    def progress(msg: str) -> None:
+        with _jobs_lock:
+            _jobs[job_id].setdefault("log", []).append(str(msg))
+
+    try:
+        import time as _time
+        from playwright.sync_api import sync_playwright
+        from desfecho_extrator import extrair_desfechos_conta
+        dia = _time.strftime("%d/%m/%Y")
+        fat = db.guias_faturadas_por_nos(desde_dia=desde)
+        fat = [f for f in fat if f.get("conta") and (not contas or f["conta"] in contas)]
+        porconta = {}
+        for f in fat:
+            porconta.setdefault(f["conta"], {"unidade": f["unidade"], "guias": []})["guias"].append(f)
+        total = sum(len(v["guias"]) for v in porconta.values())
+        lote = _time.strftime("%Y%m%d%H%M%S")
+        progress(f"{total} guia(s) em {len(porconta)} unidade(s) (faturadas desde {desde})")
+        with sync_playwright() as pw:
+            for conta, info in porconta.items():
+                progress(f"==== {info['unidade']} ({conta}) — {len(info['guias'])} guia(s) ====")
+                itens = extrair_desfechos_conta(pw, conta, info["unidade"], info["guias"],
+                                                dia, log=progress)
+                db.salvar_desfechos(lote, itens)
+                progress(f"[{info['unidade']}] gravado ({len(itens)}).")
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "done", "lote": lote, "total": total})
+    except Exception as exc:
+        tb = traceback.format_exc()
+        app.logger.error("Erro no desfecho job %s:\n%s", job_id, tb)
+        with _jobs_lock:
+            _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
+
+
 def _run_anexacao_job(job_id: str, de: str, ate: str, contas: list, limite: int) -> None:
     """Job da varredura de anexação/faturamento (só-leitura, 3 unidades)."""
     with _jobs_lock:
@@ -602,6 +640,53 @@ def _retry_scheduler():
 
 if os.environ.get("RETRY_CRON", "0") == "1":
     threading.Thread(target=_retry_scheduler, daemon=True).start()
+
+
+def _desfecho_atualizou_hoje() -> bool:
+    try:
+        lote = (db.desfecho_panorama() or {}).get("lote")
+        if not lote:
+            return False
+        d = datetime.strptime(lote[:8], "%Y%m%d").date()
+        hoje = datetime.now(_TZ).date() if _TZ else datetime.now().date()
+        return d == hoje
+    except Exception:
+        return False
+
+
+_desfecho_ultima_tentativa = None  # 1x/dia mesmo se falhar (não martelar o OdontoPrev)
+
+
+def _desfecho_scheduler():
+    """Atualiza o DESFECHO (status na RedeUna dos faturados do MÊS corrente) 1x/dia,
+    após DESFECHO_UPDATE_HOUR (default 8h Brasília — escalonado da glosa/anexação).
+    Tenta no máximo 1x/dia mesmo se falhar. Gated por DESFECHO_AUTO_UPDATE=1."""
+    global _desfecho_ultima_tentativa
+    try:
+        hora = int(os.environ.get("DESFECHO_UPDATE_HOUR", "8"))
+    except ValueError:
+        hora = 8
+    while not _glosa_stop.is_set():
+        try:
+            agora = datetime.now(_TZ) if _TZ else datetime.now()
+            if (agora.hour >= hora and not _desfecho_atualizou_hoje()
+                    and _desfecho_ultima_tentativa != agora.date()):
+                _desfecho_ultima_tentativa = agora.date()
+                desde = "01/" + agora.strftime("%m/%Y")  # 1º dia do mês corrente
+                jid = "desfauto" + uuid.uuid4().hex[:8]
+                _purgar_jobs(_jobs, _jobs_lock)
+                with _jobs_lock:
+                    _jobs[jid] = {"status": "queued", "log": [], "kind": "desfecho"}
+                app.logger.info("Desfecho auto-update iniciando (desde %s)…", desde)
+                _run_desfecho_job(jid, desde, [])
+                app.logger.info("Desfecho auto-update concluído.")
+        except Exception as e:
+            app.logger.error("Desfecho scheduler: %s", e)
+        _glosa_stop.wait(1800)
+
+
+if os.environ.get("DESFECHO_AUTO_UPDATE", "0") == "1":
+    threading.Thread(target=_desfecho_scheduler, daemon=True).start()
 
 
 # ── Faturamento automático diário (cron D-4 + reprocessa pendências) ────────────
@@ -2160,6 +2245,65 @@ def glosas_atualizar():
 
 @app.route("/glosas/atualizar/status/<job_id>")
 def glosas_atualizar_status(job_id: str):
+    with _jobs_lock:
+        j = _jobs.get(job_id)
+        if not j:
+            return jsonify({"error": "job não encontrado"}), 404
+        return jsonify({"status": j.get("status"), "log": j.get("log", [])[-40:],
+                        "total": j.get("total"), "lote": j.get("lote"),
+                        "error": j.get("error")})
+
+
+# ── Desfecho na RedeUna (pago/glosado/cancelado das guias que faturamos) ──────
+
+DESFECHO_META = {
+    "PAGA": {"label": "Paga", "cls": "ok", "desc": "Repasse processado e pago, sem glosa"},
+    "GLOSADA": {"label": "Glosada", "cls": "bad", "desc": "A operadora recusou (ver motivo/recurso)"},
+    "CANCELADA": {"label": "Cancelada", "cls": "neutral", "desc": "GTO cancelada ou não autorizada"},
+    "AGUARDANDO": {"label": "Aguardando repasse", "cls": "info", "desc": "Ainda não processado no Demonstrativo"},
+}
+
+
+def _desfecho_view(lote: str = None) -> dict:
+    pan = db.desfecho_panorama(lote)
+    guias = db.desfechos(lote)
+    return {"pan": pan, "guias": guias, "meta": DESFECHO_META}
+
+
+@app.route("/desfecho")
+def desfecho_page():
+    """Status na RedeUna de cada guia que NÓS faturamos: pago/glosado/cancelado."""
+    return render_template("desfecho.html")
+
+
+@app.route("/api/desfecho")
+def api_desfecho():
+    try:
+        return jsonify(_desfecho_view(request.args.get("lote") or None))
+    except Exception as exc:
+        app.logger.error("Erro em /api/desfecho: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/desfecho/atualizar", methods=["POST"])
+def desfecho_atualizar():
+    body = request.get_json(silent=True) or {}
+    desde = (body.get("desde") or "").strip()
+    if not desde:
+        from datetime import date, timedelta
+        desde = (date.today() - timedelta(days=120)).strftime("%d/%m/%Y")
+    contas = body.get("contas") or []
+    job_id = uuid.uuid4().hex[:12]
+    _purgar_jobs(_jobs, _jobs_lock)
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "log": [], "kind": "desfecho"}
+    threading.Thread(target=_run_desfecho_job, args=(job_id, desde, contas),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/desfecho/atualizar/status/<job_id>")
+def desfecho_atualizar_status(job_id: str):
     with _jobs_lock:
         j = _jobs.get(job_id)
         if not j:

@@ -102,6 +102,35 @@ class GlosaEvento(Base):
     demo_pago = Column(Boolean, default=False)       # houve pagamento no Demonstrativo?
 
 
+class GuiaDesfecho(Base):
+    """DESFECHO na RedeUna de uma guia que NÓS faturamos: pago/glosado/cancelado +
+    detalhe da glosa (motivo, como recursar) e prazo de recurso. Um 'lote' por
+    atualização; o painel usa o lote mais recente. Âncora = ExecucaoItem faturado."""
+    __tablename__ = "guia_desfechos"
+    id = Column(Integer, primary_key=True)
+    lote = Column(String(20), index=True)           # YYYYMMDDHHMMSS da atualização
+    captured_at = Column(DateTime(timezone=True), default=_now)
+    conta = Column(String(20), index=True)
+    unidade = Column(String(60), index=True)
+    gto = Column(String(30), index=True)            # nº da guia
+    paciente = Column(String(200))
+    dia_faturado = Column(String(10))               # quando NÓS faturamos (DD/MM/AAAA)
+    status = Column(String(20), index=True)         # PAGA | GLOSADA | CANCELADA | AGUARDANDO
+    valor_bruto = Column(String(20))
+    valor_glosado = Column(String(20))
+    valor_pago = Column(String(20))
+    data_repasse = Column(String(10))               # DD/MM/AAAA (do Demonstrativo)
+    # detalhe da glosa (só quando GLOSADA)
+    glosa_cod = Column(String(10))
+    glosa_motivo = Column(String(200))
+    como_recursar = Column(Text)                    # orientação "Como Recursar?" do relatório
+    recurso_estado = Column(String(20))             # RECURSAVEL | SEM_GLOSADO | PRESCRITO | ...
+    ortodontia = Column(Boolean, default=False)     # janela 120d (orto) x 90d (demais)
+    prazo_limite = Column(String(10))               # DD/MM/AAAA (data-limite do recurso)
+    prazo_dias = Column(Integer)                    # dias restantes (negativo = prescrito)
+    prescrito = Column(Boolean, default=False)
+
+
 class AnexacaoGto(Base):
     """Estado de anexação/faturamento de uma GTO (varredura só-leitura por unidade)."""
     __tablename__ = "anexacao_gtos"
@@ -2015,6 +2044,147 @@ def glosa_panorama(lote: str = None) -> dict:
             "total_glosado": round(sum(glosado_ficha.values()), 2),
             "guias_glosado": len(glosado_ficha),
         }
+
+
+# ── Desfecho na RedeUna (pago/glosado/cancelado das guias que faturamos) ──────
+
+DESFECHO_STATUS = [
+    ("PAGA", "Paga"),
+    ("GLOSADA", "Glosada"),
+    ("CANCELADA", "Cancelada"),
+    ("AGUARDANDO", "Aguardando repasse"),
+]
+
+
+def salvar_desfechos(lote: str, itens: list) -> int:
+    """Grava o desfecho das guias de uma atualização (um 'lote'). Idempotente por
+    (lote, conta): re-run do mesmo lote substitui as guias daquelas unidades."""
+    def _v(x):
+        return "" if x is None else (f"{x:.2f}" if isinstance(x, (int, float)) else str(x))
+    with SessionLocal() as s:
+        for conta in {i.get("conta") for i in itens}:
+            s.query(GuiaDesfecho).filter(
+                GuiaDesfecho.lote == lote, GuiaDesfecho.conta == conta).delete()
+        for i in itens:
+            s.add(GuiaDesfecho(
+                lote=lote, conta=i.get("conta", ""), unidade=i.get("unidade", ""),
+                gto=str(i.get("gto", "")), paciente=(i.get("paciente") or "")[:200],
+                dia_faturado=i.get("dia_faturado", ""), status=i.get("status", ""),
+                valor_bruto=_v(i.get("valor_bruto")), valor_glosado=_v(i.get("valor_glosado")),
+                valor_pago=_v(i.get("valor_pago")), data_repasse=i.get("data_repasse", "") or "",
+                glosa_cod=i.get("glosa_cod", ""), glosa_motivo=(i.get("glosa_motivo") or "")[:200],
+                como_recursar=i.get("como_recursar") or "", recurso_estado=i.get("recurso_estado", ""),
+                ortodontia=bool(i.get("ortodontia")), prazo_limite=i.get("prazo_limite", "") or "",
+                prazo_dias=i.get("prazo_dias"), prescrito=bool(i.get("prescrito")),
+            ))
+        s.commit()
+        return len(itens)
+
+
+def _desfecho_lote_atual(s, lote: str = None) -> str:
+    if lote:
+        return lote
+    r = s.query(GuiaDesfecho.lote).order_by(GuiaDesfecho.captured_at.desc()).first()
+    return r[0] if r else None
+
+
+def desfechos(lote: str = None, status: str = None, unidade: str = None) -> list:
+    """Lista as guias de um lote (default = mais recente), opcionalmente filtrando
+    por status/unidade. Ordena por prazo (as que vencem antes primeiro)."""
+    with SessionLocal() as s:
+        lote = _desfecho_lote_atual(s, lote)
+        if not lote:
+            return []
+        q = s.query(GuiaDesfecho).filter(GuiaDesfecho.lote == lote)
+        if status:
+            q = q.filter(GuiaDesfecho.status == status)
+        if unidade:
+            q = q.filter(GuiaDesfecho.unidade == unidade)
+        out = []
+        for e in q.all():
+            out.append({
+                "conta": e.conta, "unidade": e.unidade, "gto": e.gto, "paciente": e.paciente,
+                "dia_faturado": e.dia_faturado, "status": e.status,
+                "valor_bruto": e.valor_bruto, "valor_glosado": e.valor_glosado,
+                "valor_pago": e.valor_pago, "data_repasse": e.data_repasse,
+                "glosa_cod": e.glosa_cod, "glosa_motivo": e.glosa_motivo,
+                "como_recursar": e.como_recursar, "recurso_estado": e.recurso_estado,
+                "ortodontia": e.ortodontia, "prazo_limite": e.prazo_limite,
+                "prazo_dias": e.prazo_dias, "prescrito": e.prescrito,
+            })
+        # prazo mais curto primeiro (None = sem prazo vai pro fim)
+        out.sort(key=lambda x: (x["prazo_dias"] is None, x["prazo_dias"] if x["prazo_dias"] is not None else 0))
+        return out
+
+
+def desfecho_panorama(lote: str = None) -> dict:
+    """Resumo por status + por unidade + valores, do lote mais recente."""
+    with SessionLocal() as s:
+        lote = _desfecho_lote_atual(s, lote)
+        if not lote:
+            return {"lote": None, "total": 0, "por_status": {}, "por_unidade": [],
+                    "status_labels": DESFECHO_STATUS, "total_pago": 0.0, "total_glosado": 0.0,
+                    "a_recorrer": 0, "prescritas": 0}
+        evs = s.query(GuiaDesfecho).filter(GuiaDesfecho.lote == lote).all()
+        por_status = {k: 0 for k, _ in DESFECHO_STATUS}
+        por_unidade = {}
+        tot_pago = tot_glosado = 0.0
+        a_recorrer = prescritas = 0
+
+        def _f(x):
+            try:
+                return float(x) if x else 0.0
+            except (TypeError, ValueError):
+                return 0.0
+        for e in evs:
+            por_status[e.status] = por_status.get(e.status, 0) + 1
+            u = por_unidade.setdefault(e.unidade, {"unidade": e.unidade, "total": 0,
+                                                   **{k: 0 for k, _ in DESFECHO_STATUS}})
+            u["total"] += 1
+            u[e.status] = u.get(e.status, 0) + 1
+            tot_pago += _f(e.valor_pago)
+            tot_glosado += _f(e.valor_glosado)
+            if e.status == "GLOSADA" and e.recurso_estado == "RECURSAVEL" and not e.prescrito:
+                a_recorrer += 1
+            if e.prescrito:
+                prescritas += 1
+        return {
+            "lote": lote, "total": len(evs), "por_status": por_status,
+            "por_unidade": sorted(por_unidade.values(), key=lambda x: -x["total"]),
+            "status_labels": DESFECHO_STATUS,
+            "total_pago": round(tot_pago, 2), "total_glosado": round(tot_glosado, 2),
+            "a_recorrer": a_recorrer, "prescritas": prescritas,
+        }
+
+
+def guias_faturadas_por_nos(desde_dia: str = None) -> list:
+    """Âncora da aba: as guias que NÓS faturamos (ExecucaoItem.faturado=True), a
+    execução REAL mais recente por (gto). desde_dia = filtra por dia_faturado >=.
+    Retorna [{gto, paciente, conta, unidade, dia_faturado}] deduplicado por gto."""
+    UNIDADE = {"388336": "Centro, Lauro, Periperi e Itaigara",
+               "397950": "Tancredo", "410923": "Camacari"}
+    with SessionLocal() as s:
+        q = (s.query(ExecucaoItem, Execucao)
+             .join(Execucao, ExecucaoItem.execucao_id == Execucao.id)
+             .filter(ExecucaoItem.faturado == True, Execucao.dry_run == False)  # noqa: E712
+             .order_by(Execucao.criado_em.desc()))
+        vistos, out = set(), []
+        for it, ex in q.all():
+            g = str(it.gto)
+            if g in vistos:
+                continue
+            vistos.add(g)
+            out.append({"gto": g, "paciente": it.paciente, "conta": ex.conta,
+                        "unidade": UNIDADE.get(ex.conta, ex.conta), "dia_faturado": ex.dia})
+        if desde_dia:
+            def _key(d):
+                try:
+                    dd, mm, yy = d.split("/"); return (int(yy), int(mm), int(dd))
+                except Exception:
+                    return (0, 0, 0)
+            alvo = _key(desde_dia)
+            out = [o for o in out if _key(o["dia_faturado"]) >= alvo]
+        return out
 
 
 # ── Anexação / Faturamento (varredura só-leitura das GTOs) ────────────────────
