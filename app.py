@@ -672,7 +672,14 @@ def _desfecho_scheduler():
             if (agora.hour >= hora and not _desfecho_atualizou_hoje()
                     and _desfecho_ultima_tentativa != agora.date()):
                 _desfecho_ultima_tentativa = agora.date()
-                desde = "01/" + agora.strftime("%m/%Y")  # 1º dia do mês corrente
+                # JANELA MÓVEL (default 120 dias = cobre todo o prazo de recurso, orto
+                # inclusive). Assim a tela mantém o histórico pago/glosado/recorrer e não
+                # encolhe pro mês corrente. Configurável por DESFECHO_DIAS.
+                try:
+                    _dias = int(os.environ.get("DESFECHO_DIAS", "120"))
+                except ValueError:
+                    _dias = 120
+                desde = (agora.date() - timedelta(days=_dias)).strftime("%d/%m/%Y")
                 jid = "desfauto" + uuid.uuid4().hex[:8]
                 _purgar_jobs(_jobs, _jobs_lock)
                 with _jobs_lock:
