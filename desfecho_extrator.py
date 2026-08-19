@@ -101,7 +101,8 @@ def _como_recursar(glosa_cod):
     return COMO_RECURSAR.get(glosa_cod, COMO_RECURSAR_GENERICO)
 
 
-def extrair_desfechos_conta(pw, conta, unidade, guias, dia_str, hoje=None, log=print) -> list:
+def extrair_desfechos_conta(pw, conta, unidade, guias, dia_str, hoje=None, log=print,
+                            checar_demo=True) -> list:
     """Desfecho das `guias` (lista de dicts {gto,paciente,dia_faturado}) de UMA conta.
     dia_str = data-fim p/ o relatório de glosa (period até hoje). Retorna itens prontos
     pra db.salvar_desfechos."""
@@ -121,40 +122,44 @@ def extrair_desfechos_conta(pw, conta, unidade, guias, dia_str, hoje=None, log=p
         log(f"[{unidade}] glosa bulk falhou: {str(e)[:80]}")
 
     # 2) Demonstrativo por guia -> status financeiro
+    def _mk(g, demo):
+        gt = str(g["gto"])
+        # GLOSADA vem do RELATÓRIO DE GLOSA (confiável, independe do pagamento), NÃO do
+        # Demonstrativo (que só popula após o repasse). Sem isso, glosada com repasse
+        # pendente cairia em 'aguardando' e o motivo/recurso sumiria.
+        st = "GLOSADA" if gt in glosa_por_ficha else _d.classificar_desfecho(False, demo)
+        return {"conta": conta, "unidade": unidade, "gto": gt,
+                "paciente": g.get("paciente"), "dia_faturado": g.get("dia_faturado"), "status": st,
+                "valor_bruto": (demo or {}).get("bruto"), "valor_glosado": (demo or {}).get("glosado"),
+                "valor_pago": ((demo or {}).get("bruto") or 0) - ((demo or {}).get("glosado") or 0)
+                if demo and demo.get("tem_dados") else None,
+                "data_repasse": (demo or {}).get("data_repasse")}
+
     itens = []
-    b, c, page = login_odonto(pw, conta, senha)
-    try:
-        _abrir_topo(page, "Financeiro"); _clicar_subitem(page, "DEMONSTRATIVO")
-        page.wait_for_timeout(1200)
-        page.mouse.move(1100, 400); page.mouse.click(1100, 400); page.wait_for_timeout(500)
-        for i, g in enumerate(guias, 1):
-            gto = str(g["gto"])
-            try:
-                demo = consultar_demo_repasse(page, gto)
-            except Exception:
-                demo = None
-            # GLOSADA vem do RELATÓRIO DE GLOSA (confiável, independe do pagamento), NÃO
-            # do Demonstrativo (que só popula depois do repasse). Sem isso, uma glosada
-            # com repasse pendente cairia em 'aguardando' e o motivo/recurso sumiria.
-            if gto in glosa_por_ficha:
-                status = "GLOSADA"
-            else:
-                status = _d.classificar_desfecho(cancelada=False, demo=demo)
-            itens.append({"conta": conta, "unidade": unidade, "gto": gto,
-                          "paciente": g.get("paciente"), "dia_faturado": g.get("dia_faturado"),
-                          "status": status,
-                          "valor_bruto": (demo or {}).get("bruto"),
-                          "valor_glosado": (demo or {}).get("glosado"),
-                          "valor_pago": ((demo or {}).get("bruto") or 0) - ((demo or {}).get("glosado") or 0)
-                          if demo and demo.get("tem_dados") else None,
-                          "data_repasse": (demo or {}).get("data_repasse")})
-            if i % 10 == 0 or i == len(guias):
-                log(f"[{unidade}]   demonstrativo {i}/{len(guias)}")
-    finally:
+    if checar_demo:
+        b, c, page = login_odonto(pw, conta, senha)
         try:
-            b.close()
-        except Exception:
-            pass
+            _abrir_topo(page, "Financeiro"); _clicar_subitem(page, "DEMONSTRATIVO")
+            page.wait_for_timeout(1200)
+            page.mouse.move(1100, 400); page.mouse.click(1100, 400); page.wait_for_timeout(500)
+            for i, g in enumerate(guias, 1):
+                try:
+                    demo = consultar_demo_repasse(page, str(g["gto"]))
+                except Exception:
+                    demo = None
+                itens.append(_mk(g, demo))
+                if i % 10 == 0 or i == len(guias):
+                    log(f"[{unidade}]   demonstrativo {i}/{len(guias)}")
+        finally:
+            try:
+                b.close()
+            except Exception:
+                pass
+    else:
+        # MODO RÁPIDO: sem Demonstrativo (repasse ainda não processou). Classifica só
+        # GLOSADA (relatório) x AGUARDANDO. O update diário completo preenche o pago.
+        itens = [_mk(g, None) for g in guias]
+        log(f"[{unidade}] modo rápido (sem demonstrativo): {len(itens)} guia(s)")
 
     # 3) Recurso SÓ das NOSSAS glosadas (poucas) — recursável x sem-glosado
     minhas_glosadas = [it["gto"] for it in itens if it["status"] == "GLOSADA"]
