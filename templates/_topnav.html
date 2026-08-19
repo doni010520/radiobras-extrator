@@ -76,6 +76,7 @@
     <a class="rbnav-link" href="/" data-path="/">Dashboard</a>
     <a class="rbnav-link" href="/faturar" data-path="/faturar">Faturar dia</a>
     <a class="rbnav-link" href="/pendencias" data-path="/pendencias">Pendências{% if pendencias_abertas and pendencias_abertas > 0 %} <span class="rbnav-badge" id="rbNavPend">{{ pendencias_abertas }}</span>{% else %}<span class="rbnav-badge" id="rbNavPend" style="display:none">0</span>{% endif %}</a>
+    <a class="rbnav-link" href="/desfecho" data-path="/desfecho">Desfecho</a>
     <div class="rbnav-drop" data-drop>
       <button class="rbnav-link" type="button" aria-haspopup="true" aria-expanded="false"
               data-path="/relatorios">Relatórios
@@ -89,8 +90,6 @@
           <small>O que falta num dia ou período, por quem resolve</small></a>
         <a href="/glosas" data-path="/glosas">Glosas e recursos
           <small>O que a operadora recusou</small></a>
-        <a href="/desfecho" data-path="/desfecho">Desfecho na RedeUna
-          <small>Status de cada guia que faturamos: pago, glosado, recurso e prazo</small></a>
         <a href="/relatorios" data-path="/relatorios">Execuções
           <small>Histórico de cada rodada do robô</small></a>
       </div>
