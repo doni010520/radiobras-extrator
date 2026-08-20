@@ -64,7 +64,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 
 # ── Autenticação (usuário + senha, sessão) ────────────────────────────────────
 # Rotas liberadas sem login (prefixos). Todo o resto exige sessão.
-_PUBLICO = ("/login", "/logout", "/static", "/healthz", "/favicon")
+_PUBLICO = ("/login", "/logout", "/static", "/healthz", "/favicon",
+            "/faturar/cron/rodar")  # protegido por token próprio (X-Trigger-Token)
 
 
 # Cache curto da validação do usuário: {uid: (expira_em, dict_ou_None)}. Sem ele,
