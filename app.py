@@ -1037,11 +1037,22 @@ if os.environ.get("RESUMO_FAT_AUTO", "1") != "0":
     threading.Timer(60, lambda: _resumo_fat_tentar(ignorar_hora=True)).start()
 
 
+def _trigger_token_ok() -> bool:
+    """Auth por token pra acionamento via API/automação (sem sessão de navegador).
+    Header 'X-Trigger-Token' == env FATURAR_TRIGGER_TOKEN. Comparação constant-time.
+    Só vale se o token estiver configurado (env não-vazio)."""
+    import hmac
+    tok = (os.environ.get("FATURAR_TRIGGER_TOKEN") or "").strip()
+    hdr = (request.headers.get("X-Trigger-Token") or "").strip()
+    return bool(tok) and hmac.compare_digest(tok, hdr)
+
+
 @app.route("/faturar/cron/rodar", methods=["POST"])
 def faturar_cron_rodar_now():
-    """Dispara o faturamento automático sob demanda (admin) — roda em background."""
-    if not _admin_ok():
-        return jsonify({"error": "apenas admin"}), 403
+    """Dispara o faturamento automático sob demanda — roda em background.
+    Autoriza por ADMIN logado OU por token de API (X-Trigger-Token)."""
+    if not (_admin_ok() or _trigger_token_ok()):
+        return jsonify({"error": "apenas admin ou token válido"}), 403
     if _faturar_cron_running.is_set():
         return jsonify({"error": "cron já está rodando"}), 409
     threading.Thread(target=_faturar_cron_rodar, daemon=True).start()
