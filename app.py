@@ -1110,6 +1110,34 @@ def _email_resumo_semana():
     return assunto, txt, html
 
 
+def _whatsapp_ok() -> bool:
+    try:
+        import notificador
+        return notificador.whatsapp_configurado()
+    except Exception:
+        return False
+
+
+@app.route("/alerta/testar-whatsapp", methods=["POST"])
+def alerta_testar_whatsapp():
+    """Manda uma mensagem de teste pro dono — confirma instância, token e número.
+    Sem isso o canal só seria testado no dia em que a rodada quebrasse."""
+    if not _admin_ok():
+        return jsonify({"error": "apenas admin"}), 403
+    import notificador
+    if not notificador.whatsapp_configurado():
+        return jsonify({"ok": False,
+                        "msg": "Falta UAZAPI_TOKEN e/ou ALERTA_WHATSAPP_TO no ambiente."})
+    ok = notificador.enviar_whatsapp(
+        "✅ *RadioBras* — canal de alerta técnico ligado." + chr(10) * 2 +
+        "É por aqui que você vai receber falha de sistema: rodada que aborta, guia "
+        "que falhou por problema nosso e retry que não recuperou. "
+        "A operação não vê nada disso no painel.")
+    return jsonify({"ok": ok, "msg": "Enviado — confira o WhatsApp." if ok
+                    else "Não enviou. Confira UAZAPI_HOST/UAZAPI_TOKEN e se a "
+                         "instância está conectada."})
+
+
 @app.route("/alerta/testar-email", methods=["POST"])
 def alerta_testar_email():
     """Envia um email de teste (admin) — confirma o SMTP com o resumo da semana."""
@@ -1359,20 +1387,24 @@ def pendencias_page():
         _classe = db.classe_efetiva(p.get("motivo") or "", p.get("categoria") or "",
                                     _tent.get(str(p.get("gto")), 0))
         p["classe"] = _classe
-        if _classe == "transitorio":
-            p["tipo"] = "interno";  p["responsavel"] = "Reprocessar"
+        # 22/08: o gate passou a ser "e NOSSO?", nao "esta em reprocessamento?". Uma
+        # falha nossa que ESGOTOU o retry continua sendo nossa — antes voltava pro
+        # operador como "Investigar" e ele nao tinha o que fazer com bug nosso.
+        if db.eh_nosso(p.get("motivo") or "", p.get("categoria") or ""):
+            p["tipo"] = "interno"
+            p["responsavel"] = "Investigar" if _classe == "esgotado" else "Reprocessar"
         elif _classe == "externo":
             p["tipo"] = "aguardar"; p["responsavel"] = _quem
-        else:                                   # logica | esgotado
-            p["tipo"] = "conferir"
-            p["responsavel"] = "Investigar" if _classe == "esgotado" else _quem
+        else:                                   # conferencia (olho humano no doc)
+            p["tipo"] = "conferir"; p["responsavel"] = _quem
         _l = _leituras.get(str(p.get("gto"))) or {}
         p["exames_gto"] = _l.get("exames_gto")
         p["exames_lidos"] = _l.get("exames_lidos")
         p["lido"] = _l.get("lido")
-    # front (o usuário vê) tira só o INTERNO (nosso, o sistema reprocessa). TUDO o
-    # resto aparece na lista, agrupado por dia — o dono quer VER tudo (13/08), nada
-    # escondido. A urgência (vencida/no prazo) fica marcada no cabeçalho de cada dia.
+    # front (o usuário vê) tira TUDO que é INTERNO (nosso) — em reprocessamento ou já
+    # esgotado. O resto aparece agrupado por dia, nada escondido da operação. Falha
+    # nossa não some em silêncio: vai pro WhatsApp do dono (notificador.py) e pro loop
+    # de retry. A urgência (vencida/no prazo) fica marcada no cabeçalho de cada dia.
     front = [p for p in itens if p["tipo"] != "interno"]
     sla_ct = {"venc": 0, "d1": 0, "d2": 0, "d3": 0}
     for p in front:
@@ -2462,7 +2494,9 @@ def relatorios_pendencias_xlsx():
     d = db.pendencias_do_periodo(dia, dia_fim, contas)
     import pandas as pd
     linhas = []
-    for g in d["grupos"] + d["fila_tecnica"]:
+    # SÓ o que é da operação. A fila técnica (falha nossa) fica de fora: este Excel
+    # é entregue à clínica, e cobrar dela um bug nosso é pedir trabalho jogado fora.
+    for g in d["grupos"]:
         for i in g["itens"]:
             linhas.append({"Quem resolve": g["responsavel"], "Situação": g["titulo"],
                            "Dia": i.get("dia") or d["dia"],
@@ -2735,6 +2769,11 @@ def api_diag():
             "pendencias_abertas": db.contar_pendencias_abertas(),
             "alerta_sla_ligado": os.environ.get("ALERTA_SLA", "1") != "0",
             "smtp_configurado": bool(os.environ.get("SMTP_HOST") and os.environ.get("ALERTA_EMAIL_TO")),
+            # canal de falha tecnica (22/08). Sem isso a tela prometeria um aviso que
+            # nunca sai — o mesmo erro do SMTP dormente descoberto em 02/08.
+            "whatsapp_configurado": _whatsapp_ok(),
+            "alerta_falha_ligado": os.environ.get("ALERTA_FALHA", "1") != "0",
+            "retry_cron": os.environ.get("RETRY_CRON", "0") == "1",
             "faturar_cron": os.environ.get("FATURAR_CRON", "0") == "1",
             "faturar_cron_hora": os.environ.get("FATURAR_CRON_HOUR", "5"),
             "faturar_prazo_dias": os.environ.get("FATURAR_PRAZO_DIAS", "7"),

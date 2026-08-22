@@ -199,6 +199,37 @@ Tudo com LLM lendo e **código decidindo** (princípios 1–5).
     por conta própria (lição do gate de imagem). Se o dono quiser, avaliar se algum
     caminho faz um laudo de periapical "pegar carona" numa guia de doc.
 
+- **[✅ FEITA 22/08 — NÃO DEPLOYADA] Falha de sistema sai do painel, vira try again
+  e avisa o dono:** regra do dono — *"toda pendência que for de sistema deve ser
+  resolvida por nós, fazendo uma nova tentativa; se é falha técnica não deve ser
+  informada no painel da RadioBras, deve ser notificada para mim via WhatsApp e
+  resolvida pelo próprio sistema"*.
+  - **`db.eh_nosso(motivo, categoria)`** vira o gate único: nossa = transitório OU
+    responsável `Nós` OU `categoria=='erro'` (fecha o furo do 429/`outros` apontado
+    no desenho de 02/08). **Conferência NÃO é nossa** — ali falta olho humano no
+    documento, e esconder seria sumir com trabalho real da operação.
+  - **Painel:** `eh_pendencia_front` passou a ser `not eh_nosso(...)`. A falha nossa
+    não volta pro operador **nem depois de esgotar o retry** (antes voltava como
+    "Investigar"). Fila técnica do `/relatorios/pendencias` virou **só-admin** e saiu
+    do **.xlsx** (aquele arquivo é entregue à clínica).
+  - **Retry:** `deve_entrar_no_retry` = tudo que é nosso, teto 6 (decisão do dono:
+    igual ao transitório). `nome_nao_bate`, `guia_ilegivel` e `anexacao` entraram no
+    loop — a auditoria de 17/08 provou que boa parte era 503 intermitente disfarçado.
+    O retry **re-lê**; não afrouxa a trava de identidade (JOCASTA segue recusa certa).
+  - **Aborto de execução entrou na fila** (furo mais caro, aberto desde sempre):
+    `salvar_execucao_falha` agora enfileira o DIA INTEIRO com a sentinela
+    `__DIA__<conta>__<dia>` e avisa na hora. `processar_retries` roda o dia todo
+    (`apenas_gtos=None`) quando vê a sentinela.
+  - **Canal:** `notificador.py` (uazapi, `POST /send/text`). Três mensagens: aborto
+    **na hora**, resumo **por rodada** (só das guias novas na fila — retry que falha
+    de novo não re-avisa) e escalação quando **esgota o teto**. Falha quieto, nunca
+    derruba faturamento. Teste em `/alerta/testar-whatsapp` (admin).
+  - **Efeito medido em produção (22/08):** das **45** pendências abertas, **18 (40%)**
+    são nossas e saem do painel — 13 `anexacao`, 3 `nome_nao_bate`, 2 `falha_tecnica`.
+    Sobram **27** verdadeiras (Clínica 11, Cadastro 6, Radiologista 5, Conferência 5).
+  - **PENDENTE p/ ligar:** instância uazapi conectada (a `GINES teste` está
+    *disconnected* desde 20/08, `401 logged out`) + envs no EasyPanel. Suite: 301.
+
 ---
 
 ## 7. Glossário rápido

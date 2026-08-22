@@ -466,13 +466,19 @@ def tentativas_por_gtos(gtos: list) -> dict:
         return {str(g): int(n) for g, n in rows}
 
 
-def eh_pendencia_front(motivo: str, categoria: str, tentativas: int = 0) -> bool:
-    """Regra do dono (13/08): a lista que o USUÁRIO vê no front tem SÓ o que é DELES
-    (aguardando terceiro OU a conferir). O que é NOSSO (transitório que o sistema
-    reprocessa sozinho) NÃO entra. Quando o transitório ESGOTA o retry, deixa de ser
-    nosso → `esgotado` → volta pro front. Ou seja: front = tudo, exceto o transitório
-    ainda em andamento."""
-    return classe_efetiva(motivo, categoria, tentativas) != "transitorio"
+def eh_pendencia_front(motivo: str, categoria: str = "", tentativas: int = 0) -> bool:
+    """Regra do dono (13/08, ENDURECIDA em 22/08): o painel da RadioBras mostra SÓ o
+    que é DELES — aguardando terceiro ou a conferir.
+
+    Falha NOSSA nunca entra: nem em reprocessamento, nem depois de esgotar o retry.
+    Antes a esgotada voltava pro front como "Investigar" e caía no colo do operador,
+    que não tem o que fazer com bug nosso — pedir pedido novo à clínica seria trabalho
+    jogado fora, porque o documento certo já está lá. Esgotou → o DONO é avisado no
+    WhatsApp, não a operação.
+
+    `tentativas` fica na assinatura por compatibilidade: a decisão não depende mais do
+    estado do retry (quem é nosso é nosso desde a primeira falha)."""
+    return not eh_nosso(motivo, categoria)
 
 
 def contar_pendencias_front(so_no_prazo: bool = False, prazo: int = 7) -> int:
@@ -752,6 +758,33 @@ def _exames_visiveis(exames) -> str:
                          if not str(e).startswith("documentacao_"))
 
 
+def _gto_dia(conta, dia) -> str:
+    """Chave sentinela da fila pra um DIA INTEIRO (execucao que abortou). A fila e
+    por guia; um aborto nao tem guia nenhuma — nao chegou a decidir nada. Este id
+    faz o dia caber na mesma fila, com o mesmo backoff e o mesmo teto."""
+    return f"__DIA__{conta}__{dia}"
+
+
+def registrar_retry_dia(conta, dia, erro) -> bool:
+    """Enfileira o DIA INTEIRO pra nova tentativa. Retorna True se e a PRIMEIRA vez
+    (pro aviso nao repetir a cada re-tentativa que aborta de novo)."""
+    from datetime import timedelta
+    _g = _gto_dia(conta, dia)
+    with SessionLocal() as s:
+        it = (s.query(RetryFila)
+              .filter(RetryFila.gto == _g, RetryFila.resolvido == False)  # noqa: E712
+              .first())
+        if it is not None:
+            it.ultimo_erro = str(erro or "")[:300]
+            s.commit()
+            return False
+        s.add(RetryFila(gto=_g, conta=str(conta), dia=str(dia), classe="nosso",
+                        tentativas=0, ultimo_erro=str(erro or "")[:300],
+                        proximo_em=_now() + timedelta(minutes=retry_backoff_min(0))))
+        s.commit()
+    return True
+
+
 def salvar_execucao_falha(dia: str, conta: str, dry_run: bool, erro: str,
                           log_linhas=None) -> int:
     """Registra uma execucao que NAO chegou ao fim. Sem isto, erro em
@@ -764,7 +797,19 @@ def salvar_execucao_falha(dia: str, conta: str, dry_run: bool, erro: str,
                       log=(chr(10).join(str(l) for l in log_linhas) if log_linhas else None))
         s.add(ex)
         s.commit()
-        return ex.id
+        _id = ex.id
+    # FURO FECHADO (22/08): antes o aborto morria aqui — sem pendencia, sem fila e
+    # sem ninguem avisado. O dia inteiro simplesmente nao faturava, em silencio.
+    # Agora entra na fila (o sistema tenta de novo) e o dono sabe na hora.
+    if not dry_run:
+        try:
+            _primeira = registrar_retry_dia(conta, dia, erro)
+            if _primeira:
+                import notificador
+                notificador.avisar_aborto(dia, conta, erro, execucao_id=_id)
+        except Exception as e:
+            print(f"[db] aviso de aborto falhou: {e}", flush=True)
+    return _id
 
 
 def salvar_execucao(resumo: dict, log_linhas=None) -> int:
@@ -869,16 +914,40 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
                 _sync_pendencias(s, resumo.get("conta"), resumo.get("data"), ex.id, itens_info)
             except Exception as e:
                 print(f"[db] sync pendencias falhou: {e}", flush=True)
-            # FILA DE RETRY (Fase 3): faturado sai da fila; falha TRANSITORIA entra
-            # (pra o loop re-tentar sozinho). Externo/logica nao entram (nao retry cego).
+            # FILA DE RETRY (Fase 3): faturado sai da fila; falha NOSSA entra (pra o
+            # loop re-tentar sozinho — regra do dono 22/08: falha de sistema o sistema
+            # resolve). Externo e Conferencia nao entram (nao retry cego).
+            _novas_nossas = []
             try:
                 for _gto, _pac, _cat, _mot, _fat in itens_info:
                     if _fat:
                         resolver_retry(_gto)
-                    elif classe_retry(_mot, _cat) == "transitorio":
-                        registrar_retry(_gto, resumo.get("conta"), resumo.get("data"), _mot, _cat)
+                    elif deve_entrar_no_retry(_mot, _cat):
+                        # so conta como NOVA se ainda nao estava na fila — assim uma
+                        # rodada de retry que falha de novo nao re-avisa o dono.
+                        _nova = not retry_na_fila(_gto)
+                        registrar_retry(_gto, resumo.get("conta"), resumo.get("data"),
+                                        _mot, _cat, paciente=_pac)
+                        if _nova:
+                            _novas_nossas.append({"gto": _gto, "paciente": _pac,
+                                                  "motivo": _mot})
             except Exception as e:
                 print(f"[db] sync retry_fila falhou: {e}", flush=True)
+            # A rodada terminou: UMA mensagem com as falhas nossas novas. O operador
+            # nao ve nenhuma delas (eh_pendencia_front); quem precisa saber e o dono.
+            try:
+                if _novas_nossas:
+                    import notificador
+                    notificador.avisar_falhas_da_rodada(
+                        resumo.get("data"), resumo.get("conta"), _novas_nossas)
+            except Exception as e:
+                print(f"[db] aviso whatsapp falhou: {e}", flush=True)
+            # a rodada chegou ao fim: se este dia/unidade estava marcado como ABORTADO,
+            # deixou de estar (nao adianta re-rodar o dia inteiro de novo).
+            try:
+                resolver_retry(_gto_dia(resumo.get("conta"), resumo.get("data")))
+            except Exception:
+                pass
             # AVISOS 'exame sem guia' — laudo pronto sem GTO (particular/esquecido)
             try:
                 avisos_info = []
@@ -1032,6 +1101,36 @@ def classe_retry(motivo: str, categoria: str = "") -> str:
     return "logica"
 
 
+def eh_nosso(motivo: str, categoria: str = "") -> bool:
+    """A falha e NOSSA (tecnica)? Regra do dono (22/08/26): falha de sistema NAO e
+    pendencia do painel da RadioBras — ela sai da tela do operador, entra no loop de
+    retry e e notificada ao dono no WhatsApp.
+
+    Nossa = transitorio (infra) OU responsavel 'Nos' (nome_nao_bate, guia_ilegivel,
+    anexacao, falha_tecnica) OU categoria 'erro' — a esteira marca 'erro' quando o
+    _decidir falhou por Gemini/anexos, e nesse caso o texto pode nao casar regex
+    nenhuma e cair em 'outros'; a categoria sozinha ja prova a culpa (era o furo
+    apontado no desenho de 02/08).
+
+    NAO e nossa a Conferencia: ali falta OLHO HUMANO no documento, nao conserto de
+    codigo — esconder do painel seria sumir com trabalho real da operacao."""
+    if str(categoria or "").strip().lower() == "erro":
+        return True
+    if classe_retry(motivo, categoria) == "transitorio":
+        return True
+    return classificar_pendencia(motivo, categoria)[1] == _NOSSO
+
+
+def deve_entrar_no_retry(motivo: str, categoria: str = "") -> bool:
+    """O loop faz 'try again' em TUDO que e nosso (regra do dono 22/08), com o mesmo
+    teto do transitorio. Antes so o transitorio entrava e as tres logicas nossas
+    (nome_nao_bate, guia_ilegivel, anexacao) ficavam paradas esperando humano — mas a
+    auditoria de 17/08 provou que boa parte delas era 503 intermitente disfarcado, e
+    re-ler resolvia. O retry RE-LE o documento; nunca afrouxa a trava de identidade
+    (JOCASTA continua sendo recusa correta). Externo e Conferencia seguem fora."""
+    return eh_nosso(motivo, categoria)
+
+
 # Loop de retry do transitorio: teto de tentativas + backoff. A 2a tentativa (1o
 # retry) e IMEDIATA (regra do dono 17/08: o que so depende de reprocessar nao espera
 # 15min). Depois escala pra dar tempo ao 503/throttle limpar sem estourar o teto em
@@ -1049,10 +1148,18 @@ def retry_backoff_min(tentativa: int) -> int:
     return _BACKOFF_MIN[i] if i < len(_BACKOFF_MIN) else _BACKOFF_MIN[-1]
 
 
+# Classes que o loop re-tenta. 'nosso' (22/08) e a logica NOSSA — nome_nao_bate,
+# guia_ilegivel, anexacao: falha de sistema, entao o sistema tenta de novo. A logica
+# de CONFERENCIA (pedido ilegivel, homonimo, revisao humana) segue fora: ali falta
+# olho humano no documento, e retry cego so gasta quota do Gemini.
+_CLASSES_RETENTAVEIS = ("transitorio", "nosso")
+
+
 def deve_retentar(classe: str, tentativas: int) -> bool:
-    """O loop SO retenta 'transitorio', ate o teto. Externo/logica nunca (externo
-    espera terceiro; logica precisa conserto/humano — retry cego so gasta recurso)."""
-    return classe == "transitorio" and int(tentativas) < MAX_RETRIES_TRANSITORIO
+    """O loop retenta o que e NOSSO ('transitorio' e 'nosso'), ate o teto. Externo e
+    logica-de-conferencia nunca (externo espera terceiro; conferencia precisa de
+    humano — retry cego so gasta recurso)."""
+    return classe in _CLASSES_RETENTAVEIS and int(tentativas) < MAX_RETRIES_TRANSITORIO
 
 
 def classe_efetiva(motivo: str, categoria: str = "", tentativas: int = 0) -> str:
@@ -1064,7 +1171,9 @@ def classe_efetiva(motivo: str, categoria: str = "", tentativas: int = 0) -> str
     algo que ja provou nao se recuperar (195831154 falhou a leitura 4x seguidas).
     'externo'/'logica' independem de tentativas (nunca foram retentaveis)."""
     base = classe_retry(motivo, categoria)
-    if base == "transitorio" and int(tentativas or 0) >= MAX_RETRIES_TRANSITORIO:
+    # 22/08: a logica NOSSA passou a entrar no loop, entao ela tambem pode ESGOTAR.
+    # Antes so o transitorio esgotava; nome_nao_bate ficava 'logica' pra sempre.
+    if eh_nosso(motivo, categoria) and int(tentativas or 0) >= MAX_RETRIES_TRANSITORIO:
         return "esgotado"
     return base
 
@@ -1080,6 +1189,7 @@ class RetryFila(Base):
     classe = Column(String(20), default="transitorio")
     tentativas = Column(Integer, default=0)
     proximo_em = Column(DateTime(timezone=True), index=True)
+    paciente = Column(String(120))   # so p/ o aviso ao dono dizer QUEM, nao e chave
     ultimo_erro = Column(Text)
     resolvido = Column(Boolean, default=False)  # recuperou OU esgotou o teto
     criado_em = Column(DateTime(timezone=True), default=_now)
@@ -1143,14 +1253,25 @@ def _tentativas_ja_falhou(s, gto) -> int:
             .count())
 
 
-def registrar_retry(gto, conta, dia, motivo, categoria: str = "") -> bool:
+def retry_na_fila(gto) -> bool:
+    """A guia JA esta na fila (nao resolvida)? Serve pro aviso ao dono sair so na
+    PRIMEIRA vez — sem isso, cada rodada de retry que falhasse de novo mandaria a
+    mesma guia no WhatsApp outra vez."""
+    with SessionLocal() as s:
+        return (s.query(RetryFila)
+                .filter(RetryFila.gto == str(gto), RetryFila.resolvido == False)  # noqa: E712
+                .first()) is not None
+
+
+def registrar_retry(gto, conta, dia, motivo, categoria: str = "", paciente: str = "") -> bool:
     """Enfileira um TRANSITORIO pra re-tentar. Externo/logica sao ignorados (nao
     retenta cego). Idempotente: se ja esta na fila (nao resolvido), so atualiza o
     ultimo_erro. O contador ja NASCE semeado com as falhas historicas (nao do zero),
     entao uma guia que ja falhou o teto de vezes entra ja ESGOTADA (nao vira retry
     cego). Retorna True se entrou (ou ja estava)."""
-    if classe_retry(motivo, categoria) != "transitorio":
+    if not deve_entrar_no_retry(motivo, categoria):
         return False
+    _classe = "transitorio" if classe_retry(motivo, categoria) == "transitorio" else "nosso"
     from datetime import timedelta
     with SessionLocal() as s:
         it = (s.query(RetryFila)
@@ -1158,9 +1279,10 @@ def registrar_retry(gto, conta, dia, motivo, categoria: str = "") -> bool:
               .first())
         if it is None:
             _seed = _tentativas_ja_falhou(s, gto)
-            _esgotou = not deve_retentar("transitorio", _seed)
+            _esgotou = not deve_retentar(_classe, _seed)
             s.add(RetryFila(gto=str(gto), conta=str(conta), dia=str(dia),
-                            classe="transitorio", tentativas=_seed,
+                            paciente=str(paciente or "")[:120],
+                            classe=_classe, tentativas=_seed,
                             resolvido=_esgotou,   # ja nasceu esgotada -> nao retenta cego
                             ultimo_erro=str(motivo or "")[:300],
                             proximo_em=_now() + timedelta(minutes=retry_backoff_min(_seed))))
@@ -1190,11 +1312,24 @@ def bump_retry(gto) -> None:
         if not it:
             return
         it.tentativas = (it.tentativas or 0) + 1
-        if not deve_retentar("transitorio", it.tentativas):
+        _esgotou = None
+        if not deve_retentar(it.classe or "transitorio", it.tentativas):
             it.resolvido = True
+            # snapshot ANTES do commit: fora da sessao o objeto expira
+            _esgotou = {"gto": it.gto, "paciente": it.paciente, "dia": it.dia,
+                        "conta": it.conta, "motivo": it.ultimo_erro,
+                        "tentativas": it.tentativas}
         else:
             it.proximo_em = _now() + timedelta(minutes=retry_backoff_min(it.tentativas))
         s.commit()
+    # O try again acabou e nao recuperou. E a UNICA classe que precisa do dono — e
+    # mesmo assim nao volta pro painel do operador (ele nao conserta bug nosso).
+    if _esgotou:
+        try:
+            import notificador
+            notificador.avisar_esgotou(**_esgotou)
+        except Exception as e:
+            print(f"[db] aviso esgotou falhou: {e}", flush=True)
 
 
 def retries_devidos(limite: int = 50) -> list:
@@ -1241,8 +1376,14 @@ def pendencias_do_dia(dia: str, contas: list = None) -> dict:
     grupos = {}
     for i in d.get("pendentes_lista") or []:
         chave, quem, acao = classificar_pendencia(i.get("motivo"), i.get("categoria"))
-        g = grupos.setdefault(chave, {"chave": chave, "titulo": _TITULO_GRUPO.get(chave, chave),
-                                      "responsavel": quem, "acao": acao, "itens": []})
+        # A chave sozinha nao decide se e tecnica: 'outros' com categoria='erro' e
+        # falha nossa, 'outros' sem categoria e conferencia. Por isso a chave do grupo
+        # carrega o flag — senao um item tecnico pegava carona num grupo do operador.
+        tec = eh_nosso(i.get("motivo"), i.get("categoria"))
+        g = grupos.setdefault((chave, tec),
+                              {"chave": chave, "titulo": _TITULO_GRUPO.get(chave, chave),
+                               "responsavel": _NOSSO if tec else quem,
+                               "acao": acao, "tecnica": tec, "itens": []})
         g["itens"].append(i)
     _ordem = {"Radiologista": 0, "Clínica": 1, "Cadastro": 2, "Conferência": 3}
     todos = sorted(grupos.values(),
@@ -1250,15 +1391,15 @@ def pendencias_do_dia(dia: str, contas: list = None) -> dict:
     for g in todos:
         g["total"] = len(g["itens"])
         g["itens"].sort(key=lambda x: (x.get("unidade") or "", x.get("paciente") or ""))
-    # FALHA NOSSA NÃO É TAREFA DA OPERAÇÃO. Regra do dono (30/07): "o que nós
-    # resolvemos aqui deve entrar num fallback até ser resolvido, não deve ir para
-    # pendências". Uma guia que não faturou por bug nosso não tem o que a recepção
-    # fazer — pedir pedido novo à clínica seria trabalho jogado fora, porque o
-    # documento certo já está lá. Ela fica numa FILA TÉCNICA, visível (nada é
-    # silencioso) mas fora da lista de tarefas, e o reprocessamento do dia a
-    # resolve sozinha assim que a correção subir.
-    lista = [g for g in todos if g["responsavel"] != _NOSSO]
-    fila = [g for g in todos if g["responsavel"] == _NOSSO]
+    # FALHA NOSSA NÃO É TAREFA DA OPERAÇÃO. Regra do dono (30/07, endurecida em
+    # 22/08): "o que nós resolvemos aqui deve entrar num fallback até ser resolvido,
+    # não deve ir para pendências". Uma guia que não faturou por bug nosso não tem o
+    # que a recepção fazer — pedir pedido novo à clínica seria trabalho jogado fora,
+    # porque o documento certo já está lá. Ela fica na FILA TÉCNICA, que a partir de
+    # 22/08 é SÓ-ADMIN (não vai pra tela da RadioBras nem pro Excel da clínica): o
+    # dono é avisado no WhatsApp e o loop de retry tenta de novo sozinho.
+    lista = [g for g in todos if not g.get("tecnica")]
+    fila = [g for g in todos if g.get("tecnica")]
     por_quem = {}
     for g in lista:
         por_quem[g["responsavel"]] = por_quem.get(g["responsavel"], 0) + g["total"]
@@ -1531,6 +1672,7 @@ def _ensure_columns():
         "ALTER TABLE glosa_eventos ADD COLUMN IF NOT EXISTS demo_pago BOOLEAN DEFAULT FALSE",
         "ALTER TABLE anexacao_gtos ADD COLUMN IF NOT EXISTS liberacao VARCHAR(10)",
         "ALTER TABLE cron_state ADD COLUMN IF NOT EXISTS resumo_fat_last_at TIMESTAMPTZ",
+        "ALTER TABLE retry_fila ADD COLUMN IF NOT EXISTS paciente VARCHAR(120)",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS conta VARCHAR(20)",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS log TEXT",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS erro TEXT",

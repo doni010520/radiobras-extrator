@@ -3432,8 +3432,17 @@ def processar_retries(gemini_key=None, k_attach=3, log=None) -> dict:
     por = defaultdict(list)
     for d in devidos:
         por[(d["dia"], d["conta"])].append(d["gto"])
-    _log(f"[retry] {len(devidos)} guia(s) devida(s) em {len(por)} grupo(s)")
+    _n_dias = sum(1 for gs in por.values()
+                  if any(str(g).startswith("__DIA__") for g in gs))
+    _log(f"[retry] {len(devidos)} devida(s) em {len(por)} grupo(s)"
+         + (f" — {_n_dias} dia(s) inteiro(s) (aborto)" if _n_dias else ""))
     for (dia, conta), gtos in por.items():
+        # DIA INTEIRO (22/08): quando a execucao ABORTOU, nao ha guia nenhuma pra
+        # dirigir — a fila guarda uma sentinela `__DIA__conta__dia`. Nesse caso roda
+        # o dia todo (apenas_gtos=None); mandar a sentinela como GTO faria a esteira
+        # procurar uma guia que nao existe e nao faturar nada. Se o dia todo vai
+        # rodar, as guias dirigidas do mesmo dia vao junto de graca.
+        dia_inteiro = any(str(g).startswith("__DIA__") for g in gtos)
         for g in gtos:
             db.bump_retry(g)   # conta a tentativa ANTES (evita loop se a rodada travar)
         try:
@@ -3441,7 +3450,8 @@ def processar_retries(gemini_key=None, k_attach=3, log=None) -> dict:
             _logs = []
             r = rodar_esteira(dia, 3, 3, 5, log=lambda m, _l=_logs: _l.append(m),
                               gemini_key=gemini_key, k_attach=k_attach, dry_run=False,
-                              conta=conta, senha_portal=senha, apenas_gtos=gtos)
+                              conta=conta, senha_portal=senha,
+                              apenas_gtos=(None if dia_inteiro else gtos))
             try:
                 db.salvar_execucao(r, _logs)   # hook resolve os que faturaram
             except Exception as e:

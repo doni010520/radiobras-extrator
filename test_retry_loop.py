@@ -47,8 +47,21 @@ def test_transitorio_que_esgotou_o_teto_vira_esgotado():
     assert classe_efetiva(_LEITURA, "erro", tentativas=MAX_RETRIES_TRANSITORIO + 2) == "esgotado"
 
 
-def test_externo_e_logica_nunca_viram_esgotado():
-    # esgotar so faz sentido pro que ERA retentavel; externo/logica seguem iguais
+def test_externo_e_conferencia_nunca_viram_esgotado():
+    # esgotar so faz sentido pro que E retentavel. EXTERNO nunca foi: re-tentar nao
+    # faz o radiologista emitir laudo. CONFERENCIA tambem nao: falta olho humano no
+    # documento, nao rodada nova.
     assert classe_efetiva("falta o LAUDO do radiologista", "sem_laudo", tentativas=99) == "externo"
-    assert classe_efetiva("nenhum documento do prontuário está no nome", "sem_solicitacao",
+    assert classe_efetiva("a caligrafia do pedido está ilegível", "revisao",
                           tentativas=99) == "logica"
+
+
+def test_logica_nossa_agora_esgota():
+    """MUDANCA 22/08 (regra do dono): falha de sistema o sistema resolve com try
+    again. nome_nao_bate deixou de ser 'logica parada esperando humano' e entrou no
+    loop — logo ela TAMBEM pode esgotar o teto. Antes ficava 'logica' pra sempre e,
+    pior, aparecia no painel do operador."""
+    _NOME = "nenhum documento do prontuário está no nome"
+    assert classe_efetiva(_NOME, "sem_solicitacao", tentativas=0) == "logica"
+    assert classe_efetiva(_NOME, "sem_solicitacao",
+                          tentativas=MAX_RETRIES_TRANSITORIO) == "esgotado"

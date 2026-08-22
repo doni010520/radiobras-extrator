@@ -120,7 +120,9 @@
       <div class="card"><div class="n">{{ d.total_guias }}</div><div class="l">guias no período</div></div>
       <div class="card ok"><div class="n">{{ d.faturadas }}</div><div class="l">faturadas</div></div>
       <div class="card pend"><div class="n">{{ d.total }}</div><div class="l">precisam de alguém</div></div>
-      {% if d.total_fila %}
+      {# Falha nossa é SÓ-ADMIN (regra do dono 22/08): não vai pra tela da RadioBras.
+         O dono é avisado no WhatsApp e o loop de retry tenta de novo sozinho. #}
+      {% if d.total_fila and usuario_atual and usuario_atual.role == 'admin' %}
       <div class="card tec"><div class="n">{{ d.total_fila }}</div><div class="l">fila técnica (nossa)</div></div>
       {% endif %}
     </div>
@@ -141,7 +143,7 @@
       </div>
     {% endif %}
 
-    {% if not d.grupos and not d.fila_tecnica %}
+    {% if not d.grupos and not (d.fila_tecnica and usuario_atual and usuario_atual.role == 'admin') %}
       <div class="tudo-ok">Nenhuma pendência {% if d.periodo %}neste período{% else %}neste dia{% endif %} — tudo que podia faturar, faturou.</div>
     {% endif %}
 
@@ -175,7 +177,7 @@
       </section>
     {% endfor %}
 
-    {% if d.fila_tecnica %}
+    {% if d.fila_tecnica and usuario_atual and usuario_atual.role == 'admin' %}
       <h2 style="margin:26px 0 6px;font-size:16px">Fila técnica — não é tarefa da operação</h2>
       <div class="nota">
         Estas guias não faturaram por <b>falha nossa</b>, não por falta de documento.
