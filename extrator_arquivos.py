@@ -780,6 +780,27 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
                     if size >= 10_000:      # laudo completo -> para
                         break
                     time.sleep(3)           # espera o servidor terminar de gerar
+                # Re-baixar nao resolveu: o PDF esta EM BRANCO (o servidor devolve
+                # ~857B). Se o laudo EXISTE (chip 'done' na Documentacao), mandamos
+                # REGERAR — re-baixar so pede o mesmo arquivo de novo, nunca refaz.
+                # Isso deixou de ser pendencia da clinica/radiologista: e falha nossa.
+                _pdf = None
+                if size < 10_000 and tok_info.get("doc"):
+                    try:
+                        import laudo_pdf
+                        _d = tok_info["doc"]
+                        _pdf = laudo_pdf.recuperar_pdf(
+                            sess, BASE, _d, exame, tok, pedido=acc,
+                            # DE DENTRO DO NAVEGADOR: o POST da Documentacao por
+                            # requests volta a tela de LOGIN (verificado 22/08).
+                            abrir_doc=lambda _dd=_d: laudo_pdf.abrir_documentacao_no_browser(
+                                page, _dd["study_id"], _dd["schedule_id"]),
+                            regerar=lambda h: laudo_pdf.regerar_no_browser(page, BASE, h))
+                        if _pdf.get("ok"):
+                            content, size = _pdf["content"], _pdf["bytes"]
+                    except Exception as e:
+                        _pdf = {"ok": False, "motivo": "falha tecnica ao regerar o "
+                                                       "PDF do laudo: " + str(e)[:120]}
                 if size >= 10_000:
                     ch = hashlib.md5(content).hexdigest()
                     if ch in seen_content:
@@ -790,6 +811,15 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
                         f.write(content)
                     resultados.append(
                         {"exame": exame, "arquivo": fname, "bytes": size, "status": "OK"}
+                    )
+                elif _pdf and _pdf.get("motivo") and "sem laudo" not in _pdf["motivo"]:
+                    # O laudo esta pronto e mesmo assim o PDF nao veio: NOSSO problema.
+                    # Status proprio para nao virar "laudo nao pronto" e cobrar do
+                    # radiologista um laudo que ele ja emitiu.
+                    resultados.append(
+                        {"exame": exame, "arquivo": None, "bytes": size,
+                         "status": "PDF_BRANCO", "detalhe": _pdf["motivo"],
+                         "tentativas_pdf": _pdf.get("tentativas", 0)}
                     )
                 else:
                     resultados.append(
@@ -1002,6 +1032,13 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
         for lau in laudos:
             if lau["status"] == "NAO_PRONTO":
                 resultado["pendencias"].append(f"laudo {lau['exame']} nao pronto")
+            elif lau["status"] == "PDF_BRANCO":
+                # O texto TEM que carregar "falha tecnica": e o que faz db.eh_nosso
+                # classificar como nossa (sai do painel, entra no retry, avisa o dono)
+                # em vez de virar cobranca ao radiologista. Travado em test_laudo_pdf.
+                resultado["pendencias"].append(
+                    f"laudo {lau['exame']}: {lau.get('detalhe', 'falha tecnica no PDF')}"
+                )
             elif lau["status"] == "ERRO":
                 resultado["pendencias"].append(
                     f"laudo {lau['exame']} erro: {lau.get('detalhe', '')}"
