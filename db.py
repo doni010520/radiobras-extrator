@@ -620,6 +620,10 @@ class CronState(Base):
     faturar_last_at = Column(DateTime(timezone=True))
     faturar_last_dia = Column(String(10))
     resumo_fat_last_at = Column(DateTime(timezone=True))
+    # DISJUNTOR (22/08): ate quando a fila de retry fica parada por falha GLOBAL
+    # (proxy fora, login nao passa). Enquanto pausada, nenhuma guia gasta tentativa.
+    retry_pausado_ate = Column(DateTime(timezone=True))
+    retry_pausa_motivo = Column(Text)
 
 
 def cron_marcar_faturar(dia: str):
@@ -1121,6 +1125,51 @@ def eh_nosso(motivo: str, categoria: str = "") -> bool:
     return classificar_pendencia(motivo, categoria)[1] == _NOSSO
 
 
+# ── DISJUNTOR: falha GLOBAL x falha da GUIA (22/08) ─────────────────────────
+# O incidente: a banda do proxy acabou as 08:31 e as 13 guias do dia 18/08 gastaram
+# as 6 tentativas contra o mesmo proxy morto — nenhuma por causa propria. Esgotaram,
+# mandaram 13 mensagens em 2 minutos e sairam do loop: quando o proxy voltou, nenhuma
+# voltou sozinha. O loop tratava "esta guia falhou" e "o mundo caiu" como a mesma
+# coisa. Assinaturas de APAGAO: proxy fora e login que nao passa — as duas afetam
+# TODA guia igualmente, entao re-tentar guia por guia so queima orcamento.
+# NAO entram aqui: gemini 503, JWT expirado e timeout — esses sao por-guia e o retry
+# normal resolve (a rodada seguinte pega token novo).
+_GLOBAL_RE = __import__("re").compile(
+    r"ProxyError|Max retries exceeded|Cannot connect to proxy|"
+    r"n[ãa]o foi poss[íi]vel conectar ao OdontoPrev pelo proxy|"
+    r"proxy.{0,40}403|403.{0,40}proxy|"
+    r"falha no login|Falha no login",
+    __import__("re").I)
+
+# Menos que isto nao pausa a fila: uma guia sozinha com erro de proxy pode ser
+# hiccup dela, e pausar tudo por uma seria pior que o problema.
+MIN_PARA_APAGAO = 2
+
+
+def eh_falha_global(motivo) -> bool:
+    """A falha e do MUNDO (proxy fora, login nao passa), nao desta guia? Nesse caso
+    re-tentar esta guia especificamente nao faz o menor sentido — a proxima vai bater
+    no mesmo muro."""
+    return bool(_GLOBAL_RE.search(str(motivo or "")))
+
+
+def rodada_foi_apagao(itens) -> bool:
+    """A rodada inteira caiu por falha global? Exige TRES coisas:
+      1. ninguem faturou — se UMA passou, a infra estava de pe e o resto e por-guia;
+      2. TODA falha tem assinatura global — falha mista significa mundo de pe;
+      3. pelo menos MIN_PARA_APAGAO falhas — uma andorinha so nao faz apagao.
+    So entao vale devolver as tentativas e pausar a fila."""
+    itens = [i for i in (itens or []) if i]
+    if not itens:
+        return False
+    if any(i.get("faturado") for i in itens):
+        return False
+    falhas = [i for i in itens if not i.get("faturado")]
+    if len(falhas) < MIN_PARA_APAGAO:
+        return False
+    return all(eh_falha_global(i.get("motivo")) for i in falhas)
+
+
 def deve_entrar_no_retry(motivo: str, categoria: str = "") -> bool:
     """O loop faz 'try again' em TUDO que e nosso (regra do dono 22/08), com o mesmo
     teto do transitorio. Antes so o transitorio entrava e as tres logicas nossas
@@ -1330,6 +1379,63 @@ def bump_retry(gto) -> None:
             notificador.avisar_esgotou(**_esgotou)
         except Exception as e:
             print(f"[db] aviso esgotou falhou: {e}", flush=True)
+
+
+def desfazer_bump(gto) -> None:
+    """Devolve a tentativa que a guia gastou numa falha que NAO era dela (apagao de
+    proxy/login). Reabre a linha se aquele bump foi justamente o que a fechou — sem
+    isso, a guia sai do loop por causa de uma queda global e so volta na mao, que foi
+    exatamente o estrago de 22/08."""
+    from datetime import timedelta
+    with SessionLocal() as s:
+        it = (s.query(RetryFila)
+              .filter(RetryFila.gto == str(gto))
+              .order_by(RetryFila.id.desc()).first())
+        if not it:
+            return
+        it.tentativas = max(0, (it.tentativas or 0) - 1)
+        it.resolvido = False
+        it.proximo_em = _now() + timedelta(minutes=retry_backoff_min(it.tentativas))
+        s.commit()
+
+
+PAUSA_PADRAO_MIN = 30
+
+
+def pausar_retry(minutos: int = PAUSA_PADRAO_MIN, motivo: str = "") -> None:
+    """Para a fila inteira por um tempo. Enquanto o mundo esta fora do ar, cada
+    rodada de retry so gasta orcamento das guias e enche o WhatsApp do dono."""
+    from datetime import timedelta
+    with SessionLocal() as s:
+        c = s.get(CronState, 1)
+        if not c:
+            c = CronState(id=1); s.add(c)
+        c.retry_pausado_ate = _now() + timedelta(minutes=int(minutos))
+        c.retry_pausa_motivo = str(motivo or "")[:500]
+        s.commit()
+
+
+def retry_pausado() -> bool:
+    """A fila esta parada agora? Passado o prazo ela volta sozinha — se o mundo ainda
+    estiver fora, a proxima rodada detecta de novo e pausa outra vez."""
+    try:
+        with SessionLocal() as s:
+            c = s.get(CronState, 1)
+            return bool(c and c.retry_pausado_ate and c.retry_pausado_ate > _now())
+    except Exception:
+        return False   # na duvida NAO trava o loop
+
+
+def retry_pausa_info() -> dict:
+    try:
+        with SessionLocal() as s:
+            c = s.get(CronState, 1)
+            if not c or not c.retry_pausado_ate:
+                return {}
+            return {"ate": c.retry_pausado_ate, "motivo": c.retry_pausa_motivo,
+                    "ativa": c.retry_pausado_ate > _now()}
+    except Exception:
+        return {}
 
 
 def retries_devidos(limite: int = 50) -> list:
@@ -1673,6 +1779,8 @@ def _ensure_columns():
         "ALTER TABLE anexacao_gtos ADD COLUMN IF NOT EXISTS liberacao VARCHAR(10)",
         "ALTER TABLE cron_state ADD COLUMN IF NOT EXISTS resumo_fat_last_at TIMESTAMPTZ",
         "ALTER TABLE retry_fila ADD COLUMN IF NOT EXISTS paciente VARCHAR(120)",
+        "ALTER TABLE cron_state ADD COLUMN IF NOT EXISTS retry_pausado_ate TIMESTAMPTZ",
+        "ALTER TABLE cron_state ADD COLUMN IF NOT EXISTS retry_pausa_motivo TEXT",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS conta VARCHAR(20)",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS log TEXT",
         "ALTER TABLE execucoes ADD COLUMN IF NOT EXISTS erro TEXT",

@@ -118,6 +118,31 @@ def avisar_falhas_da_rodada(dia: str, conta: str, itens: list, _post=None) -> bo
     return enviar_whatsapp("\n".join(linhas), _post=_post)
 
 
+def avisar_pausa(motivo: str, guias: int, minutos: int, dia: str = "", conta: str = "",
+                 _post=None) -> bool:
+    """APAGÃO: o mundo caiu (proxy fora, login não passa). UMA mensagem — não uma por
+    guia. Em 22/08 a banda do proxy acabou e você recebeu 13 avisos em 2 minutos, um
+    por guia, cada um depois de queimar 6 tentativas. Esta mensagem substitui aquilo:
+    diz o que caiu, quantas guias foram poupadas e quando o robô tenta de novo."""
+    linhas = ["🛑 *RadioBras — parei o retry: falha geral*",
+              "",
+              "Não é problema de guia nenhuma — é a infraestrutura.",
+              f"*O que houve:* {str(motivo or '')[:220]}"]
+    if dia or conta:
+        linhas.append(f"*Onde vi:* dia {dia or '?'}, unidade {conta or '?'}")
+    linhas += ["",
+               f"*{guias} guia(s)* tiveram a tentativa DEVOLVIDA — não gastaram o "
+               f"orçamento de retry por causa disso.",
+               f"A fila fica parada por *{minutos} min* e volta sozinha. Se ainda "
+               f"estiver fora, paro de novo e te aviso.",
+               "",
+               "Nada foi anexado e nada se perdeu."]
+    url = _link("/relatorios/pendencias")
+    if url:
+        linhas += ["", f"Fila técnica: {url}"]
+    return enviar_whatsapp(chr(10).join(linhas), _post=_post)
+
+
 def avisar_esgotou(gto: str, paciente: str, dia: str, conta: str, motivo: str,
                    tentativas: int, _post=None) -> bool:
     """O try again ACABOU e não recuperou. É a única classe que precisa de você —

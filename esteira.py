@@ -3426,6 +3426,12 @@ def processar_retries(gemini_key=None, k_attach=3, log=None) -> dict:
     import db
     from collections import defaultdict
     _log = log or (lambda m: None)
+    # DISJUNTOR (22/08): se a fila esta pausada por falha GLOBAL, nem comeca. Cada
+    # rodada durante um apagao so queima orcamento de retry das guias e enche o
+    # WhatsApp do dono — foi o que aconteceu quando a banda do proxy acabou.
+    if db.retry_pausado():
+        _log("[retry] fila PAUSADA (falha global) — nada a fazer nesta rodada")
+        return {"devidos": 0, "grupos": 0, "pausado": True}
     devidos = db.retries_devidos()
     if not devidos:
         return {"devidos": 0, "grupos": 0}
@@ -3452,10 +3458,43 @@ def processar_retries(gemini_key=None, k_attach=3, log=None) -> dict:
                               gemini_key=gemini_key, k_attach=k_attach, dry_run=False,
                               conta=conta, senha_portal=senha,
                               apenas_gtos=(None if dia_inteiro else gtos))
+            # APAGAO? Ninguem faturou e TODA falha tem assinatura global (proxy fora,
+            # login nao passa). Nesse caso a culpa nao e de guia nenhuma: devolve a
+            # tentativa de cada uma, para a varredura e manda UMA mensagem.
+            if db.rodada_foi_apagao(r.get("decisoes") or []):
+                for g in gtos:
+                    db.desfazer_bump(g)
+                _mot = next((str(x.get("motivo") or "")
+                             for x in (r.get("decisoes") or [])
+                             if db.eh_falha_global(x.get("motivo"))), "falha global")
+                db.pausar_retry(minutos=db.PAUSA_PADRAO_MIN, motivo=_mot)
+                _log(f"[retry] APAGAO em {dia} {conta}: {len(gtos)} tentativa(s) "
+                     f"devolvida(s), fila pausada {db.PAUSA_PADRAO_MIN} min")
+                try:
+                    import notificador
+                    notificador.avisar_pausa(_mot, len(gtos), db.PAUSA_PADRAO_MIN,
+                                             dia=dia, conta=conta)
+                except Exception as e:
+                    _log(f"[retry] aviso de pausa falhou: {str(e)[:60]}")
+                return {"devidos": len(devidos), "grupos": len(por), "apagao": True}
             try:
                 db.salvar_execucao(r, _logs)   # hook resolve os que faturaram
             except Exception as e:
                 _log(f"[retry] gravar {dia} {conta}: {str(e)[:60]}")
         except Exception as e:
+            # a propria rodada explodiu com cara de apagao (proxy/login) -> mesmo
+            # tratamento: a guia nao paga por isso.
+            if db.eh_falha_global(e):
+                for g in gtos:
+                    db.desfazer_bump(g)
+                db.pausar_retry(minutos=db.PAUSA_PADRAO_MIN, motivo=str(e)[:300])
+                _log(f"[retry] APAGAO (excecao) em {dia} {conta}: fila pausada")
+                try:
+                    import notificador
+                    notificador.avisar_pausa(str(e)[:300], len(gtos),
+                                             db.PAUSA_PADRAO_MIN, dia=dia, conta=conta)
+                except Exception:
+                    pass
+                return {"devidos": len(devidos), "grupos": len(por), "apagao": True}
             _log(f"[retry] {dia} {conta}: {type(e).__name__}: {str(e)[:70]}")
     return {"devidos": len(devidos), "grupos": len(por)}

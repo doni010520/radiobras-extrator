@@ -2774,6 +2774,13 @@ def api_diag():
             "whatsapp_configurado": _whatsapp_ok(),
             "alerta_falha_ligado": os.environ.get("ALERTA_FALHA", "1") != "0",
             "retry_cron": os.environ.get("RETRY_CRON", "0") == "1",
+            # disjuntor: se a fila esta parada por falha global, a tela tem que dizer
+            # — senao "0 retries" parece calmaria quando e apagao.
+            "retry_pausado": db.retry_pausado(),
+            "retry_pausa": (lambda i: {"ate": i["ate"].isoformat() if i.get("ate") else None,
+                                       "motivo": (i.get("motivo") or "")[:200],
+                                       "ativa": i.get("ativa")})(db.retry_pausa_info() or {})
+            if db.retry_pausa_info() else None,
             "faturar_cron": os.environ.get("FATURAR_CRON", "0") == "1",
             "faturar_cron_hora": os.environ.get("FATURAR_CRON_HOUR", "5"),
             "faturar_prazo_dias": os.environ.get("FATURAR_PRAZO_DIAS", "7"),
