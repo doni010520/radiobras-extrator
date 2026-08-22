@@ -524,3 +524,85 @@ def analisar_paciente(pasta: str, gto_path: str, solicitante_gto: str,
     res["dentista_motivo"] = ("cro" if cro_match else ("nome" if len(hits) >= 2 else "nao_confere"))
     res["dentista_tokens_batem"] = hits
     return res
+
+
+# ── ANALISES CEFALOMETRICAS (22/08) ──────────────────────────────────────────
+# Caso JOSEANE: o pedido dizia "Telerradiografia Rickets", a clinica so deixou pronto
+# o laudo da analise USP, e a guia faturou pela metade — a trava de tele so pergunta
+# "existe ALGUM laudo de tele?".
+#
+# Verificado ao vivo no PRORADIS (22/08): USP e Ricketts NAO sao exames separados
+# (nao tem accession nem status proprio). Sao secoes DENTRO do mesmo laudo CEPH, e o
+# nome de cada uma aparece literalmente no texto ("Analise USP", "Analise de
+# Ricketts"). O PDF renderizado tem camada de texto, entao da pra checar lendo o
+# arquivo que ja esta na pasta.
+#
+# A analise e uma DIMENSAO SEPARADA do _CANON de propósito: no canon, 'ricket' segue
+# mapeando para 'telerradiografia', porque o exame E uma telerradiografia. Mexer nisso
+# quebraria a documentacao ortodontica inteira.
+_ANALISES = [
+    # 'ricket' como prefixo cobre RICKETTS/RICKETES/RICKETS (o dentista escreve a mao)
+    ("ricketts", r"ricket"),
+    # 'usp' precisa de FRONTEIRA de palavra: tres letras casam dentro de qualquer coisa
+    ("usp", r"\busp\b"),
+    ("tweed", r"\btweed\b"),
+    ("steiner", r"\bsteiner\b"),
+    ("mcnamara", r"mc.?namara"),
+    ("jarabak", r"\bjarabak\b"),
+    ("downs", r"\bdowns\b"),
+    ("bjork", r"bj[o0]rk"),
+]
+
+
+def _analises_em(texto) -> set:
+    t = _strip(str(texto or ""))
+    return {nome for nome, padrao in _ANALISES if re.search(padrao, t, re.I)}
+
+
+def analises_pedidas(texto) -> set:
+    """Quais analises cefalometricas o PEDIDO nomeia. Conjunto VAZIO quando o pedido
+    nao nomeia nenhuma — que e o caso mais comum ("Telerradiografia", seco).
+
+    REGRA DE PROJETO: so se exige o que foi escrito. A maioria dos pedidos nao nomeia
+    analise; exigir por padrao (ou exigir "sempre as duas") seguraria faturamento
+    legitimo em massa. Falso positivo aqui custa dinheiro do dono, nao da clinica."""
+    return _analises_em(texto)
+
+
+def analises_no_texto(texto) -> set:
+    """Quais analises aparecem no TEXTO DO LAUDO (o CEPH traz uma secao por analise,
+    cada uma com o titulo 'Analise <nome>')."""
+    return _analises_em(texto)
+
+
+def texto_do_laudo_pdf(path) -> str:
+    """Texto do PDF do laudo. String VAZIA quando nao deu pra ler — quem chama
+    precisa distinguir "li e nao tem a analise" de "nao consegui ler", porque as duas
+    levam a pendencias de DONOS diferentes (radiologista x nos)."""
+    try:
+        doc = fitz.open(path)
+        txt = "".join(p.get_text() for p in doc)
+        doc.close()
+        return txt or ""
+    except Exception:
+        return ""
+
+
+def analises_no_laudo_pdf(path) -> set:
+    """Idem, lendo o PDF do laudo. Falha quieto: PDF ilegivel devolve conjunto vazio,
+    e quem chama NAO pode ler isso como 'falta a analise' (viraria pendencia falsa
+    cobrando o radiologista de um laudo que ele emitiu)."""
+    try:
+        doc = fitz.open(path)
+        txt = "".join(p.get_text() for p in doc)
+        doc.close()
+    except Exception:
+        return set()
+    return _analises_em(txt)
+
+
+def analises_faltando(pedidas, no_laudo) -> set:
+    """As que o pedido nomeia e o laudo nao tem. Pura diferenca de conjuntos — a
+    decisao de segurar (e de exigir ter conseguido LER o laudo antes) e de quem
+    chama, na esteira."""
+    return set(pedidas or ()) - set(no_laudo or ())

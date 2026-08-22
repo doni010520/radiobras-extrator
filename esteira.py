@@ -1288,6 +1288,69 @@ def _laudo_tele_faltando(exames_canon, laudos_no_plano) -> bool:
     return True
 
 
+def _entregavel_faltando(dispensa_laudo, nomes) -> bool:
+    """Falta o ENTREGAVEL desta guia? Dispensar laudo NAO dispensa entregavel.
+
+    Regra do dono (22/08): "se o exame e modelo ele nao precisa de laudo; basta uma
+    foto do modelo". A primeira metade ja existia (`gto_dispensa_laudo`); o buraco
+    estava na segunda — ao dispensar o laudo, a guarda final do anexador era pulada
+    por inteiro, e como imagem ausente e so uma "nota" (nunca pendencia), uma guia de
+    modelo podia ser faturada com ZERO entregavel, so com a solicitacao anexada.
+
+    Guia radiologica: exige LAUDO_* (foto nunca substituiu laudo).
+    Guia de modelo/fotografia: aceita a foto (ENTREGA_*) OU um laudo, se houver."""
+    nomes = [str(n).upper() for n in (nomes or [])]
+    tem_laudo = any(n.startswith("LAUDO_") for n in nomes)
+    if not dispensa_laudo:
+        return not tem_laudo
+    return not (tem_laudo or any(n.startswith("ENTREGA_") for n in nomes))
+
+
+def _analises_faltando_no_plano(dec) -> tuple:
+    """(faltando, erro_de_leitura) — as analises cefalometricas que o PEDIDO nomeia e
+    o laudo do CEPH nao tem.
+
+    Caso JOSEANE (15/08): o pedido dizia "Telerradiografia Rickets", a clinica so
+    deixou pronta a analise USP e a guia faturou pela metade, porque `_laudo_tele_
+    faltando` so pergunta "existe ALGUM laudo de tele?".
+
+    Duas saidas de proposito:
+      - `faltando` -> pendencia do RADIOLOGISTA (o laudo existe, falta uma secao);
+      - `erro_de_leitura` -> falha NOSSA. Se nao conseguimos abrir o PDF, dizer
+        "falta a analise" seria cobrar do radiologista um laudo que ele emitiu.
+    Pedido que nao NOMEIA analise nao exige nada (regra de projeto)."""
+    from solicitacao_utils import (analises_pedidas, analises_no_texto,
+                                   analises_faltando, texto_do_laudo_pdf)
+    _txt_pedido = " ".join(str(x) for x in (dec.get("exames_lidos") or []))
+    _txt_pedido += " " + str(dec.get("solicitacao_texto") or "")
+    pedidas = analises_pedidas(_txt_pedido)
+    if not pedidas:
+        return set(), False
+    pasta = dec.get("pasta_dl")
+    if not pasta:
+        return set(), True
+    achou_ceph, txt = False, ""
+    for f in (dec.get("plano_laudo_imgs") or []):
+        nome = str(f).upper()
+        if not nome.startswith("LAUDO_"):
+            continue
+        if "CEPH" not in nome and "telerradiografia" not in _exame_do_laudo(f):
+            continue
+        achou_ceph = True
+        txt += " " + texto_do_laudo_pdf(os.path.join(pasta, f))
+    if not achou_ceph:
+        # sem laudo de tele nenhum -> quem segura e `_laudo_tele_faltando`, nao este
+        return set(), False
+    if len(txt.strip()) < 200:
+        return set(), True          # PDF ilegivel/vazio: falha NOSSA, nao dele
+    return analises_faltando(pedidas, analises_no_texto(txt)), False
+
+
+_NOME_ANALISE = {"ricketts": "Ricketts", "usp": "USP", "tweed": "Tweed",
+                 "steiner": "Steiner", "mcnamara": "McNamara",
+                 "jarabak": "Jarabak", "downs": "Downs", "bjork": "Björk"}
+
+
 def _acc_do_laudo(p):
     """Accession embutido no nome: LAUDO_<EXAME>_<acc>_TIPO.pdf -> '<acc>'.
     É a chave FORTE (identidade do exame no PRORADIS), ao contrário do nome do
@@ -1734,6 +1797,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
            "candidatos": [], "solic_idx": None, "justificativa": None}
     if pasta_dl and os.path.isdir(pasta_dl):
         out["plano_laudo_imgs"] = sorted(os.listdir(pasta_dl))
+        # a checagem de ANALISE precisa ABRIR o PDF do CEPH, nao so ver o nome
+        out["pasta_dl"] = pasta_dl
     # CHAVE DE BUSCA DO PACIENTE: CPF (exato, indexado no PRORADIS) com FALLBACK
     # por nome quando o cadastro do PRORADIS nao tem CPF. resolver_anexos garante
     # que sem CPF o caminho e IDENTICO ao anterior (busca por nome) — a sessao
@@ -2794,7 +2859,18 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 _exames_da_guia = dec.get("gto_exames_desta") or dec.get("gto_exames") or set()
                 _falta_tele = _laudo_tele_faltando(_exames_da_guia,
                                                    dec.get("plano_laudo_imgs", []))
-                _laudo_ok = _laudo_base_ok and not _falta_tele
+                # GATE POR ANALISE (22/08, caso JOSEANE): a tele pode ter laudo e
+                # ainda assim faltar a ANALISE que o pedido nomeia — o CEPH traz uma
+                # secao por analise ("Analise USP", "Analise de Ricketts") e a clinica
+                # pode liberar so uma. Faturar assim entrega metade do pedido.
+                try:
+                    _falta_analise, _erro_analise = _analises_faltando_no_plano(dec)
+                except Exception:
+                    _falta_analise, _erro_analise = set(), False
+                dec["falta_analise"] = sorted(_falta_analise)
+                dec["erro_analise"] = bool(_erro_analise)
+                _laudo_ok = (_laudo_base_ok and not _falta_tele
+                             and not _falta_analise and not _erro_analise)
                 anexa = _laudo_ok and _tem_solic_ou_justif
                 if anexar_on and anexa:
                     fila_anexar.put(item)
@@ -2814,6 +2890,11 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 _falta = []
                 if not _laudo_base_ok:
                     _falta.append("LAUDO")
+                elif _falta_analise:
+                    _falta.append("o LAUDO da analise " +
+                                  "/".join(_NOME_ANALISE.get(a, a) for a in sorted(_falta_analise)))
+                elif _erro_analise:
+                    _falta.append("nao consegui LER o laudo da tele p/ conferir a analise")
                 elif _falta_tele:
                     # tem a panoramica, falta o laudo da telerradiografia (traçado)
                     _falta.append("o LAUDO da telerradiografia (traçado cefalométrico)")
@@ -2915,8 +2996,10 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 # pasta, e subir só a solicitação (ou zero arquivo) registraria como
                 # FATURADA uma guia sem o documento obrigatório. Vira pendência.
                 _dec_it = item.get("decisao") or {}
-                _laudo_no_plano = any(n.upper().startswith("LAUDO_") for n in nomes)
-                if not _laudo_no_plano and not _dec_it.get("dispensa_laudo"):
+                # GUARDA por ENTREGAVEL, nao por laudo: guia de modelo dispensa o
+                # laudo mas NAO dispensa a foto. Antes, dispensa_laudo pulava esta
+                # guarda inteira e a guia podia faturar so com a solicitacao.
+                if _entregavel_faltando(_dec_it.get("dispensa_laudo"), nomes):
                     item["anexado"] = "ERRO"
                     # A MENSAGEM PRECISA DIZER *QUAIS* EXAMES. "Conferir se o exame e
                     # do convenio" escondia dois casos opostos e a pessoa nao tinha
@@ -2931,7 +3014,17 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     _ex_guia = lista_amigavel(_dec_it.get("gto_exames")
                                               or item.get("exames_gto") or [])
                     _ex_fora = lista_amigavel(exames_fora or [])
-                    if excluidos and _ex_fora:
+                    if _dec_it.get("dispensa_laudo"):
+                        # guia de MODELO/FOTOGRAFIA: nao falta laudo (ela dispensa) —
+                        # falta a FOTO do modelo, que e o entregavel dela. Falar em
+                        # laudo ou convenio aqui manda a pessoa procurar a coisa errada.
+                        item["anexar_erro"] = (
+                            "a guia é de MODELO/FOTOGRAFIA (não precisa de laudo), mas "
+                            "não há foto do modelo para anexar — sem entregável não há "
+                            "o que faturar. O QUE FAZER: conferir se a foto do modelo "
+                            "(com as várias faces) foi gerada no PRORADIS e reprocessar "
+                            "o dia.")
+                    elif excluidos and _ex_fora:
                         item["anexar_erro"] = (
                             f"a guia pede {_ex_guia or 'exames que não consegui ler'}, "
                             f"mas os laudos encontrados eram de {_ex_fora} — de outro "
@@ -3328,8 +3421,30 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             dec.get("plano_laudo_imgs", []))
         # LAUDO obrigatorio p/ exames RADIOLOGICOS (mesmo com justificativa). Excecao:
         # GTO so de MODELO/FOTOGRAFIA dispensa laudo. Justificativa dispensa so a solic.
-        _laudo_falta = (not _tem_laudo and not dec.get("dispensa_laudo")) or _falta_tele
-        if _laudo_falta and (dec.get("justificativa") or dec.get("plano_solicitacao")):
+        # ANALISE faltando conta como laudo faltando: a tele tem laudo, mas nao tem a
+        # secao que o pedido pediu. Sem isto o relatorio diria "auto" (faturaria)
+        # enquanto o gate barrou — foi o que aconteceu com a tele antes de 01/08.
+        _falta_analise_f = list(dec.get("falta_analise") or [])
+        _laudo_falta = ((not _tem_laudo and not dec.get("dispensa_laudo"))
+                        or _falta_tele or bool(_falta_analise_f))
+        if dec.get("erro_analise"):
+            # nao conseguimos LER o laudo pra conferir a analise. Dizer "falta a
+            # analise" aqui seria cobrar do radiologista um laudo que ele emitiu.
+            cat = "erro"
+            dec["erro"] = ("NÃO FATUROU por falha técnica: o pedido nomeia uma análise "
+                           "cefalométrica e não consegui LER o laudo da telerradiografia "
+                           "para conferir se ela está lá. O QUE FAZER: reprocessar o "
+                           "dia. (Falha nossa — o laudo pode estar perfeito.)")
+        elif _laudo_falta and _falta_analise_f and (dec.get("justificativa")
+                                                    or dec.get("plano_solicitacao")):
+            cat = "sem_laudo"
+            _nomes = "/".join(_NOME_ANALISE.get(a, a) for a in sorted(_falta_analise_f))
+            dec["erro"] = (f"NÃO FATUROU porque falta o LAUDO da análise {_nomes}. "
+                           f"A telerradiografia TEM laudo, mas o pedido nomeia essa "
+                           f"análise e ela não está no documento — faturar assim "
+                           f"entrega metade do que foi pedido. O robô anexa sozinho "
+                           f"assim que a análise sair; cobrar a emissão.")
+        elif _laudo_falta and (dec.get("justificativa") or dec.get("plano_solicitacao")):
             cat = "sem_laudo"          # tem solic/justif mas falta laudo (ou a tele) -> pendência
         elif dec.get("justificativa"):
             cat = "justificativa"      # laudo ok (ou dispensado)

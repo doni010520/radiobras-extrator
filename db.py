@@ -977,6 +977,14 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
 # A ordem importa: o primeiro padrão que casar vence, então o mais específico vem
 # antes. Cada grupo carrega a AÇÃO — quem lê não precisa deduzir o que fazer.
 _GRUPOS_PENDENCIA = [
+    # ANALISE CEFALOMETRICA faltando (22/08, caso JOSEANE): a tele TEM laudo, mas o
+    # pedido nomeia uma analise (Ricketts/USP/Tweed...) que nao esta no documento.
+    # Vem PRIMEIRO porque o texto contem "falta o LAUDO", que casaria em falta_laudo
+    # e viraria uma cobranca generica, sem dizer QUAL analise pedir.
+    ("esperando_analise", r"LAUDO da an[áa]lise|laudo da analise",
+     "Radiologista", "A telerradiografia tem laudo, mas falta a ANÁLISE que o pedido "
+     "nomeia (ex.: Ricketts). O robô anexa sozinho assim que ela sair — cobrar a "
+     "emissão dessa análise específica."),
     ("sem_entregavel", r"n[ãa]o h[áa] laudo nem imagem|ainda n[ãa]o tem entreg[áa]vel",
      "Radiologista", "Exame registrado sem laudo E sem imagem — não há o que anexar. "
      "Cobrar a emissão."),
@@ -1451,6 +1459,7 @@ def retries_devidos(limite: int = 50) -> list:
 
 
 _TITULO_GRUPO = {
+    "esperando_analise": "Esperando o laudo da análise cefalométrica",
     "sem_entregavel": "Exame sem laudo e sem imagem",
     "esperando_tele": "Esperando o laudo da telerradiografia (traçado)",
     "falta_laudo": "Esperando o laudo do radiologista",
