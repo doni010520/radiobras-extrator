@@ -833,6 +833,71 @@ def baixar_laudos(page, ctx, tokens_list: list, out_dir: str) -> list:
     return resultados
 
 
+def baixar_entregavel_modelo(page, ctx, study_id: str, out_dir: str,
+                             seen_hashes: set, start_n: int = 0) -> dict:
+    """Baixa o entregavel de um exame do modulo ENTREGA (usado pelo MODELO).
+
+    Mesma mecanica do `baixar_imagens` — intercepta `viewer/u/image` e guarda so o
+    que tem a logo verde — mas o gatilho e outro: `delivery/print_series` em vez do
+    popup `reports_doc`. O exame de MODELO nao existe na worklist de laudos, entao
+    aquele caminho nunca o alcanca (ver entrega.py).
+
+    Do que vem, so a folha A4 (logo + cabecalho do paciente + as 5 vistas do render
+    3D) passa no filtro; as 6 vistas cruas de 1920x1080 nao tem logo e ficam de
+    fora — que e o que o dono decidiu em 22/08: sem cabecalho a imagem nao
+    identifica o paciente."""
+    import entrega as _ent
+    captured: list = []
+    pendencias: list = []
+
+    def on_resp(r):
+        if "viewer/u/image" not in r.url:
+            return
+        try:
+            body = r.body()
+        except Exception:
+            return
+        if body[:2] == b"\xff\xd8":
+            captured.append(body)
+
+    ctx.on("response", on_resp)
+    p2 = None
+    try:
+        p2 = ctx.new_page()
+        p2.goto("about:blank")
+        p2.evaluate(_ent.JS_IMPRIMIR, [BASE, str(study_id)])
+        p2.wait_for_timeout(POPUP_WAIT_MS)
+    except Exception as e:
+        pendencias.append(f"print_series falhou (study {str(study_id)[:12]}): {e}")
+    finally:
+        ctx.remove_listener("response", on_resp)
+        try:
+            if p2 is not None:
+                p2.close()
+        except Exception:
+            pass
+
+    itens = [{"bytes": b, "logo": tem_logo_radiobras(b)} for b in captured]
+    escolhidos = _ent.escolher_entregaveis(itens)
+    caiu_no_cru = bool(escolhidos) and not any(i["logo"] for i in escolhidos)
+    n = start_n
+    arquivos: list = []
+    for it in escolhidos:
+        body = it["bytes"]
+        h = _ahash(body)
+        if h is None or _eh_duplicata(h, seen_hashes):
+            continue
+        seen_hashes.add(h)
+        n += 1
+        fname = f"ENTREGA_{hashlib.sha1(body).hexdigest()[:10]}.jpg"
+        with open(os.path.join(out_dir, fname), "wb") as f:
+            f.write(body)
+        arquivos.append(fname)
+    return {"qtd": len(arquivos), "arquivos": arquivos, "next_n": n,
+            "capturadas": len(captured), "sem_folha_a4": caiu_no_cru,
+            "pendencias": pendencias}
+
+
 # ── Fallback: busca por nome sem filtro de data ───────────────────────────────
 
 def _buscar_na_worklist_por_nome(page, nome: str, acc: str, data: str) -> dict | None:
@@ -984,6 +1049,57 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
         resultado["notas"].append(
             "exame(s) do dia incluidos alem do analitico: " + ", ".join(_extras)
         )
+
+    # MODELO (22/08): accession que a worklist de LAUDOS nao conhece pode ser um
+    # exame de MODELO — ele so existe no modulo ENTREGA. Antes disso a guia caia em
+    # "nao ha laudo nem imagem" e mandava cobrar o laudo do radiologista, de um
+    # exame que por definicao nao tem laudo. Ver entrega.py.
+    modelos: list = []
+    if nao_localizadas:
+        try:
+            import entrega as _ent
+            for _acc in list(nao_localizadas):
+                _li = _ent.achar_modelo(page, BASE, data, paciente=nome,
+                                        accession=_acc)
+                if _li:
+                    modelos.append(_li)
+                    nao_localizadas.remove(_acc)
+                    resultado["notas"].append(
+                        f"accession {_acc} e exame de MODELO — achado na Entrega "
+                        f"(nao existe na worklist de laudos)")
+        except Exception as e:
+            resultado["notas"].append(f"busca na Entrega falhou: {str(e)[:100]}")
+    if modelos:
+        resultado["modelo"] = True
+        _seen = set()
+        _arqs, _n = [], (resultado.get("imagens") or {}).get("qtd", 0)
+        for _li in modelos:
+            try:
+                _r = baixar_entregavel_modelo(page, ctx, _li["study_id"], out_dir,
+                                              _seen, _n)
+                if _r.get("sem_folha_a4"):
+                    resultado["notas"].append(
+                        f"MODELO {_li.get('accession')}: a folha A4 (logo+cabecalho) "
+                        f"nao existia; anexado o render cru da Entrega")
+                _n = _r["next_n"]
+                _arqs.extend(_r["arquivos"])
+                resultado["pendencias"].extend(_r.get("pendencias") or [])
+            except Exception as e:
+                resultado["pendencias"].append(
+                    f"falha tecnica ao baixar o entregavel do MODELO "
+                    f"({_li.get('accession')}): {str(e)[:110]}")
+        _img = resultado.get("imagens") or {"qtd": 0, "arquivos": []}
+        _img["qtd"] = _n
+        _img["arquivos"] = list(_img.get("arquivos") or []) + _arqs
+        resultado["imagens"] = _img
+        if not _arqs:
+            # NAO e falha nossa: o render simplesmente ainda nao foi gerado (caso
+            # LUIZA, 20/08 — print_series devolveu ZERO imagem). Dizer "reprocessar
+            # o dia" mandaria a operacao repetir uma rodada que nao muda nada.
+            resultado["pendencias"].append(
+                "o render 3D do MODELO ainda nao foi gerado no PRORADIS — nao ha "
+                "entregavel para anexar. O robo anexa sozinho assim que o render "
+                "sair; cobrar a geracao do modelo.")
 
     if nao_localizadas:
         resultado["pendencias"].append(

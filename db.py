@@ -977,6 +977,13 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
 # A ordem importa: o primeiro padrão que casar vence, então o mais específico vem
 # antes. Cada grupo carrega a AÇÃO — quem lê não precisa deduzir o que fazer.
 _GRUPOS_PENDENCIA = [
+    # MODELO sem render (22/08): a guia de MODELO nao tem laudo por definicao — o
+    # entregavel e o render 3D. Vem ANTES de sem_entregavel, que mandaria "cobrar a
+    # emissao do laudo" de um exame que nunca tera laudo.
+    ("modelo_sem_render", r"render 3D do MODELO|render do modelo",
+     "Radiologista", "Guia de MODELO: não tem laudo — o entregável é o render 3D "
+     "do escaneamento. Ele ainda não foi gerado no PRORADIS. O robô anexa sozinho "
+     "assim que sair; cobrar a geração do modelo."),
     # ANALISE CEFALOMETRICA faltando (22/08, caso JOSEANE): a tele TEM laudo, mas o
     # pedido nomeia uma analise (Ricketts/USP/Tweed...) que nao esta no documento.
     # Vem PRIMEIRO porque o texto contem "falta o LAUDO", que casaria em falta_laudo
@@ -1459,6 +1466,7 @@ def retries_devidos(limite: int = 50) -> list:
 
 
 _TITULO_GRUPO = {
+    "modelo_sem_render": "Modelo sem o render 3D gerado",
     "esperando_analise": "Esperando o laudo da análise cefalométrica",
     "sem_entregavel": "Exame sem laudo e sem imagem",
     "esperando_tele": "Esperando o laudo da telerradiografia (traçado)",
