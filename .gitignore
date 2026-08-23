@@ -70,3 +70,6 @@ Thumbs.db
 .claude/settings.local.json
 *.swp
 arvore_decisao_faturamento.pdf
+
+# dumps de diagnostico gerados a mao
+reconciliacao_*.txt
