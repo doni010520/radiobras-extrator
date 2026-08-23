@@ -1251,6 +1251,11 @@ def so_o_prenome_difere(nome_guia, nome_lido) -> bool:
     return a[0] != b[0]               # iguais em tudo = nao e caso desta regra
 
 
+# Chaves que, mesmo com categoria 'erro', NAO sao falha nossa: o texto ja nomeia
+# uma causa que nenhuma re-tentativa resolve.
+_ERRO_MAS_DE_TERCEIRO = ("paciente_nao_achado",)
+
+
 def eh_nosso(motivo: str, categoria: str = "") -> bool:
     """A falha e NOSSA (tecnica)? Regra do dono (22/08/26): falha de sistema NAO e
     pendencia do painel da RadioBras — ela sai da tela do operador, entra no loop de
@@ -1265,7 +1270,16 @@ def eh_nosso(motivo: str, categoria: str = "") -> bool:
     NAO e nossa a Conferencia: ali falta OLHO HUMANO no documento, nao conserto de
     codigo — esconder do painel seria sumir com trabalho real da operacao."""
     if str(categoria or "").strip().lower() == "erro":
-        return True
+        # ...MAS o atalho nao pode passar por cima de um texto que identifica a causa
+        # com todas as letras (23/08, caso MARIA DE FATIMA LAMOEDO 196370003). Ela
+        # dizia "paciente nao encontrado no cadastro do PRORADIS" e mesmo assim
+        # sumia do painel e queimava 6 tentativas de retry. Nenhuma re-tentativa faz
+        # o paciente aparecer: ele esta cadastrado com OUTRO nome — foi o caso do
+        # VALDEMIR, que o PRORADIS traz como 'VALDEMIR DOS SANTOS PEREIRA' e a guia
+        # chama de 'DOS ANJOS'. Quem resolve e o cadastro.
+        # Homonimo NAO entra nesta lista de proposito: com 2+ cards o nascimento
+        # desempata num re-run (caso ALESSANDRA), entao ali insistir funciona.
+        return classificar_pendencia(motivo, categoria)[0] not in _ERRO_MAS_DE_TERCEIRO
     if classe_retry(motivo, categoria) == "transitorio":
         return True
     return classificar_pendencia(motivo, categoria)[1] == _NOSSO
