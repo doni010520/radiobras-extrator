@@ -1773,6 +1773,44 @@ def _date_from_name(s):
         return None
 
 
+def _ler_lote_com_resgate(gem, cands, contents):
+    """Le o lote de anexos e, se ele falhar, cai para a leitura UM A UM.
+
+    Retorna (data, usou_um_a_um). Levanta so quando nem o resgate leu nada, ou
+    quando o erro e FATAL (cota/credito/chave) — ali insistir de outro jeito so
+    multiplica chamadas mortas.
+
+    O resgate ja existia (caso SOPHIA, 31/07) mas estava pendurado no `except` do
+    `json.loads`, entao cobria o lote que respondia MAL e nao o lote que NAO
+    respondia. Um anexo malformado faz a API rejeitar o lote inteiro com
+    400/INVALID_ARGUMENT — a chamada LEVANTA, o resgate era pulado, e o `except` de
+    fora apenas re-tentava o MESMO lote com o MESMO anexo ruim dentro. A guia
+    terminava em falha tecnica: FABRICIO (196307916) e as duas DILMA (196307961,
+    196308165), 18/08. Lendo um a um, o anexo ruim tira so a si mesmo da jogada."""
+    _erro_lote = None
+    data = None
+    try:
+        r = gem.models.generate_content(model=_GEM_MODEL, contents=contents,
+                                        config=_gem_cfg())
+        _contar_tokens(r)
+        txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(),
+                     flags=re.M).strip()
+        try:
+            data = json.loads(txt)
+        except Exception as e:
+            _erro_lote = e          # JSON degenerado/truncado
+    except Exception as e:
+        if _gem_fatal(e):
+            raise                   # credito/cota/chave: para na hora
+        _erro_lote = e              # lote rejeitado (anexo ruim) -> resgate
+    if data is not None:
+        return data, False
+    data = _ler_anexos_um_a_um(gem, cands)
+    if not data:
+        raise _erro_lote or RuntimeError("lote de leitura ilegivel")
+    return data, True
+
+
 def _ler_anexos_um_a_um(gem, cands):
     """RESGATE do lote de leitura: cada anexo numa chamada propria, com o mesmo
     prompt, e o idx remapeado para a posicao real no lote.
@@ -2104,19 +2142,12 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
     contents.append(_DECISAO_PROMPT)
     for tent in range(3):
         try:
-            r = gem.models.generate_content(model=_GEM_MODEL, contents=contents,
-                                            config=_gem_cfg())
-            _contar_tokens(r)
-            txt = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
-            try:
-                data = json.loads(txt)
-            except Exception:
-                # Lote degenerou (caso SOPHIA 31/07: loop de geracao, JSON
-                # truncado). Com o teto de saida a falha e rapida; o resgate e
-                # ler os anexos UM A UM em vez de re-tentar o mesmo lote.
-                data = _ler_anexos_um_a_um(gem, cands)
-                if not data:
-                    raise
+            # Lote + RESGATE um-a-um. Cobre os dois modos de falha: o lote que
+            # responde mal (JSON truncado, caso SOPHIA 31/07) e o lote que nao
+            # responde (um anexo malformado faz a API rejeitar tudo — FABRICIO e
+            # as duas DILMA, 18/08). Antes so o primeiro tinha resgate.
+            data, _um_a_um = _ler_lote_com_resgate(gem, cands, contents)
+            if _um_a_um:
                 out["leitura_um_a_um"] = True
             leituras = (data.get("anexos") if isinstance(data, dict) else data) or []
             _marcar_origem(leituras, cands)   # carimbo de upload -> fallback de data
