@@ -1406,7 +1406,26 @@ def _analises_faltando_no_plano(dec) -> tuple:
     Pedido que nao NOMEIA analise nao exige nada (regra de projeto)."""
     from solicitacao_utils import (analises_pedidas, analises_no_texto,
                                    analises_faltando, texto_do_laudo_pdf)
-    _txt_pedido = " ".join(str(x) for x in (dec.get("exames_lidos") or []))
+    # DE ONDE SAI O QUE O PEDIDO NOMEIA. Regra do dono: a exigencia de USP/Ricketts
+    # esta na SOLICITACAO DO DENTISTA, nao na definicao de documentacao completa.
+    # Esta leitura estava quebrada e a trava saia SEMPRE vazia (23/08):
+    #   - `exames_lidos` mora em dec["decisao"], nao na raiz do dicionario que chega
+    #     aqui — no caminho de SUCESSO a raiz nao tem esse campo;
+    #   - `solicitacao_texto` NUNCA foi gravado: aparecia uma unica vez no repo
+    #     inteiro, nesta leitura.
+    # Resultado: analises_pedidas("") -> vazio -> "nao falta nada", sempre. A funcao
+    # tinha teste proprio e estava morta justamente no caminho em que a guia fatura;
+    # o caso JOSEANE (15/08) voltaria sem ninguem ver.
+    _d = dec.get("decisao") or {}
+    _lidos = _d.get("exames_lidos") or dec.get("exames_lidos") or []
+    _txt_pedido = " ".join(str(x) for x in _lidos)
+    # TRANSCRICAO LITERAL da folha escolhida: a lista curada da IA as vezes dropa a
+    # secao (o proprio _texto_pedido documenta isso no caso MAYSA/MIRIAN), e o nome
+    # da analise costuma estar escrito no corpo do pedido.
+    _idx = _d.get("indice_solicitacao")
+    _leituras = _d.get("leituras") or dec.get("leituras") or []
+    if isinstance(_idx, int) and 0 <= _idx < len(_leituras)             and isinstance(_leituras[_idx], dict):
+        _txt_pedido += " " + str(_leituras[_idx].get("texto") or "")
     _txt_pedido += " " + str(dec.get("solicitacao_texto") or "")
     pedidas = analises_pedidas(_txt_pedido)
     if not pedidas:
