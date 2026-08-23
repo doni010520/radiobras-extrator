@@ -30,8 +30,11 @@ _NAO_CADASTRADO = ("anexos: paciente 'MARIA DE FATIMA LAMOEDO' não encontrado n
                    "nos dois sistemas")
 _HOMONIMO = ("anexos: 2 paciente(s) com o nome 'ALESSANDRA' no PRORADIS — não foi "
              "possível identificar o prontuário com segurança")
+# Instabilidade DE VERDADE — o "400 INVALID_ARGUMENT" saiu daqui em 23/08: ele
+# passou a ser `anexo_corrompido` (Conferência), porque re-tentar nao conserta
+# arquivo. Ver test_anexo_corrompido.py.
 _GEMINI = ("NÃO FATUROU por falha técnica na leitura dos documentos. "
-           "Detalhe: gemini: 400 INVALID_ARGUMENT")
+           "Detalhe: gemini: 503 UNAVAILABLE")
 
 
 # ── o caso ────────────────────────────────────────────────────────────────

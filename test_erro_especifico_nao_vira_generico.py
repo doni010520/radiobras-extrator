@@ -29,7 +29,10 @@ from esteira import _erro_de_leitura_amigavel
 _NAO_CADASTRADO = ("anexos: paciente 'MARIA DE FATIMA LAMOEDO' não encontrado no "
                    "cadastro do PRORADIS — conferir se o nome está escrito igual "
                    "nos dois sistemas")
-_GEMINI = "gemini: 400 INVALID_ARGUMENT. Unable to process input image"
+# Instabilidade DE VERDADE. Antes este exemplo era o "400 INVALID_ARGUMENT" do
+# FABRICIO — que desde 23/08 tem classificacao propria (anexo_corrompido,
+# Conferencia), porque re-tentar nao conserta arquivo. Ver test_anexo_corrompido.
+_GEMINI = "gemini: 503 UNAVAILABLE"
 
 
 # ── a causa conhecida sai por extenso, sem prefixo generico ───────────────

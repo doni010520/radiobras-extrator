@@ -1092,6 +1092,20 @@ _GRUPOS_PENDENCIA = [
      "Nós", "A decisão passou e a anexação foi barrada. Conferir se o exame é do convênio."),
     # Falha do robô/leitura (ex.: "gemini: ..." — caso SOPHIA, 27/07): é NOSSA,
     # vai para a fila técnica, não para a operação
+    # ANEXO CORROMPIDO (23/08, caso FABRICIO 196307916). Vem ANTES de falha_tecnica,
+    # que casaria pelo prefixo generico "gemini:" e mandaria a guia para o retry.
+    # 400 INVALID_ARGUMENT nao e instabilidade: e o servidor dizendo que o CONTEUDO
+    # enviado nao pode ser processado. Resistiu a Pillow, MuPDF e Gemini em QUATRO
+    # rodadas com o erro byte a byte identico — nenhuma re-tentativa conserta um
+    # arquivo. Vai para Conferencia porque os arquivos JA ESTAO na pasta da guia:
+    # navegador e muito mais tolerante que as nossas bibliotecas, e se estiver mesmo
+    # corrompido a pessoa ve isso em dois segundos e pede reenvio a clinica.
+    ("anexo_corrompido",
+     r"INVALID_ARGUMENT|Unable to process input image",
+     "Conferência", "O robô não conseguiu ler os anexos do prontuário — os arquivos "
+     "parecem corrompidos (nem o leitor de imagem nem o de PDF abriram). Eles estão "
+     "no bloco 📎 Arquivos desta guia: abrir e conferir. Se der para ler, anexar à "
+     "mão; se estiver mesmo corrompido, pedir à clínica que reenvie o pedido."),
     ("falha_tecnica", r"\bgemini\s*:|falha t[ée]cnica|leitura indispon[íi]vel"
      r"|leitura autom[áa]tica ficou indispon|cr[ée]ditos da API",
      "Nós", "Falha nossa (robô/leitura), não do documento. Rodar o dia de novo "
@@ -1171,6 +1185,11 @@ _NOSSO = "Nós"   # responsavel cujas pendencias vao para a FILA TECNICA
 # Diz se uma falha e infra transitoria (o loop retenta sozinho), esperando algo
 # EXTERNO (pendencia, sem retry) ou de LOGICA (conserto/leitura, NAO retry cego).
 # Regra: o loop de retry SO retenta 'transitorio'.
+# Conteudo que o servidor recusa NAO e transitorio: re-tentar nao conserta arquivo.
+# Testado no FABRICIO (196307916), 4 rodadas com o erro identico (23/08).
+_CONTEUDO_INVALIDO_RE = __import__("re").compile(
+    r"INVALID_ARGUMENT|Unable to process input image", __import__("re").I)
+
 _TRANSITORIO_RE = __import__("re").compile(
     r"gemini\s*:|UNAVAILABLE|time.?out|timed out|net::|ERR_|tunnel|"
     r"context was destroyed|translate host|throttl|rate.?limit|TE-BFF-GTO|"
@@ -1205,6 +1224,8 @@ def classe_retry(motivo: str, categoria: str = "") -> str:
     responsavel Radiologista/Clinica/Cadastro. Resto = logica (nome/ilegivel/
     revisao/desconhecido) — precisa conserto ou humano, nunca retry cego."""
     m = str(motivo or "")
+    if _CONTEUDO_INVALIDO_RE.search(m):
+        return "logica"          # arquivo corrompido: precisa de olho humano
     if _TRANSITORIO_RE.search(m):
         return "transitorio"
     _chave, quem, _acao = classificar_pendencia(m, categoria)
@@ -1259,7 +1280,7 @@ def so_o_prenome_difere(nome_guia, nome_lido) -> bool:
 
 # Chaves que, mesmo com categoria 'erro', NAO sao falha nossa: o texto ja nomeia
 # uma causa que nenhuma re-tentativa resolve.
-_ERRO_MAS_DE_TERCEIRO = ("paciente_nao_achado",)
+_ERRO_MAS_DE_TERCEIRO = ("paciente_nao_achado", "anexo_corrompido")
 
 
 def eh_nosso(motivo: str, categoria: str = "") -> bool:
