@@ -232,6 +232,10 @@ def _get_json_com_retry(sess, url, timeout=25, tentativas=6, _sleep=time.sleep):
     return None, falha
 
 
+_GERACAO = {"JUNIOR", "JR", "FILHO", "NETO", "SOBRINHO", "SEGUNDO",
+            "TERCEIRO", "NETA", "FILHA"}
+
+
 def _nomes_compat(lido: str, alvo: str) -> bool:
     """Casa o nome LIDO na solicitação com o nome-ALVO (da GTO) por TOKENS, não por
     substring (evita 'ANA' casar 'ANA PAULA'). Exige >=2 tokens significativos em
@@ -246,6 +250,16 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
     if not ta or not tb:
         return False
     sa, sb = set(ta), set(tb)
+    # MARCADOR DE GERACAO (23/08, caso HELIO DE SOUZA OLIVEIRA x HELIO DE SOUZA
+    # OLIVEIRA JUNIOR — accessions 40343833/34/35 no PRORADIS, guia 196348961).
+    # 'JUNIOR' nao e um sobrenome a mais: e o que distingue PAI de FILHO. A regra
+    # "menor totalmente contido no maior" casava os dois, e as duas pessoas dividem
+    # o nome INTEIRO — o engano e mais facil que no caso JOCASTA, nao menos.
+    # So dispara quando o marcador esta de UM lado so: 'X SOBRINHO' contra
+    # 'X SOBRINHO' segue casando. Custo medido antes de apertar: 4135 itens ja
+    # faturados, ZERO com essa divergencia.
+    if bool(_GERACAO & sa) != bool(_GERACAO & sb):
+        return False
     comuns = sa & sb
     if not comuns:
         return False                     # nenhum token identico: nao e a pessoa
