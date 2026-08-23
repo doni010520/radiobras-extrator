@@ -202,15 +202,37 @@ def _parse_worklist_html(raw_html: str, by_acc: dict) -> None:
             continue
         acc = acc_m.group(1)
 
-        cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+        # O PACIENTE e o 1o `.wrap-name` da linha — NAO "o maior texto".
+        #
+        # Bug medido em 23/08 sobre 300 linhas reais de 3 dias: 59 delas (19,7%)
+        # saiam com o nome ERRADO. A linha tem TRES celulas `.wrap-name` —
+        # paciente, solicitante e uma vazia — e o nome do DENTISTA costuma ser mais
+        # longo que o do paciente, entao a heuristica "maior texto" pegava o
+        # dentista:
+        #     td[08] .wrap-name  HOSANA BARRETO DOS SANTOS     (25)  <- paciente
+        #     td[12] .wrap-name  ENEIAS PEREIRA DA SILVA NETO  (28)  <- dentista
+        # Consequencia real: a guia 196346585 (18/08, R$ 49,79) morreu como
+        # "paciente nao foi encontrado no PRORADIS" enquanto o exame estava la,
+        # com laudo, no accession 40343815 — a esteira procurava "HOSANA" numa
+        # lista que dizia "ENEIAS". Mesmo efeito em DILMA->SUELY, ANAILDES->SUS SEM
+        # IDENTIFICACAO, JESSICA->LUCIO PAULO.
         nome = ""
-        for c in cells:
-            if (
-                re.match(r"^[A-ZÁÂÃÉÊÍÓÔÕÚÇ ]{10,55}$", c)
-                and not _BAD_RE.search(c)
-                and len(c) > len(nome)
-            ):
-                nome = c
+        for el in tr.select("td .wrap-name"):
+            t = re.sub(r"\s+", " ", el.get_text(" ", strip=True)).strip()
+            if t:                      # a 3a celula vem VAZIA na estrutura real
+                nome = t
+                break
+        if not nome:
+            # Rede de seguranca para o dia em que o SmartRIS mudar o HTML: sem a
+            # ancora, vale o comportamento anterior — erra as vezes, mas nao quebra.
+            cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+            for c in cells:
+                if (
+                    re.match(r"^[A-ZÁÂÃÉÊÍÓÔÕÚÇ ]{10,55}$", c)
+                    and not _BAD_RE.search(c)
+                    and len(c) > len(nome)
+                ):
+                    nome = c
 
         if acc not in by_acc:
             by_acc[acc] = {"accession": acc, "nome": nome or acc, "rows_html": []}
