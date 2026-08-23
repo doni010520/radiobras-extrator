@@ -184,3 +184,66 @@ def test_sem_extensao_e_sem_assinatura_ai_sim_recusa():
 def test_extensao_desconhecida_e_sem_assinatura_recusa():
     mime, _ = preparar_anexo("arquivo.xyz", b"lixo" * 50)
     assert mime is None
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ULTIMO RECURSO: renderizar com PyMuPDF.
+#
+# Caso FABRICIO DOS SANTOS SOUZA NASCIMENTO (196307916, 410923, 18/08) — a unica
+# pendencia que ainda era NOSSA depois de tres rodadas. Os dois anexos do prontuario
+# dele sao ilegiveis pelos caminhos normais:
+#
+#     FABRICIO DOS SANTOS SOUZA120260818.jpg   Pillow nao abre
+#     FABRICIO DOS SANTOS SOUZA.pdf            sem '%PDF' nos primeiros 1024 bytes
+#
+# E ilegiveis um a um, nao so em lote: o resgate de leitura ja tinha sido tentado. O
+# lado do exame esta completo (6 arquivos no plano, laudos inclusive) — so o PEDIDO
+# nao pode ser lido, e por isso a guia caia em falha tecnica e ficava presa.
+#
+# O MuPDF e muito mais tolerante que uma checagem de assinatura: ele VARRE o arquivo
+# atras da estrutura em vez de exigir o cabecalho no byte 0, e abre varios formatos
+# de imagem que o Pillow recusa. Renderizando a primeira pagina para PNG, o Gemini
+# recebe algo que ele sabe ler.
+#
+# Fica como ULTIMO recurso, depois da assinatura e do Pillow: quando o caminho normal
+# funciona, mandar o original e melhor (sem perda de resolucao, sem custo de render).
+# ══════════════════════════════════════════════════════════════════════════
+
+def _pdf_valido():
+    import fitz
+    d = fitz.open()
+    pg = d.new_page()
+    pg.insert_text((72, 72), "SOLICITACAO DE EXAMES")
+    return d.tobytes()
+
+
+def test_pdf_sem_assinatura_no_inicio_e_renderizado():
+    """O caso FABRICIO: PDF real, mas com lixo antes do cabecalho."""
+    b = b"\x00" * 2048 + _pdf_valido()
+    mime, blob = preparar_anexo("FABRICIO DOS SANTOS SOUZA.pdf", b)
+    assert mime in ("application/pdf", "image/png"), mime
+    assert blob
+
+
+def test_pdf_valido_normal_nao_e_renderizado():
+    """Quando o caminho normal funciona, manda o original — sem perda nem custo."""
+    b = _pdf_valido()
+    mime, blob = preparar_anexo("solic.pdf", b)
+    assert mime == "application/pdf"
+    assert blob == b
+
+
+def test_render_devolve_imagem_que_o_gemini_le():
+    from esteira import _render_com_fitz
+    out = _render_com_fitz(_pdf_valido())
+    assert out and out[:4] == bytes([0x89]) + b"PNG"
+
+
+def test_render_de_lixo_devolve_None():
+    from esteira import _render_com_fitz
+    assert _render_com_fitz(b"nao sou documento nenhum" * 30) is None
+
+
+def test_render_de_vazio_devolve_None():
+    from esteira import _render_com_fitz
+    assert _render_com_fitz(b"") is None

@@ -1354,6 +1354,46 @@ def _reencoda(blob):
         return None
 
 
+def _render_com_fitz(blob):
+    """PNG da 1a pagina, via MuPDF — ou None. ULTIMO recurso de leitura.
+
+    Caso FABRICIO (196307916): os dois anexos do prontuario sao ilegiveis pelos
+    caminhos normais — um .jpg que o Pillow nao abre e um .pdf sem '%PDF' nos
+    primeiros 1024 bytes — e ilegiveis tambem um a um, nao so em lote. O lado do
+    exame estava completo; so o PEDIDO nao podia ser lido, e a guia ficava presa em
+    falha tecnica.
+
+    O MuPDF VARRE o arquivo atras da estrutura em vez de exigir o cabecalho no byte
+    0, e abre formatos de imagem que o Pillow recusa. Renderizando, o Gemini recebe
+    algo que ele sabe ler.
+
+    Fica DEPOIS da assinatura e do Pillow de proposito: quando o caminho normal
+    funciona, mandar o original e melhor — sem perda de resolucao e sem custo de
+    render."""
+    if not blob:
+        return None
+    try:
+        import fitz
+    except Exception:
+        return None
+    for _tipo in (None, "pdf"):
+        try:
+            doc = (fitz.open(stream=blob, filetype=_tipo) if _tipo
+                   else fitz.open(stream=blob))
+            try:
+                if doc.page_count < 1:
+                    continue
+                # 200 dpi: o pedido do dentista e manuscrito e a leitura precisa da
+                # letra; abaixo disso o Gemini perde tracado fino.
+                pix = doc.load_page(0).get_pixmap(dpi=200)
+                return pix.tobytes("png")
+            finally:
+                doc.close()
+        except Exception:
+            continue
+    return None
+
+
 def preparar_anexo(filename, blob):
     """(mime, blob) pronto para o Gemini, ou (None, motivo) se não dá.
 
@@ -1398,6 +1438,10 @@ def preparar_anexo(filename, blob):
     # SILENCIOSA de anexo: o FABRICIO foi de cand=2 para cand=0, com um .pdf
     # recusado como "formato nao suportado". Se o arquivo for mesmo ilegivel, o
     # resgate isola ele sozinho e a guia segue com os outros.
+    # ULTIMO RECURSO: renderizar com o MuPDF (ver _render_com_fitz).
+    _png = _render_com_fitz(blob)
+    if _png:
+        return "image/png", _png
     if ext in _MIME_DIRETO:
         return _MIME_DIRETO[ext], blob
     return None, f"formato .{ext or '?'} não suportado ou arquivo corrompido"
