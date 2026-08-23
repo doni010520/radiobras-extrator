@@ -1531,6 +1531,42 @@ def pendencia_arquivos_zip(pid):
                      mimetype="application/zip")
 
 
+@app.route("/tecnico")
+def tecnico_page():
+    """FILA TÉCNICA — a tela do DONO, separada da tela da operação.
+
+    Regra dele (22/08): falha de sistema não aparece pro pessoal da RadioBras. O
+    `/pendencias` e o `/relatorios/pendencias` são deles; esta é dele. Os alertas do
+    WhatsApp apontam para cá — antes apontavam para a tela da operação, e ele caía no
+    meio das pendências da Andrea tendo que caçar a seção técnica (feedback 23/08)."""
+    if not _admin_ok():
+        return ("Acesso restrito — esta tela é da fila técnica.", 403)
+    import notificador
+    itens = db.listar_pendencias(status="abertas")
+    uniq = {}
+    for p in itens:
+        uniq[(p.get("conta"), p.get("dia"), p.get("gto"))] = p
+    nossas = [p for p in uniq.values()
+              if db.eh_nosso(p.get("motivo") or "", p.get("categoria") or "")]
+    _tent = db.tentativas_por_gtos([p.get("gto") for p in nossas])
+    grupos = {}
+    for p in nossas:
+        p["unidade"] = _plano_nome(p.get("conta"))
+        p["causa"] = notificador._resumir_causa(p.get("motivo"))
+        p["tentativas"] = _tent.get(str(p.get("gto")), 0)
+        p["esgotada"] = db.classe_efetiva(p.get("motivo") or "",
+                                          p.get("categoria") or "",
+                                          p["tentativas"]) == "esgotado"
+        grupos.setdefault(p["causa"], []).append(p)
+    lista = sorted(grupos.items(), key=lambda kv: -len(kv[1]))
+    for _causa, gs in lista:
+        gs.sort(key=lambda x: (x.get("dia") or "", x.get("gto") or ""))
+    return render_template("tecnico.html", grupos=lista, total=len(nossas),
+                           esgotadas=sum(1 for p in nossas if p["esgotada"]),
+                           pausado=db.retry_pausado(),
+                           pausa=db.retry_pausa_info())
+
+
 @app.route("/pendencias/<int:pid>/resolver", methods=["POST"])
 def pendencias_resolver(pid):
     obs = (request.form.get("obs") or (request.json.get("obs") if request.is_json else None)) if (request.form or request.is_json) else None

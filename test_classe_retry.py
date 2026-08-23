@@ -31,10 +31,17 @@ def test_esperando_externo_nunca_retenta():
 
 
 def test_logica_precisa_conserto_ou_leitura():
-    # nome não bate (mãe/responsável), pedido ilegível, revisão humana -> lógica
-    assert classe_retry("nenhum documento do prontuário está no nome deste paciente") == "logica"
+    # pedido ilegível, revisão humana -> lógica (precisa de humano, nunca retry cego)
     assert classe_retry("a caligrafia do pedido está ilegível") == "logica"
     assert classe_retry("revisão humana") == "logica"
+
+
+def test_nome_nao_bate_e_EXTERNO_desde_23_08():
+    """Mudou com evidencia: o prontuario da HOSANA tinha pedido de 'GLADYS FREITAS
+    DOS SANTOS' (o texto diz "Para Sr(a): GLADYS...", nascimento 12/11/1972). E
+    documento de OUTRA PESSOA — re-tentar nao faz a clinica anexar o pedido certo.
+    O caso de erro de leitura do PRENOME saiu para `prenome_mal_lido`."""
+    assert classe_retry("nenhum documento do prontuário está no nome deste paciente") == "externo"
 
 
 def test_homonimo_mesmo_dia_e_conferencia_nao_nosso():

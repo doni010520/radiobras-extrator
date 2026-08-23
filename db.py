@@ -990,6 +990,15 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
 # A ordem importa: o primeiro padrão que casar vence, então o mais específico vem
 # antes. Cada grupo carrega a AÇÃO — quem lê não precisa deduzir o que fazer.
 _GRUPOS_PENDENCIA = [
+    # PRENOME MAL LIDO (23/08): todos os sobrenomes batem e so o primeiro nome
+    # difere — ANETE ANDRADE DE MATTOS lida como 'Plunet Andrade de Mattos'. E
+    # leitura, nao documento de terceiro. Vem ANTES de nome_nao_bate, que mandaria
+    # "solicite a clinica o pedido correto" de um pedido que ja esta la.
+    ("prenome_mal_lido", r"TODOS OS SOBRENOMES BATEM|erro de leitura do prenome",
+     "Conferência", "O pedido provavelmente É deste paciente — só o primeiro nome "
+     "saiu errado na leitura. Abrir a solicitação no prontuário, conferir o nome "
+     "com os próprios olhos e, se for dele, confirmar aqui para liberar o "
+     "faturamento. Se for de outra pessoa, não anexar nada."),
     # MODELO sem render (22/08): a guia de MODELO nao tem laudo por definicao — o
     # entregavel e o render 3D. Vem ANTES de sem_entregavel, que mandaria "cobrar a
     # emissao do laudo" de um exame que nunca tera laudo.
@@ -1044,10 +1053,19 @@ _GRUPOS_PENDENCIA = [
      "Conferência", "O pedido é do paciente e cobre a guia, mas está com data "
      "antiga e o robô não conseguiu ajustar. Conferir na Revisão e anexar "
      "manualmente (ou pedir pedido novo)."),
+    # DOCUMENTO DE OUTRA PESSOA. Responsavel virou CLINICA em 23/08, depois de
+    # verificar caso a caso: o prontuario da HOSANA BARRETO DOS SANTOS tinha pedido
+    # de 'GLADYS FREITAS DOS SANTOS' — o proprio texto diz "Para Sr(a): GLADYS
+    # FREITAS DOS SANTOS", nascimento 12/11/1972. Recusa CORRETA (caso JOCASTA).
+    # Marcada como 'Nos', a guia sumia do painel e ficava presa no retry para
+    # sempre, re-tentando o que nunca vai mudar sozinho. O que falta e a CLINICA
+    # anexar o pedido desta paciente. O caso de erro de leitura do prenome saiu
+    # daqui para `prenome_mal_lido` (Conferencia), que vem antes na tabela.
     ("nome_nao_bate", r"nenhum documento do prontu[áa]rio est[áa] no nome"
      r"|nenhum anexo com paciente compat",
-     "Nós", "O pedido pode ser do paciente e não estamos conseguindo provar. "
-     "Conferir no prontuário."),
+     "Clínica", "O prontuário só tem documento de OUTRO paciente — o pedido desta "
+     "pessoa não está lá. Pedir à clínica que anexe o pedido correto. Nunca anexar "
+     "documento de terceiro: gera glosa."),
     ("guia_ilegivel", r"n[ãa]o conseguiu ler quais exames a guia autoriza|GTO ileg[íi]vel"
      r"|sem exames de refer[êe]ncia",
      "Nós", "Não lemos o que a guia autoriza. Abrir a guia no portal e conferir."),
@@ -1138,6 +1156,44 @@ def classe_retry(motivo: str, categoria: str = "") -> str:
     if quem in ("Radiologista", "Clínica", "Cadastro"):
         return "externo"
     return "logica"
+
+
+_CONECTIVOS = {"DE", "DA", "DO", "DAS", "DOS", "E"}
+
+
+def _tokens_nome(t) -> list:
+    """Tokens significativos do nome: sem acento, maiusculo, sem conectivos."""
+    import unicodedata
+    t = unicodedata.normalize("NFKD", str(t or ""))
+    t = "".join(c for c in t if not unicodedata.combining(c)).upper()
+    t = __import__("re").sub(r"[^A-Z ]+", " ", t)
+    return [x for x in t.split() if x and x not in _CONECTIVOS]
+
+
+def so_o_prenome_difere(nome_guia, nome_lido) -> bool:
+    """Todos os SOBRENOMES sao identicos e so o PRENOME difere?
+
+    Serve para separar duas coisas que hoje caem no mesmo balde `nome_nao_bate`:
+
+      A) leitura do prenome falhou — ANETE ANDRADE DE MATTOS lido como
+         'Plunet Andrade de Mattos'; CASSIANA DOS SANTOS NASCIMENTO lido como
+         'Camara dos Santos Nascimento'. Precisa de OLHO HUMANO (Conferencia).
+      B) documento de OUTRA PESSOA — HOSANA BARRETO DOS SANTOS com pedido de
+         'GLADYS FREITAS DOS SANTOS' (verificado: o texto diz "Para Sr(a): GLADYS
+         FREITAS DOS SANTOS", nascimento 12/11/1972). Recusa CORRETA; o que falta e
+         a clinica anexar o pedido desta paciente.
+
+    Exige 2+ sobrenomes iguais: com um so, 'JOAO SILVA' x 'PEDRO SILVA' passariam e
+    metade do Brasil casaria.
+
+    ISTO NAO AFROUXA O GATE DE IDENTIDADE. Nenhum documento passa a ser aceito por
+    causa desta funcao — ela so decide o TEXTO e o DONO da pendencia."""
+    a, b = _tokens_nome(nome_guia), _tokens_nome(nome_lido)
+    if len(a) < 3 or len(b) < 3:
+        return False                  # precisa de prenome + 2 sobrenomes
+    if a[1:] != b[1:]:
+        return False                  # algum sobrenome difere -> outra pessoa
+    return a[0] != b[0]               # iguais em tudo = nao e caso desta regra
 
 
 def eh_nosso(motivo: str, categoria: str = "") -> bool:
@@ -1514,6 +1570,7 @@ def retries_devidos(limite: int = 50) -> list:
 
 
 _TITULO_GRUPO = {
+    "prenome_mal_lido": "Só o primeiro nome não bate — conferir",
     "modelo_sem_render": "Modelo sem o render 3D gerado",
     "esperando_analise": "Esperando o laudo da análise cefalométrica",
     "sem_entregavel": "Exame sem laudo e sem imagem",

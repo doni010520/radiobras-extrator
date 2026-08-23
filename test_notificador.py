@@ -102,17 +102,27 @@ def test_aborto_diz_o_dia_a_unidade_e_o_erro(monkeypatch):
     assert "não faturou" in t.lower() or "nao faturou" in t.lower()
 
 
-def test_resumo_da_rodada_lista_as_guias(monkeypatch):
+def test_resumo_da_rodada_agrupa_por_causa(monkeypatch):
+    """Reescrito em 23/08 com o feedback do dono ("os alertas estao confusos").
+
+    O contrato mudou: em vez de listar cada guia com o texto INTERNO do robo — 8
+    guias com a mesma causa viravam 8 paragrafos —, a mensagem diz a unidade pelo
+    NOME, agrupa por causa e informa se ele precisa agir."""
     _configura(monkeypatch)
     espia = _Espia()
-    notificador.avisar_falhas_da_rodada("18/08/2026", "388336", [
-        {"gto": "195831154", "paciente": "ALESSANDRA", "motivo": "gemini: 503"},
-        {"gto": "195904169", "paciente": "RAFAELA", "motivo": "anexação falhou"},
+    notificador.avisar_falhas_da_rodada("18/08/2026", "397950", [
+        {"gto": "196329949", "paciente": "MATHEUS BRAGA DOS SANTOS",
+         "motivo": "anexação falhou: Linha da GTO 196329949 não encontrada."},
+        {"gto": "196350383", "paciente": "ANITA LOPES BISPO",
+         "motivo": "anexação falhou: Linha da GTO 196350383 não encontrada."},
     ], _post=espia)
     t = espia.chamadas[0]["payload"]["text"]
-    assert "195831154" in t and "195904169" in t
-    assert "ALESSANDRA" in t and "RAFAELA" in t
-    assert "2" in t                      # diz quantas
+    assert "Tancredo" in t                 # unidade por NOME, nao '397950'
+    assert "2" in t                        # quantas
+    assert "o portal não abriu a guia" in t  # a causa, em portugues
+    assert t.count("o portal não abriu a guia") == 1   # agrupada, nao repetida
+    assert "Linha da GTO" not in t         # nada de texto interno do robo
+    assert "não precisa fazer nada" in t   # diz se ele levanta da cama ou nao
 
 
 def test_resumo_vazio_nao_manda_mensagem(monkeypatch):
@@ -123,13 +133,30 @@ def test_resumo_vazio_nao_manda_mensagem(monkeypatch):
     assert espia.chamadas == []
 
 
-def test_esgotou_e_escalacao_explicita(monkeypatch):
+def test_esgotou_diz_o_que_e_e_pede_acao(monkeypatch):
+    """A UNICA mensagem que pede acao dele. Tem que dizer quem, onde, por que e
+    quantas vezes — sem despejar o texto interno."""
     _configura(monkeypatch)
     espia = _Espia()
-    notificador.avisar_esgotou("195831154", "ALESSANDRA", "18/08/2026", "388336",
-                               "gemini: 503 UNAVAILABLE", tentativas=6, _post=espia)
+    notificador.avisar_esgotou("195831154", "ALESSANDRA", "18/08/2026", "397950",
+                               "Jwt is expired", tentativas=6, _post=espia)
     t = espia.chamadas[0]["payload"]["text"]
-    assert "195831154" in t
-    # tem que ficar claro que o try again ACABOU e agora depende de mim
-    assert "não recuperou" in t.lower() or "nao recuperou" in t.lower()
+    assert "195831154" in t and "ALESSANDRA" in t
+    assert "Tancredo" in t
+    assert "o acesso ao portal venceu" in t     # causa traduzida
     assert "6" in t
+    assert "precisa de você" in t.lower()
+    assert "Jwt" not in t                       # sem jargao
+
+
+def test_link_aponta_para_a_tela_DELE(monkeypatch):
+    """O link ia para /relatorios/pendencias — a tela da OPERACAO. O dono caia no
+    meio das pendencias da Andrea e tinha que cacar a secao tecnica. Agora vai para
+    /tecnico, que e so dele."""
+    _configura(monkeypatch, APP_BASE_URL="https://radiobras.benitechlab.com")
+    espia = _Espia()
+    notificador.avisar_esgotou("1", "X", "18/08/2026", "397950", "gemini: 503",
+                               tentativas=6, _post=espia)
+    t = espia.chamadas[0]["payload"]["text"]
+    assert "/tecnico" in t
+    assert "/relatorios/pendencias" not in t

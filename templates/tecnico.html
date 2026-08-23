@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fila técnica</title>
+{% include '_head.html' %}
+{#
+  A TELA DO DONO. Regra dele (22/08): falha de sistema não aparece para o pessoal da
+  RadioBras — eles não têm o que fazer com bug nosso. /pendencias e
+  /relatorios/pendencias são deles; esta é dele, e os alertas do WhatsApp apontam
+  para cá. Antes apontavam para a tela da operação, e ele caía no meio das
+  pendências da Andrea tendo que caçar a seção técnica (feedback de 23/08).
+#}
+<style>
+  .tec-cab{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  .tec-cab h1{margin:0;font-size:20px}
+  .tec-sub{color:#6b7684;font-size:13px;margin-bottom:18px;max-width:70ch;line-height:1.5}
+  .tec-cards{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+  .tec-card{border:1px solid #e3e8ee;border-radius:8px;padding:10px 16px;background:#fff;min-width:120px}
+  .tec-card .n{font-size:22px;font-weight:600}
+  .tec-card .l{font-size:12px;color:#6b7684}
+  .tec-card.alerta{border-color:#d9534f;background:#fff6f5}
+  .tec-card.alerta .n{color:#c9302c}
+  .tec-pausa{border:1px solid #e6b800;background:#fffbe6;border-radius:8px;
+             padding:10px 14px;margin-bottom:18px;font-size:13px}
+  .causa{margin:0 0 18px;border:1px solid #e3e8ee;border-radius:8px;overflow:hidden}
+  .causa > header{background:#f6f8fa;padding:9px 14px;display:flex;
+                  justify-content:space-between;align-items:center;gap:10px}
+  .causa h2{margin:0;font-size:14px;font-weight:600}
+  .causa .cnt{font-size:12px;color:#6b7684;white-space:nowrap}
+  table.tec{width:100%;border-collapse:collapse;font-size:13px}
+  table.tec th{text-align:left;font-weight:600;color:#6b7684;font-size:11px;
+               text-transform:uppercase;padding:7px 14px;border-bottom:1px solid #eef2f6}
+  table.tec td{padding:8px 14px;border-bottom:1px solid #f2f5f8;vertical-align:top}
+  table.tec tr:last-child td{border-bottom:0}
+  .gto{font-family:ui-monospace,Menlo,Consolas,monospace}
+  .tent{color:#6b7684}
+  .pill-esg{background:#fdecea;color:#c9302c;border-radius:10px;padding:1px 8px;font-size:11px}
+  .pill-ok{background:#eef7f1;color:#0f7a4f;border-radius:10px;padding:1px 8px;font-size:11px}
+  .vazio{color:#6b7684;padding:26px 0;font-size:14px}
+  body{margin:0;background:var(--rb-bg);color:var(--rb-fg)}
+  .wrap{max-width:1040px;margin:0 auto;padding:24px 16px}
+</style>
+</head>
+<body>
+{% include '_topnav.html' %}
+<div class="wrap">
+
+<div class="tec-cab">
+  <h1>🔧 Fila técnica</h1>
+  <span class="tec-sub" style="margin:0">só você vê esta tela</span>
+</div>
+<p class="tec-sub">
+  Guias que <b>não faturaram por problema nosso</b> — robô, portal, leitura, rede.
+  Não aparecem para o pessoal da RadioBras: eles não têm o que fazer com bug nosso,
+  e pedir documento novo à clínica seria trabalho jogado fora, porque o documento
+  certo já está lá.
+</p>
+
+<div class="tec-cards">
+  <div class="tec-card"><div class="n">{{ total }}</div><div class="l">guias na fila</div></div>
+  <div class="tec-card {{ 'alerta' if esgotadas }}">
+    <div class="n">{{ esgotadas }}</div><div class="l">o retry desistiu</div>
+  </div>
+  <div class="tec-card"><div class="n">{{ grupos|length }}</div><div class="l">causas distintas</div></div>
+</div>
+
+{% if pausado %}
+<div class="tec-pausa">
+  ⏸ <b>Retry pausado</b> — o disjuntor detectou falha geral e parou a fila para não
+  queimar as tentativas das guias.
+  {% if pausa and pausa.motivo %}<br><span style="color:#6b7684">Motivo: {{ pausa.motivo[:180] }}</span>{% endif %}
+  {% if pausa and pausa.ate %}<br><span style="color:#6b7684">Volta sozinho às {{ pausa.ate.strftime('%H:%M') }}.</span>{% endif %}
+</div>
+{% endif %}
+
+{% if not grupos %}
+  <div class="vazio">✅ Nada na fila técnica. Todas as falhas nossas foram resolvidas.</div>
+{% endif %}
+
+{% for causa, itens in grupos %}
+<section class="causa">
+  <header>
+    <h2>{{ causa }}</h2>
+    <span class="cnt">{{ itens|length }} guia{{ 's' if itens|length != 1 }}</span>
+  </header>
+  <table class="tec">
+    <tr><th>Guia</th><th>Paciente</th><th>Unidade</th><th>Dia</th><th>Tentativas</th></tr>
+    {% for p in itens %}
+    <tr>
+      <td class="gto">{{ p.gto }}</td>
+      <td>{{ p.paciente or '—' }}</td>
+      <td>{{ p.unidade }}</td>
+      <td>{{ p.dia }}</td>
+      <td class="tent">
+        {{ p.tentativas }}
+        {% if p.esgotada %}<span class="pill-esg">desistiu</span>
+        {% else %}<span class="pill-ok">re-tentando</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endfor %}
+</div>
+</body>
+</html>

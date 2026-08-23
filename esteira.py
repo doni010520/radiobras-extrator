@@ -1314,6 +1314,25 @@ def _consulta_inicial(pg, data, tentativas: int = 3, _sleep=None) -> tuple:
     return False, erro
 
 
+def _prenome_provavelmente_mal_lido(leituras, nome_guia) -> bool:
+    """Algum nome lido nos anexos bate com o da guia em TODOS os sobrenomes,
+    diferindo so no prenome? Ver db.so_o_prenome_difere para o porque."""
+    try:
+        import db as _db
+    except Exception:
+        return False
+    for l in (leituras or []):
+        lido = ""
+        if isinstance(l, dict):
+            # a mesma chave que _ha_leitura_no_nome usa
+            lido = l.get("paciente_lido") or l.get("paciente") or l.get("nome") or ""
+        else:
+            lido = str(l or "")
+        if lido and _db.so_o_prenome_difere(nome_guia, lido):
+            return True
+    return False
+
+
 def _entregavel_faltando(dispensa_laudo, nomes) -> bool:
     """Falta o ENTREGAVEL desta guia? Dispensar laudo NAO dispensa entregavel.
 
@@ -2200,6 +2219,24 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                             "ilegível ou pede exame diferente do que a guia autoriza. "
                             "O QUE FAZER: abrir o prontuário, conferir a solicitação e, "
                             "se ela cobrir o exame da guia, anexar à mão.")
+                    elif _prenome_provavelmente_mal_lido(leituras, pac["nome"]):
+                        # Todos os SOBRENOMES batem e so o PRENOME difere: e leitura
+                        # do prenome que falhou, nao documento de terceiro. Casos
+                        # medidos em 23/08: ANETE ANDRADE DE MATTOS lido como
+                        # 'Plunet Andrade de Mattos'; CASSIANA DOS SANTOS NASCIMENTO
+                        # lido como 'Camara dos Santos Nascimento'.
+                        # NADA e aceito automaticamente — o gate de identidade segue
+                        # recusando. So o TEXTO e o DONO da pendencia mudam, para ela
+                        # virar acao de alguem em vez de ficar presa no retry.
+                        _motivo = (
+                            "NÃO FATUROU porque o nome lido no pedido não bate com o da "
+                            "guia — mas TODOS OS SOBRENOMES BATEM e só o primeiro nome "
+                            "difere, o que é a cara de erro de leitura do prenome (letra "
+                            "de médico, carimbo borrado). O documento provavelmente É "
+                            "deste paciente. O QUE FAZER: abrir a solicitação no "
+                            "prontuário e conferir o nome com os próprios olhos; se for "
+                            "mesmo deste paciente, confirmar aqui na tela para liberar o "
+                            "faturamento. Se o nome for de OUTRA pessoa, não anexar nada.")
                     else:
                         _motivo = (
                             "NÃO FATUROU porque nenhum documento do prontuário está no nome "

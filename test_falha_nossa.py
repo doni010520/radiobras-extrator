@@ -10,7 +10,13 @@ _NOME_NAO_BATE = "nenhum documento do prontuário está no nome deste paciente"
 _GUIA_ILEGIVEL = "o robô não conseguiu ler quais exames a guia autoriza"
 _ANEXACAO = "a anexação falhou no envio ao portal"
 _GEMINI = "gemini: 503 UNAVAILABLE"
-_NOSSAS = (_NOME_NAO_BATE, _GUIA_ILEGIVEL, _ANEXACAO, _GEMINI)
+# _NOME_NAO_BATE SAIU desta lista em 23/08. Verificado caso a caso: o prontuario
+# da HOSANA BARRETO DOS SANTOS tinha pedido de 'GLADYS FREITAS DOS SANTOS' — o
+# texto diz "Para Sr(a): GLADYS FREITAS DOS SANTOS", nascimento 12/11/1972. E
+# documento de OUTRA PESSOA e a recusa esta certa (caso JOCASTA); o que falta e a
+# CLINICA anexar o pedido. Como 'nossa', a guia sumia do painel e ficava presa no
+# retry re-tentando o que nunca muda sozinho. Ver test_nome_de_quem.py.
+_NOSSAS = (_GUIA_ILEGIVEL, _ANEXACAO, _GEMINI)
 
 
 def test_as_quatro_falhas_nossas_sao_nossas():
@@ -98,3 +104,11 @@ def test_falhas_de_sistema_do_print_da_andrea_ficam_fora_do_painel():
     for m in casos:
         assert eh_nosso(m, "") is True, m[:50]
         assert eh_pendencia_front(m, "") is False, m[:50]
+
+
+def test_nome_nao_bate_NAO_e_mais_nosso():
+    """Mudanca de 23/08 com evidencia: ver o docstring de _NOSSAS acima."""
+    from db import classificar_pendencia
+    assert eh_nosso(_NOME_NAO_BATE, "") is False
+    assert eh_pendencia_front(_NOME_NAO_BATE, "") is True
+    assert classificar_pendencia(_NOME_NAO_BATE, "")[1] == "Clínica"

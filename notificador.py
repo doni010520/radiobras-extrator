@@ -68,6 +68,61 @@ def enviar_whatsapp(texto: str, _post=None) -> bool:
     return enviou
 
 
+# ── deixar a mensagem legivel para quem le no celular as 6h ─────────────────
+# Feedback do dono (23/08), depois de 18 alertas: "esses alertas estao confusos, eu
+# nao estou entendendo muita coisa a partir deles". Os tres defeitos eram: unidade
+# como CODIGO (397950), oito guias com a MESMA causa viram oito paragrafos do texto
+# cru do robo, e nenhuma indicacao de se ele precisa levantar da cama ou nao.
+
+def _nome_unidade(conta) -> str:
+    """397950 -> 'RedeUna — Tancredo'. Codigo nao diz nada a quem le no celular."""
+    if not conta:
+        return "?"
+    try:
+        from config import PLANOS
+        p = PLANOS.get(str(conta))
+        return (p or {}).get("label") or str(conta)
+    except Exception:
+        return str(conta)
+
+
+# Causa em UMA linha, em portugues. A ordem importa: o primeiro que casa vence.
+_CAUSAS = [
+    ("o portal não abriu a guia", r"Linha da GTO .* n[ãa]o encontrada"),
+    ("o acesso ao portal venceu no meio da rodada", r"Jwt is expired|jwt.{0,6}expir"),
+    ("o proxy do OdontoPrev caiu", r"ProxyError|Max retries exceeded"),
+    ("o campo de upload não apareceu na guia", r"input\[type=file\].*n[ãa]o encontrado"),
+    ("a leitura dos documentos falhou", r"gemini\s*:|falha t[ée]cnica na leitura"),
+    ("a leitura ficou sem crédito", r"cr[ée]ditos da API|leitura autom[áa]tica ficou indispon"),
+    ("não deu para contar os anexos da guia", r"n[ãa]o consegui ler quantos anexos"),
+]
+
+
+def _resumir_causa(motivo) -> str:
+    """Uma linha dizendo O QUE aconteceu. Causa nao mapeada aparece como veio,
+    cortada — nunca inventar um resumo bonito para algo que nao entendi."""
+    import re as _re
+    m = str(motivo or "")
+    for rotulo, padrao in _CAUSAS:
+        if _re.search(padrao, m, _re.I):
+            return rotulo
+    return _re.sub(r"\s+", " ", m).strip()[:90]
+
+
+def _agrupar_por_causa(itens) -> list:
+    """[(causa, [guias])], maior grupo primeiro.
+
+    No incidente #613 foram 8 guias com a MESMA causa — viravam 8 paragrafos do
+    texto interno. Agrupadas, viram uma linha: "8 guias — o portal nao abriu a
+    guia"."""
+    por = {}
+    for i in (itens or []):
+        if not i:
+            continue
+        por.setdefault(_resumir_causa(i.get("motivo")), []).append(i)
+    return sorted(por.items(), key=lambda kv: -len(kv[1]))
+
+
 def _link(caminho: str) -> str:
     base = (os.environ.get("APP_BASE_URL") or "").rstrip("/")
     return (base + caminho) if base else ""
@@ -75,88 +130,75 @@ def _link(caminho: str) -> str:
 
 # ── as três mensagens ───────────────────────────────────────────────────────
 def avisar_aborto(dia: str, conta: str, erro: str, execucao_id=None, _post=None) -> bool:
-    """A execução MORREU inteira (login/proxy/Gemini fora) — o dia todo não faturou.
+    """A rodada MORREU inteira — o dia todo não faturou. Vai imediato.
+
     Este era o furo mais caro: sem pendência, sem fila e sem ninguém avisado, o dia
-    simplesmente não acontecia em silêncio. Vai IMEDIATO."""
-    linhas = ["🚨 *RadioBras — a rodada não terminou*",
+    simplesmente não acontecia em silêncio."""
+    linhas = ["🚨 *RadioBras — o dia não faturou*",
               "",
-              f"*Dia:* {dia}",
-              f"*Unidade:* {conta}",
+              f"{_nome_unidade(conta)} · dia {dia}",
               "",
-              "O dia *não faturou* — a execução abortou antes do fim.",
-              f"*Erro:* {str(erro or '')[:300]}"]
+              f"*O que houve:* {_resumir_causa(erro)}",
+              "",
+              "A rodada morreu antes do fim — nenhuma guia desse dia foi processada.",
+              "O robô vai tentar de novo sozinho."]
     if execucao_id:
         url = _link(f"/relatorios/execucao/{execucao_id}/log")
-        linhas.append("")
-        linhas.append(f"Log: {url}" if url else f"Execução #{execucao_id}")
-    linhas += ["", "O sistema vai tentar de novo sozinho."]
-    return enviar_whatsapp("\n".join(linhas), _post=_post)
+        linhas += ["", (f"Log: {url}" if url else f"Execução #{execucao_id}")]
+    return enviar_whatsapp(chr(10).join(linhas), _post=_post)
 
 
 def avisar_falhas_da_rodada(dia: str, conta: str, itens: list, _post=None) -> bool:
-    """UMA mensagem por rodada com as guias que falharam por problema nosso — não uma
-    por guia. Quando o proxy cai, 30 guias falham juntas: mensagem por guia viraria
-    enxurrada e o dono pararia de ler. Já estão todas na fila de retry."""
+    """UMA mensagem por rodada, agrupada por CAUSA.
+
+    Reescrita em 23/08 com o feedback do dono ("esses alertas estão confusos").
+    Antes: 8 guias com a mesma causa viravam 8 parágrafos do texto interno do robô,
+    a unidade era o código `397950` e não dizia se ele precisava fazer algo."""
     itens = [i for i in (itens or []) if i]
     if not itens:
         return False
     n = len(itens)
-    linhas = [f"⚠️ *RadioBras — {n} guia(s) com falha nossa*",
+    grupos = _agrupar_por_causa(itens)
+    linhas = [f"⚠️ *RadioBras — {n} guia(s) não faturaram*",
               "",
-              f"*Dia:* {dia}   *Unidade:* {conta}",
-              "Não é falta de documento — é problema do robô. A operação *não* vê "
-              "essas guias; o sistema já está re-tentando.",
-              ""]
-    for i in itens[:20]:
-        linhas.append(f"• *{i.get('gto') or '?'}* — {i.get('paciente') or '?'}")
-        linhas.append(f"  _{str(i.get('motivo') or '')[:110]}_")
-    if n > 20:
-        linhas.append(f"… e mais {n - 20}.")
-    url = _link("/relatorios/pendencias")
-    if url:
-        linhas += ["", f"Fila técnica: {url}"]
-    return enviar_whatsapp("\n".join(linhas), _post=_post)
-
-
-def avisar_pausa(motivo: str, guias: int, minutos: int, dia: str = "", conta: str = "",
-                 _post=None) -> bool:
-    """APAGÃO: o mundo caiu (proxy fora, login não passa). UMA mensagem — não uma por
-    guia. Em 22/08 a banda do proxy acabou e você recebeu 13 avisos em 2 minutos, um
-    por guia, cada um depois de queimar 6 tentativas. Esta mensagem substitui aquilo:
-    diz o que caiu, quantas guias foram poupadas e quando o robô tenta de novo."""
-    linhas = ["🛑 *RadioBras — parei o retry: falha geral*",
+              f"{_nome_unidade(conta)} · dia {dia}",
               "",
-              "Não é problema de guia nenhuma — é a infraestrutura.",
-              f"*O que houve:* {str(motivo or '')[:220]}"]
-    if dia or conta:
-        linhas.append(f"*Onde vi:* dia {dia or '?'}, unidade {conta or '?'}")
+              "*O que houve:*"]
+    for causa, guias in grupos:
+        linhas.append(f"• {len(guias)} — {causa}")
     linhas += ["",
-               f"*{guias} guia(s)* tiveram a tentativa DEVOLVIDA — não gastaram o "
-               f"orçamento de retry por causa disso.",
-               f"A fila fica parada por *{minutos} min* e volta sozinha. Se ainda "
-               f"estiver fora, paro de novo e te aviso.",
-               "",
-               "Nada foi anexado e nada se perdeu."]
-    url = _link("/relatorios/pendencias")
+               "*Você não precisa fazer nada agora:* o robô re-tenta sozinho.",
+               "A operação da RadioBras não vê nenhuma dessas guias."]
+    # nomes: ajudam a reconhecer, mas sem virar parede de texto
+    nomes = [str(i.get("paciente") or i.get("gto") or "?").split(" ")[0].title()
+             for i in itens]
+    vistos, curtos = set(), []
+    for x in nomes:
+        if x not in vistos:
+            vistos.add(x)
+            curtos.append(x)
+    if curtos:
+        linhas += ["", "_Pacientes: " + ", ".join(curtos[:6])
+                   + (f" (+{len(curtos) - 6})" if len(curtos) > 6 else "") + "_"]
+    url = _link("/tecnico")
     if url:
-        linhas += ["", f"Fila técnica: {url}"]
+        linhas += ["", f"Detalhe: {url}"]
     return enviar_whatsapp(chr(10).join(linhas), _post=_post)
 
 
 def avisar_esgotou(gto: str, paciente: str, dia: str, conta: str, motivo: str,
                    tentativas: int, _post=None) -> bool:
-    """O try again ACABOU e não recuperou. É a única classe que precisa de você —
-    e mesmo assim não volta pro painel do operador (ele não conserta bug nosso)."""
-    linhas = ["❗ *RadioBras — o retry não recuperou*",
+    """Desisti de uma guia. É a única mensagem que pede ação dele."""
+    linhas = ["❗ *RadioBras — desisti de uma guia*",
               "",
-              f"*Guia:* {gto}   *Paciente:* {paciente or '?'}",
-              f"*Dia:* {dia}   *Unidade:* {conta}",
-              f"*Tentativas:* {tentativas}",
+              f"*{paciente or 'paciente ?'}* · guia {gto}",
+              f"{_nome_unidade(conta)} · dia {dia}",
               "",
-              f"*Último erro:* {str(motivo or '')[:250]}",
+              f"*Motivo:* {_resumir_causa(motivo)}",
+              f"Tentei {tentativas} vezes ao longo de ~5 horas e não passou.",
               "",
-              "Essa precisa de você — o sistema já tentou tudo que podia."]
-    url = _link("/relatorios/pendencias")
+              "*Essa precisa de você* — o robô já fez tudo que podia."]
+    url = _link("/tecnico")
     if url:
-        linhas += ["", f"Fila técnica: {url}"]
-    return enviar_whatsapp("\n".join(linhas), _post=_post)
+        linhas += ["", f"Detalhe: {url}"]
+    return enviar_whatsapp(chr(10).join(linhas), _post=_post)

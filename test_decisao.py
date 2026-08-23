@@ -1988,8 +1988,11 @@ def test_falha_nossa_nao_vira_tarefa_da_operacao():
     ate ser resolvido, nao deve ir para pendencias'. Pedir pedido novo a clinica
     por causa de bug nosso e trabalho jogado fora — o documento certo ja esta la."""
     from db import classificar_pendencia
-    nossos = ["nenhum documento do prontuario esta no nome deste paciente",
-              "o sistema nao conseguiu ler quais exames a guia autoriza",
+    # 'nenhum documento no nome' SAIU daqui em 23/08: verificado que e documento
+    # de OUTRA pessoa (HOSANA tinha pedido de GLADYS FREITAS DOS SANTOS, com o
+    # texto 'Para Sr(a): GLADYS...' e nascimento 12/11/1972) -> pendencia da
+    # CLINICA, nao nossa. Ver test_nome_de_quem.py.
+    nossos = ["o sistema nao conseguiu ler quais exames a guia autoriza",
               "a anexacao falhou: nao sobrou nenhum laudo"]
     for m in nossos:
         assert classificar_pendencia(m)[1] == "Nós", m

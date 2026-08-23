@@ -61,7 +61,9 @@ def test_logica_nossa_agora_esgota():
     again. nome_nao_bate deixou de ser 'logica parada esperando humano' e entrou no
     loop — logo ela TAMBEM pode esgotar o teto. Antes ficava 'logica' pra sempre e,
     pior, aparecia no painel do operador."""
-    _NOME = "nenhum documento do prontuário está no nome"
-    assert classe_efetiva(_NOME, "sem_solicitacao", tentativas=0) == "logica"
-    assert classe_efetiva(_NOME, "sem_solicitacao",
+    # (era 'nome_nao_bate'; em 23/08 ele virou CLINICA — documento de outra pessoa
+    # nao se resolve re-tentando. Usa-se aqui outra logica NOSSA de verdade.)
+    _NOSSA = "o robô não conseguiu ler quais exames a guia autoriza"
+    assert classe_efetiva(_NOSSA, "guia", tentativas=0) == "logica"
+    assert classe_efetiva(_NOSSA, "guia",
                           tentativas=MAX_RETRIES_TRANSITORIO) == "esgotado"
