@@ -236,6 +236,38 @@ _GERACAO = {"JUNIOR", "JR", "FILHO", "NETO", "SOBRINHO", "SEGUNDO",
             "TERCEIRO", "NETA", "FILHA"}
 
 
+def _mesma_geracao(a: str, b: str) -> bool:
+    """'JUNIOR'/'FILHO'/'NETO' de UM lado so = pessoas diferentes (pai e filho).
+
+    ONDE ISTO VALE — e onde NAO vale (corrigido em 23/08, no mesmo dia em que foi
+    introduzido). O veto nasceu dentro de `_nomes_compat`, que parecia o lugar
+    natural. Nao era: `_nomes_compat` tambem governa o match do PACIENTE na worklist
+    do PRORADIS (esteira.py, _casam_por_paciente), e la um "nao bate" nao significa
+    "documento de outra pessoa" — significa "o paciente nao existe".
+
+    O estrago foi medido no proprio banco, mesma guia, mesmo dia: a GTO 196348961
+    (HELIO DE SOUZA OLIVEIRA; o PRORADIS cadastra 'HELIO DE SOUZA OLIVEIRA JUNIOR')
+    saiu de `sem_laudo` com 2 arquivos baixados — "o robo anexa sozinho assim que o
+    laudo sair" — para SEM_MATCH com zero arquivos. E virou beco sem saida: fora do
+    retry, sem botao de confirmar, e reprocessar depois que o laudo sair daria
+    SEM_MATCH de novo, para sempre.
+
+    A medicao que autorizou a mudanca ("4135 faturados, ZERO afetados") estava
+    errada: olhou so guias faturadas comparando com o nome lido no DOCUMENTO, e nao
+    cobria nem as pendencias abertas nem o match da worklist. Varrendo os 7317
+    execucao_itens aparecem 5 divergencias, 2 delas em guias FATURADAS — a GTO
+    195540484 (CARLOS ALBERTO CARVALHO DA SILVA JUNIOR, pedido lido sem o 'JUNIOR')
+    passaria a falhar.
+
+    Entao o veto fica SO no portao do DOCUMENTO (_escolher_solicitacao), que e onde
+    o risco real mora: aceitar como do paciente um pedido que e do pai ou do filho —
+    a familia JOCASTA. Achar o exame do paciente e outra pergunta, e recusar ali
+    nao protege ninguem: so esconde a guia."""
+    ta = {t for t in normaliza_nome(a).split() if t in _GERACAO}
+    tb = {t for t in normaliza_nome(b).split() if t in _GERACAO}
+    return ta == tb
+
+
 def _nomes_compat(lido: str, alvo: str) -> bool:
     """Casa o nome LIDO na solicitação com o nome-ALVO (da GTO) por TOKENS, não por
     substring (evita 'ANA' casar 'ANA PAULA'). Exige >=2 tokens significativos em
@@ -250,16 +282,6 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
     if not ta or not tb:
         return False
     sa, sb = set(ta), set(tb)
-    # MARCADOR DE GERACAO (23/08, caso HELIO DE SOUZA OLIVEIRA x HELIO DE SOUZA
-    # OLIVEIRA JUNIOR — accessions 40343833/34/35 no PRORADIS, guia 196348961).
-    # 'JUNIOR' nao e um sobrenome a mais: e o que distingue PAI de FILHO. A regra
-    # "menor totalmente contido no maior" casava os dois, e as duas pessoas dividem
-    # o nome INTEIRO — o engano e mais facil que no caso JOCASTA, nao menos.
-    # So dispara quando o marcador esta de UM lado so: 'X SOBRINHO' contra
-    # 'X SOBRINHO' segue casando. Custo medido antes de apertar: 4135 itens ja
-    # faturados, ZERO com essa divergencia.
-    if bool(_GERACAO & sa) != bool(_GERACAO & sb):
-        return False
     comuns = sa & sb
     if not comuns:
         return False                     # nenhum token identico: nao e a pessoa
@@ -636,7 +658,11 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
             # (aceita ilegível/mal-lido/nome de outra leitura). As outras travas ficam:
             # tem de ser 'solicitacao' legível, e o LAUDO segue obrigatório no chamador.
             a["_via"] = "confirmado_humano"
-        elif _nomes_compat(_lido, nome_gto):
+        elif _nomes_compat(_lido, nome_gto) and _mesma_geracao(_lido, nome_gto):
+            # _mesma_geracao AQUI, e nao dentro de _nomes_compat: este e o portao do
+            # DOCUMENTO, onde aceitar o pedido do pai como sendo do filho e o dano.
+            # No match do PACIENTE (worklist) o mesmo veto quebrou o HELIO — ver o
+            # docstring de _mesma_geracao.
             a["_via"] = "nome"
         elif _nome_ausente(_lido, nome_gto):
             # NOME NAO LIDO — nao e prova contra. Aceita se houver OUTRO sinal: o
