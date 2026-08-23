@@ -263,7 +263,29 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
     # (PEDRO/JOAO, TAINA/THAILAN) nao pareiam por grafia.
     livres = sorted(maior - comuns)
     pareados = set()
+    # Iniciais ficam FORA de `pareados` de proposito: uma inicial pode RESOLVER uma
+    # divergencia, mas nunca servir de PROVA de identidade. Contada como prova,
+    # 'J. SILVA' casaria com 'JOAO SILVA' — e com JOSE, JULIA, JUCILENE...
+    iniciais = set()
     for tok in sorted(menor - comuns):
+        # INICIAL ABREVIADA, resolvida no PAREAMENTO (23/08, caso PRISCILA FARIAS
+        # DOS SANTOS DANTAS lida como 'Priscila F. S. Dantas'). Ja havia uma regra
+        # de inicial mais abaixo, mas ela so alcanca UM token divergente: o corte
+        # `len(se_falta) > 1 -> outra pessoa` roda antes. Com DUAS iniciais a guia
+        # morria no corte, embora o pedido fosse o certo (Dra Alana Muller, CRO
+        # 29369, periapical, 18/08 — a data do proprio exame).
+        # 'F.' nao contradiz 'FARIAS': inicial nao carrega informacao que possa
+        # contradizer. Divergencia e PEDRO contra JOAO, e essa continua barrada.
+        # A trava anti-irmao fica intacta: nada aqui e alcancado sem 2+ tokens
+        # IDENTICOS (exigidos logo abaixo) e cada inicial consome UM token livre.
+        _ini_tok = re.sub(r"[^A-Za-z]", "", tok).upper()
+        if len(_ini_tok) == 1:
+            for cand in livres:
+                if str(cand).upper().startswith(_ini_tok):
+                    livres.remove(cand)
+                    iniciais.add(tok)
+                    break
+            continue
         for cand in livres:
             _teto = 1 if max(len(tok), len(cand)) <= 6 else 2
             if _dist_edicao(tok, cand, _teto) <= _teto:
@@ -282,8 +304,8 @@ def _nomes_compat(lido: str, alvo: str) -> bool:
                         livres.remove(_c)   # o par vem (a, a); nao remove duas vezes
                 pareados.add(tok)
     if len(comuns) + len(pareados) < 2:
-        return False
-    se_falta = menor - comuns - pareados
+        return False              # iniciais NAO entram nesta conta (ver acima)
+    se_falta = menor - comuns - pareados - iniciais
     if not se_falta:
         return True                      # menor totalmente contido no maior
     if len(se_falta) > 1:
