@@ -6,10 +6,11 @@ Hoje as duas situacoes abaixo caem no mesmo grupo `nome_nao_bate`, marcado como
   A) SO O PRENOME difere; todos os sobrenomes batem exatamente.
      ANETE ANDRADE DE MATTOS      <- 'Plunet Andrade de Mattos'
      CASSIANA DOS SANTOS NASCIMENTO <- 'Camara dos Santos Nascimento'
-     E leitura do prenome que falhou. A IA LEU e a leitura nao casou -> pendencia
-     da CLINICA (regra do dono, 23/08): re-tentar nao faz nome divergente casar, e
-     quem pode anexar um pedido com o nome legivel e ela. O botao "Confirmei que e o
-     paciente" segue na tela como atalho para quem conferir o papel.
+     E leitura do prenome que falhou. Vai para CONFERENCIA: o pedido esta no
+     prontuario e COBRE a guia, entao um olho humano + o botao "Confirmei que e o
+     paciente" resolvem hoje. A clinica e saida SECUNDARIA, so depois de olhar e ver
+     que o papel e de outra pessoa. (Ver o docstring do teste abaixo para o porque
+     de ter passado por 'Nos' e 'Clinica' antes.)
 
   B) PRENOME E SOBRENOME diferem — e documento de OUTRA PESSOA.
      HOSANA BARRETO DOS SANTOS    <- 'GLADYS FREITAS DOS SANTOS'
@@ -104,27 +105,34 @@ _MSG_OUTRO = ("NÃO FATUROU porque nenhum documento do prontuário está no nome
               "OUTRA pessoa")
 
 
-def test_prenome_mal_lido_vai_para_a_CLINICA():
-    """Regra do dono, 23/08: *"se existe uma divergencia de leitura entre o nome do
-    paciente e o nome lido na solicitacao, a IA na verdade fez a leitura mas a
-    leitura nao casa. entao e uma falha tecnica... isso deve virar pendencia para a
-    clinica resolver."*
+def test_prenome_mal_lido_vai_para_CONFERENCIA():
+    """Esta chave passou por 'Nos' -> 'Clinica' -> 'Conferencia' no mesmo dia. O
+    caminho importa mais que o destino.
 
-    O ponto: a IA LEU. Nao e 'documento ilegivel' nem 'nao encontrei nada' — a
-    leitura saiu e simplesmente nao bate. Re-tentar nunca faz um nome divergente
-    passar a casar, entao segurar na fila tecnica prende a guia para sempre. Quem
-    resolve e a clinica, anexando um pedido com o nome legivel.
+    'Nos' estava errado e o dono apontou: *"a IA na verdade fez a leitura mas a
+    leitura nao casa... isso deve virar pendencia para a clinica resolver"*. O ponto
+    dele era que divergencia de leitura NAO pode ficar presa como falha nossa,
+    invisivel, re-tentando o que nunca muda sozinho.
 
-    Passou por 'Nos' (sumia do painel, preso no retry) e por 'Conferencia' antes de
-    chegar aqui. O botao de confirmar continua na tela como atalho para quem
-    conferir o papel — o DONO da pendencia e que mudou."""
+    Mandei para a Clinica. A reauditoria mostrou o custo: a ANETE (196254671) e a
+    CASSIANA (196408957) tem o pedido NO PRONTUARIO, COBRINDO a guia —
+    `_escolher_solicitacao` com nome_confirmado=True devolve idx=0, motivo=None — e o
+    botao "Confirmei que e o paciente" ja aparece na tela. Rotuladas "Clinica", a
+    operadora nao clica: espera dias por um papel que ja esta anexado. A ANETE vence
+    em 24/08.
+
+    Conferencia atende a regra do dono: NAO e nossa (eh_nosso=False), NAO entra no
+    retry, APARECE no painel. O que muda e que a acao leva ao clique, com a clinica
+    como saida SECUNDARIA — "so cobrar depois de olhar e ver que o papel e de outra
+    pessoa"."""
     from db import classificar_pendencia, eh_nosso, eh_pendencia_front, classe_retry
     chave, quem, acao = classificar_pendencia(_MSG_PRENOME, "sem_solicitacao")
     assert chave == "prenome_mal_lido"
-    assert quem == "Clínica"
+    assert quem == "Conferência"
     assert eh_nosso(_MSG_PRENOME, "sem_solicitacao") is False
     assert eh_pendencia_front(_MSG_PRENOME, "sem_solicitacao") is True
-    assert classe_retry(_MSG_PRENOME, "sem_solicitacao") == "externo"
+    assert classe_retry(_MSG_PRENOME, "sem_solicitacao") != "transitorio"
+    assert "confirmei" in acao.lower()
     assert "clínica" in acao.lower()
 
 

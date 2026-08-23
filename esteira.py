@@ -608,6 +608,46 @@ def _carimbar_imagem(blob, nova_data, tipo, box_data, box_assinatura, reler_box_
         return blob, False
 
 
+def _guardar_nao_lidos(pasta_dl, cands) -> int:
+    """Grava na pasta do plano os anexos do prontuario que NAO viraram solicitacao.
+
+    Item 6 da Andrea: "criar pasta com imagens resolvidas para casos de NAO CONSEGUIR
+    LER SOLICITACOES, depois ela anexa tudo". O recurso existia e nao servia
+    justamente esse caso: o bloco [ARQ] copia de `pasta_dl`, e a unica coisa do
+    prontuario que chegava la era o `SOLICITACAO_*`, gravado dentro de
+    `if candidato_valido:`. Sem candidato validado, nada era guardado.
+
+    Achado no FABRICIO (196307916): a pendencia mandava abrir "os arquivos desta
+    guia" e os arquivos nao estavam la — o log da exec 692 mostra "[ARQ] 10 arquivos
+    de 3 guias", e os 6 dele eram os ENTREGAVEIS nossos, nenhum do prontuario.
+
+    Guarda o ORIGINAL, byte a byte: um navegador e muito mais tolerante que
+    Pillow/MuPDF, e o arquivo que derrubou o robo pode abrir na tela dela. Se estiver
+    mesmo corrompido, ela ve em dois segundos e pede o reenvio.
+
+    Falha quieto: guardar arquivo nunca pode derrubar um faturamento."""
+    if not pasta_dl or not cands:
+        return 0
+    try:
+        if not os.path.isdir(pasta_dl):
+            return 0
+    except Exception:
+        return 0
+    n = 0
+    for i, c in enumerate(cands):
+        try:
+            fn, _mime, blob = c[0], c[1], c[2]
+            if not blob:
+                continue
+            _safe = re.sub(r"[^A-Za-z0-9._-]+", "_", os.path.basename(str(fn or ""))) or "anexo"
+            with open(os.path.join(pasta_dl, f"NAO_LIDO_{i}__{_safe}"), "wb") as f:
+                f.write(blob)
+            n += 1
+        except Exception:
+            continue
+    return n
+
+
 def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
                           detalhe=None, gto_txt="", prontuario_confirmado=False,
                           nome_confirmado=False):
@@ -2688,6 +2728,13 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
 
             out["decisao"] = dec
             # Salva o arquivo (original ou modificado) — SÓ se o CÓDIGO validou
+            if not candidato_valido:
+                # LEITURA FALHOU -> guarda os anexos do prontuario para a operadora
+                # abrir (item 6 da Andrea). Sem isto a pendencia manda conferir
+                # arquivos que nunca chegam na pasta. Ver _guardar_nao_lidos.
+                _ng = _guardar_nao_lidos(pasta_dl, cands)
+                if _ng:
+                    out["nao_lidos_guardados"] = _ng
             if candidato_valido:
                 out["plano_solicitacao"] = fn_candidato
                 out["solic_idx"] = idx

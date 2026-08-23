@@ -63,6 +63,6 @@ def test_a_chave_prenome_mal_lido_e_produzida_pelo_classificador():
            "de erro de leitura do prenome.")
     chave, quem, _ = db.classificar_pendencia(msg, "sem_solicitacao")
     assert chave == "prenome_mal_lido"
-    # Dona da pendencia e a CLINICA (regra do dono, 23/08 — ver test_nome_de_quem).
-    # O botao continua na tela: e atalho de quem confere o papel, nao o dono.
-    assert quem == "Clínica"
+    # Dona e a CONFERENCIA: o pedido esta no prontuario e cobre a guia, entao o
+    # clique resolve hoje. A clinica e saida secundaria. Ver test_nome_de_quem.
+    assert quem == "Conferência"

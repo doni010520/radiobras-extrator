@@ -1005,11 +1005,7 @@ _GRUPOS_PENDENCIA = [
     # continua na tela como atalho para quem CONFERIR o papel e reconhecer o
     # paciente; o dono da pendencia, porem, e a clinica.
     ("prenome_mal_lido", r"TODOS OS SOBRENOMES BATEM|erro de leitura do prenome",
-     "Clínica", "A IA leu o pedido, mas o nome não casou com o da guia — todos os "
-     "sobrenomes batem e só o primeiro nome saiu diferente, o que tem cara de leitura "
-     "ruim (letra de médico, carimbo borrado). Pedir à clínica um pedido em que o nome "
-     "do paciente esteja legível. Se alguém abrir a solicitação e reconhecer o "
-     "paciente, dá para liberar pelo botão — nunca anexar sem conferir."),
+     "Conferência", "O pedido ESTÁ no prontuário e o nome bate em todos os sobrenomes — só o primeiro nome saiu diferente, o que é a cara de leitura ruim (letra de médico, carimbo borrado). Abrir a solicitação, conferir o nome e, se for deste paciente, clicar em Confirmei para liberar o faturamento. Só cobrar da clínica DEPOIS de olhar e ver que o papel é de outra pessoa."),
     # MODELO sem render (22/08): a guia de MODELO nao tem laudo por definicao — o
     # entregavel e o render 3D. Vem ANTES de sem_entregavel, que mandaria "cobrar a
     # emissao do laudo" de um exame que nunca tera laudo.
@@ -1080,6 +1076,16 @@ _GRUPOS_PENDENCIA = [
     # sempre, re-tentando o que nunca vai mudar sozinho. O que falta e a CLINICA
     # anexar o pedido desta paciente. O caso de erro de leitura do prenome saiu
     # daqui para `prenome_mal_lido` (Conferencia), que vem antes na tabela.
+    # NOME ABREVIADO != NOME DE TERCEIRO (23/08, caso LUCIANA SOUZA SANTOS
+    # 196397719). Vem ANTES de nome_nao_bate, cujo texto AFIRMA "documento de OUTRA
+    # pessoa" e "gera glosa". Para a HOSANA isso e verdade e esta provado: o papel
+    # diz por extenso "Para Sr(a): GLADYS FREITAS DOS SANTOS", nascimento 12/11/1972.
+    # Para a LUCIANA o unico anexo le 'S. Santos' — inicial + sobrenome, compativel
+    # com L. S. Santos, dentro do prontuario DELA. Acusar a clinica de anexar
+    # documento de terceiro sem prova manda cobrar o que talvez nao seja erro dela e
+    # esconde um faturamento que estava a um clique.
+    ("nome_abreviado", r"nome lido no pedido est[áa] ABREVIADO|nome lido est[áa] abreviado",
+     "Conferência", "O nome no papel saiu ABREVIADO (ex.: 'S. Santos') — isso não prova que é de outra pessoa nem que é do paciente. O pedido cobre a guia. Abrir o anexo e ler o nome completo: se for deste paciente, clicar em Confirmei. Só cobrar da clínica DEPOIS de confirmar que o papel é de outra pessoa."),
     ("nome_nao_bate", r"nenhum documento do prontu[áa]rio est[áa] no nome"
      r"|nenhum anexo com paciente compat",
      "Clínica", "O prontuário só tem documento de OUTRO paciente — o pedido desta "
