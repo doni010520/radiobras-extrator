@@ -94,7 +94,10 @@ def test_aborto_diz_o_dia_a_unidade_e_o_erro(monkeypatch):
                               "net::ERR_TUNNEL_CONNECTION_FAILED no login",
                               execucao_id=4242, _post=espia)
     t = espia.chamadas[0]["payload"]["text"]
-    assert "18/08/2026" in t and "388336" in t
+    # a unidade vai pelo NOME desde 23/08 — "388336" nao diz nada a quem le no
+    # celular. O codigo nao aparece mais de proposito.
+    assert "18/08/2026" in t
+    assert "Centro" in t and "388336" not in t
     assert "TUNNEL" in t
     # deep-link clicavel pro log da execucao (senao o aviso nao serve pra agir)
     assert "https://radiobras.benitechlab.com/relatorios/execucao/4242/log" in t
