@@ -945,7 +945,7 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
                         _nova = not retry_na_fila(_gto)
                         registrar_retry(_gto, resumo.get("conta"), resumo.get("data"),
                                         _mot, _cat, paciente=_pac)
-                        if _nova:
+                        if _nova and deve_avisar_na_rodada(_gto):
                             _novas_nossas.append({"gto": _gto, "paciente": _pac,
                                                   "motivo": _mot})
             except Exception as e:
@@ -1471,6 +1471,34 @@ def retry_pausa_info() -> dict:
                     "ativa": c.retry_pausado_ate > _now()}
     except Exception:
         return {}
+
+
+def escalou_recentemente(gto, horas: int = 24) -> bool:
+    """A guia ja ESGOTOU o retry nas ultimas `horas`? (e portanto o dono ja recebeu
+    o "precisa de voce")."""
+    from datetime import timedelta
+    try:
+        with SessionLocal() as s:
+            n = (s.query(RetryFila)
+                 .filter(RetryFila.gto == str(gto),
+                         RetryFila.resolvido == True,               # noqa: E712
+                         RetryFila.tentativas >= MAX_RETRIES_TRANSITORIO,
+                         RetryFila.atualizado_em >= _now() - timedelta(hours=int(horas)))
+                 .count())
+        return n > 0
+    except Exception:
+        return False            # na duvida AVISA — perder aviso e pior que repetir
+
+
+def deve_avisar_na_rodada(gto) -> bool:
+    """Esta guia entra no resumo da rodada?
+
+    NAO entra se acabou de ESGOTAR o retry. Medido nos alertas de 23/08: 6 dos 18
+    avisos eram a mesma guia duas vezes em minutos (FABRICIO 06:11/06:14, as duas
+    DILMA 06:35/06:37, HOSANA 07:09/07:11). E o pior nao era o barulho: o resumo diz
+    "o sistema ja esta re-tentando", o que e FALSO para quem esgotou o teto — a
+    segunda mensagem desmentia a primeira, que dizia "precisa de voce"."""
+    return not escalou_recentemente(gto, horas=24)
 
 
 def retries_devidos(limite: int = 50) -> list:

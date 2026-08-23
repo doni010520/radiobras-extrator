@@ -1288,6 +1288,32 @@ def _laudo_tele_faltando(exames_canon, laudos_no_plano) -> bool:
     return True
 
 
+def _consulta_inicial(pg, data, tentativas: int = 3, _sleep=None) -> tuple:
+    """Carrega a lista de GTOs do dia no worker de anexacao. (ok, erro).
+
+    Incidente #613 (397950, 18/08): a consulta falhou com
+    `Page.click: Timeout 8000ms exceeded` esperando o locator "Periodo". A excecao
+    era logada e ENGOLIDA, o worker seguia para a fila sem lista nenhuma, e as 8
+    guias dele morreram uma a uma com "Linha da GTO <n> nao encontrada" — mensagem
+    que culpa a guia por um problema do worker.
+
+    Duas mudancas: RETRY (o timeout de 8s e claramente transitorio; insistir e
+    barato) e devolver o erro REAL para quem chama poder desistir com a causa
+    certa. NUNCA levanta: estamos dentro de uma thread de worker."""
+    _dorme = _sleep or time.sleep
+    erro = ""
+    for i in range(max(1, int(tentativas))):
+        try:
+            abrir_consultar_gtos(pg)
+            consultar_periodo(pg, data)
+            return True, ""
+        except Exception as e:
+            erro = f"{type(e).__name__}: {str(e)[:150]}"
+            if i < tentativas - 1:
+                _dorme(2.5 * (i + 1))
+    return False, erro
+
+
 def _entregavel_faltando(dispensa_laudo, nomes) -> bool:
     """Falta o ENTREGAVEL desta guia? Dispensar laudo NAO dispensa entregavel.
 
@@ -2964,10 +2990,17 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 _t(f"[ANEX{wid}] login OdontoPrev falhou: {str(e)[:80]}")
                 return
             ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
-            try:
-                abrir_consultar_gtos(pg); consultar_periodo(pg, data)
-            except Exception as e:
-                _t(f"[ANEX{wid}] consulta inicial falhou: {str(e)[:80]}")
+            _ok_lista, _err_lista = _consulta_inicial(pg, data)
+            if not _ok_lista:
+                # SEM LISTA, NAO PROCESSA A FILA. Antes o worker seguia e cada guia
+                # morria com "Linha da GTO nao encontrada" — 8 de uma vez no #613,
+                # culpando a guia por uma falha do worker. Voltando aqui, os itens
+                # ficam na fila para outro worker; se todos falharem, viram pendencia
+                # com a causa REAL.
+                _anex_falhas.append(f"consulta inicial falhou: {_err_lista}")
+                _t(f"[ANEX{wid}] consulta inicial falhou apos 3 tentativas — worker "
+                   f"DESISTE (nao vai culpar guia por guia). {_err_lista[:90]}")
+                return
             while True:
                 try:
                     item = fila_anexar.get(timeout=2)
@@ -3054,7 +3087,11 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     _t(f"[ANEX{wid}] [DRY] GTO {item['gto']} ANEXARIA {len(arquivos)}: {nomes}")
                 else:
                     try:
-                        gp = abrir_gto(pg, item["gto"])
+                        # _refrescar: se a lista se perder no meio da rodada (o
+                        # portal navega, um modal engole a tabela), refaz a consulta
+                        # em vez de dar "linha nao encontrada" na guia.
+                        gp = abrir_gto(pg, item["gto"],
+                                       _refrescar=lambda: _consulta_inicial(pg, data, 1))
                         # ÚLTIMA GUARDA antes do único ponto de escrita irreversível:
                         # confere que a guia aberta é do paciente esperado. Só bloqueia
                         # quando lê um nome DIFERENTE — se não conseguir ler (campo
