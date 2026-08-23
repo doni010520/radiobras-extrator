@@ -1042,7 +1042,8 @@ _GRUPOS_PENDENCIA = [
      "Nós", "A decisão passou e a anexação foi barrada. Conferir se o exame é do convênio."),
     # Falha do robô/leitura (ex.: "gemini: ..." — caso SOPHIA, 27/07): é NOSSA,
     # vai para a fila técnica, não para a operação
-    ("falha_tecnica", r"\bgemini\s*:|falha t[ée]cnica|leitura indispon[íi]vel",
+    ("falha_tecnica", r"\bgemini\s*:|falha t[ée]cnica|leitura indispon[íi]vel"
+     r"|leitura autom[áa]tica ficou indispon|cr[ée]ditos da API",
      "Nós", "Falha nossa (robô/leitura), não do documento. Rodar o dia de novo "
      "depois da correção."),
     ("paciente_nao_achado", r"n[ãa]o foi encontrado no PRORADIS|paciente da guia n[ãa]o foi"
@@ -1094,6 +1095,12 @@ _TRANSITORIO_RE = __import__("re").compile(
     # virava leitura vazia -> nao retentava. So casa a frase que o codigo emite; nao
     # pega 'sem pedido'/'nao cobre' (que dizem 'pedir a clinica', nunca 'reprocessar').
     r"leitura.{0,40}n[ãa]o retornou|falha tempor[áa]ria|"
+    # QUOTA do Gemini (22/08): "a leitura automatica ficou indisponivel: os
+    # creditos da API acabaram". So casava por categoria='erro'; pelo TEXTO caia
+    # em 'outros' -> Conferencia -> aparecia PRO CLIENTE. Regra do dono: falha de
+    # sistema nunca chega na cliente. O texto passa a se defender sozinho, sem
+    # depender de a categoria sobreviver a releitura/relatorio/exportacao.
+    r"leitura autom[áa]tica ficou indispon|cr[ée]ditos da API|"
     # ANEXAÇÃO falhou por INFRA (17/08): o JWT do OdontoPrev expira em rodada longa e
     # o anexador, sem conseguir CONTAR os anexos, NÃO envia (anti-duplicação). Rodada
     # nova com token fresco resolve. NÃO casa 'laudo de outro exame' (dado -> conferência).

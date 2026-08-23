@@ -64,3 +64,37 @@ def test_externo_e_conferencia_nunca_entram_no_retry():
     assert deve_entrar_no_retry("não há nenhum pedido do dentista", "") is False
     # conferencia precisa de humano: retry cego so gasta quota do Gemini
     assert deve_entrar_no_retry("a caligrafia do pedido está ilegível", "") is False
+
+
+def test_quota_do_gemini_nunca_chega_na_cliente():
+    """Regra dura do dono (22/08): "se e falha de sistema, fica para mim; nao pode
+    cair para a cliente ver". A frase da quota ("a leitura automatica ficou
+    indisponivel: os creditos da API acabaram") so era reconhecida por
+    categoria='erro'. Pelo TEXTO caia em 'outros' -> Conferencia -> PAINEL.
+    A categoria pode nao sobreviver a uma releitura, a um relatorio ou a uma
+    exportacao; o texto tem que se defender sozinho."""
+    from db import classificar_pendencia
+    m = ("NÃO FATUROU porque a leitura automática ficou indisponível: os créditos "
+         "da API de leitura acabaram. Nenhuma guia é lida enquanto isso.")
+    for cat in ("", "erro", "revisao", "sem_solicitacao"):
+        assert eh_nosso(m, cat) is True, cat
+        assert eh_pendencia_front(m, cat) is False, cat
+    assert classificar_pendencia(m, "")[0] == "falha_tecnica"
+    assert classificar_pendencia(m, "")[1] == "Nós"
+
+
+def test_falhas_de_sistema_do_print_da_andrea_ficam_fora_do_painel():
+    """As mensagens reais que a Andrea mandou no print de 17/08. Nenhuma delas pode
+    voltar pro painel dela por regressao de regex."""
+    casos = [
+        ("Documentação OK, mas a anexação falhou: nao consegui ler quantos anexos a "
+         "guia ja tem (DOM e API falharam: HTTP 401 'Jwt is expired') — nada foi "
+         "enviado, por seguranca"),
+        ("Documentação OK, mas a anexação falhou: nao consegui ler quantos anexos a "
+         "guia ja tem (DOM e API falharam: ProxyError: Max retries exceeded)"),
+        "Documentação OK, mas a anexação falhou: input[type=file] não encontrado na GTO.",
+        "gemini: 503 UNAVAILABLE",
+    ]
+    for m in casos:
+        assert eh_nosso(m, "") is True, m[:50]
+        assert eh_pendencia_front(m, "") is False, m[:50]
