@@ -1360,6 +1360,39 @@ def _sla_bucket(sla):
     return "no_prazo"
 
 
+def _filtra_por_dia(itens, de_iso, ate_iso):
+    """Recorta a lista pelo dia do EXAME (campo 'dia', DD/MM/AAAA). Datas em ISO,
+    como o <input type=date> manda.
+
+    Com o prazo de faturamento correndo, a pergunta do dia a dia e "o que vence
+    primeiro" — e isso se responde recortando o periodo.
+
+    FALHA ABERTA de proposito: data invalida devolve a lista INTEIRA. Um filtro que
+    quebra e some com tudo faz a operacao achar que a fila zerou, e pendencia que
+    ninguem ve e pendencia que vence."""
+    import datetime as _dt
+
+    def _iso(v):
+        try:
+            return _dt.datetime.strptime(str(v or "").strip(), "%Y-%m-%d").date()
+        except Exception:
+            return None
+    de, ate = _iso(de_iso), _iso(ate_iso)
+    if not de and not ate:
+        return itens
+    out = []
+    for p in itens:
+        d = db._parse_ddmmaaaa(p.get("dia"))
+        if not d:
+            continue          # com periodo pedido, guia sem data nao entra por omissao
+        if de and d < de:
+            continue
+        if ate and d > ate:
+            continue
+        out.append(p)
+    return out
+
+
 @app.route("/pendencias")
 def pendencias_page():
     """Worklist: itens não faturados que precisam de ação humana, por urgência."""
@@ -1419,6 +1452,11 @@ def pendencias_page():
     # nossa não some em silêncio: vai pro WhatsApp do dono (notificador.py) e pro loop
     # de retry. A urgência (vencida/no prazo) fica marcada no cabeçalho de cada dia.
     front = [p for p in itens if p["tipo"] != "interno"]
+    # FILTRO DE DATA (23/08, pedido do dono). Vem depois do corte do interno: o que
+    # e falha nossa nao aparece nesta tela com filtro nenhum.
+    _de = (request.args.get("de") or "").strip()
+    _ate = (request.args.get("ate") or "").strip()
+    front = _filtra_por_dia(front, _de, _ate)
     sla_ct = {"venc": 0, "d1": 0, "d2": 0, "d3": 0}
     for p in front:
         if p.get("resolvido"):
@@ -1449,7 +1487,7 @@ def pendencias_page():
     return render_template("pendencias.html", grupos=grupos, grupos_venc=None,
                            itens=front, status=status, prazo=_prazo_dias(), sla_ct=sla_ct,
                            n_abertas=sum(1 for p in front if not p.get("resolvido")),
-                           n_vencidas=0)
+                           n_vencidas=0, de=_de, ate=_ate)
 
 
 # ── ARQUIVOS DA PENDENCIA (22/08, pedido da Andrea) ─────────────────────────

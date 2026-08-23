@@ -75,7 +75,7 @@
   <div class="rbnav-menu">
     <a class="rbnav-link" href="/" data-path="/">Dashboard</a>
     <a class="rbnav-link" href="/faturar" data-path="/faturar">Faturar dia</a>
-    <a class="rbnav-link" href="/pendencias" data-path="/pendencias">Pendências{% if pendencias_abertas and pendencias_abertas > 0 %} <span class="rbnav-badge" id="rbNavPend">{{ pendencias_abertas }}</span>{% else %}<span class="rbnav-badge" id="rbNavPend" style="display:none">0</span>{% endif %}</a>
+    <a class="rbnav-link" href="/pendencias" data-path="/pendencias">Pendências abertas{% if pendencias_abertas and pendencias_abertas > 0 %} <span class="rbnav-badge" id="rbNavPend">{{ pendencias_abertas }}</span>{% else %}<span class="rbnav-badge" id="rbNavPend" style="display:none">0</span>{% endif %}</a>
     <a class="rbnav-link" href="/desfecho" data-path="/desfecho">Desfecho</a>
     <div class="rbnav-drop" data-drop>
       <button class="rbnav-link" type="button" aria-haspopup="true" aria-expanded="false"

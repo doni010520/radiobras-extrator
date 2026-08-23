@@ -21,6 +21,9 @@
   body{margin:0;background:var(--bg);color:var(--txt);font-family:var(--rb-font,system-ui,-apple-system,sans-serif)}
   .wrap{max-width:1180px;margin:0 auto;padding:20px}
   h1{margin:6px 0 2px;letter-spacing:-.01em}
+  .hist-aviso{background:#fff8e6;border:1px solid #e6c76b;border-radius:8px;
+              padding:10px 14px;margin:0 0 14px;font-size:13px;line-height:1.6}
+  .hist-aviso a{font-weight:600}
   .meta{color:var(--sub);font-size:13px;margin-bottom:14px;font-variant-numeric:tabular-nums}
   form.filtros{background:var(--card);border:1px solid var(--linha);border-radius:12px;
     padding:14px 16px;margin:12px 0 18px;display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
@@ -81,9 +84,19 @@
 <body>
 {% include '_topnav.html' %}
 <div class="wrap">
-  <h1>Pendências</h1>
+  <h1>Pendências por data</h1>
+  {# HISTORICO, nao estado atual (23/08, pedido do dono). As duas telas se chamavam
+     "Pendencias" e quem abria esta achava que via o AGORA — contando como pendente
+     guia que ja foi resolvida depois, e mandando a operacao cacar trabalho que nao
+     existe mais. O aviso vem ANTES dos numeros: lidos primeiro, eles ja formam a
+     conclusao errada. #}
+  <div class="hist-aviso">
+    📚 <b>Isto é um histórico.</b> Mostra o que era pendência <b>naquelas datas</b> —
+    uma guia que já foi <b>resolvida</b> depois continua aparecendo aqui.
+    Para o estado de <b>agora</b>, vá em <a href="/pendencias">Pendências abertas</a>.
+  </div>
   <div class="meta">
-    {% if d.dia %}O que ainda não faturou
+    {% if d.dia %}O que não faturou
       {% if d.periodo %}de <strong>{{ d.dia }}</strong> a <strong>{{ d.dia_fim }}</strong>
         ({{ d.dias|length }} dias){% else %}em <strong>{{ d.dia }}</strong>{% endif %},
       agrupado por quem precisa agir

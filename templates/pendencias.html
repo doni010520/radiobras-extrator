@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pendências</title>
+<title>Pendências abertas</title>
 {% include '_head.html' %}
 <style>
   :root{--verde:var(--rb-primary);--bg:var(--rb-bg);--card:var(--rb-surface);--linha:var(--rb-border);--txt:var(--rb-fg);--sub:var(--rb-fg-muted)}
@@ -32,6 +32,14 @@
   .sla.d1{background:var(--rb-danger-bg);color:var(--rb-danger);animation:slap 1.2s ease-in-out infinite}
   .sla.venc{background:#7a0d0d;color:#fff}
   @keyframes slap{0%,100%{opacity:1}50%{opacity:.45}}
+  .filtro-data{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 16px;
+               font-size:13px;color:var(--rb-fg-muted,#6b7684)}
+  .filtro-data input[type=date]{padding:5px 8px;border:1px solid #d7dee6;border-radius:6px;
+               font:inherit;background:var(--rb-bg,#fff);color:inherit}
+  .filtro-data button{padding:6px 14px;border:1px solid #d7dee6;border-radius:6px;
+               background:#f6f8fa;font:inherit;cursor:pointer}
+  .filtro-data button:hover{background:#eef2f6}
+  .filtro-data .limpar{color:#6b7684;text-decoration:underline}
   .slabar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:var(--rb-danger-bg);
     border:1px solid var(--rb-danger);border-radius:var(--rb-r-lg);padding:12px 16px;margin-bottom:16px}
   .slabar b{color:var(--rb-danger)}
@@ -155,7 +163,7 @@
     <div class="ttl">
       <span class="badge"><svg class="rb-ico rb-ico--lg"><use href="#i-alert"/></svg></span>
       <div>
-        <h1>Pendências</h1>
+        <h1>Pendências abertas</h1>
       </div>
     </div>
     <a href="/arvore-decisao" class="arv-link">📄 Árvore de decisão</a>
@@ -169,6 +177,17 @@
     <a class="tab {{ 'on' if status=='todas' }}" href="/pendencias?status=todas">
       <svg class="rb-ico"><use href="#i-grid"/></svg> Todas</a>
   </div>
+
+  {# FILTRO DE DATA (23/08). GET simples: o link fica compartilhavel e o botao
+     voltar do navegador funciona. `status` viaja junto para o filtro nao derrubar
+     a aba escolhida. #}
+  <form class="filtro-data" method="get" action="/pendencias">
+    <input type="hidden" name="status" value="{{ status }}">
+    <label>De <input type="date" name="de" value="{{ de or '' }}"></label>
+    <label>até <input type="date" name="ate" value="{{ ate or '' }}"></label>
+    <button type="submit">Filtrar</button>
+    {% if de or ate %}<a class="limpar" href="/pendencias?status={{ status }}">limpar</a>{% endif %}
+  </form>
 
   {% set urg = sla_ct.venc + sla_ct.d1 + sla_ct.d2 + sla_ct.d3 %}
   {% if urg > 0 and status != 'resolvidas' %}
