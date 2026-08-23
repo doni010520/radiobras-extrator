@@ -233,7 +233,10 @@
             <div class="arqs-lista">carregando…</div>
           </div>
           {% endif %}
-          {% if p.chave in ('pedido_ilegivel','solic_nao_confirmada','nome_nao_bate') and not p.resolvido %}
+          {# IDENTIDADE: o botao so aparece onde o bloqueio e "de quem e este papel?".
+     'prenome_mal_lido' entrou em 23/08 — sem ele, ANETE e CASSIANA trocaram um
+     rotulo errado por uma tela sem saida (o grupo novo nao tinha o clique). #}
+          {% if p.chave in ('pedido_ilegivel','solic_nao_confirmada','nome_nao_bate','prenome_mal_lido') and not p.resolvido %}
           <div class="conf-box">
             <button class="conf-btn" onclick="confirmar({{ p.id }}, this, event)">✔ Confirmei que é o paciente — pode faturar</button>
             <span class="conf-msg"></span>

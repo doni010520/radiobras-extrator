@@ -869,6 +869,9 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
                 motivo = f"Documentação OK, mas a anexação falhou: {x['anexar_erro']}"
             elif cat == "sem_solicitacao":
                 motivo = g.get("motivo") or x.get("erro") or "Sem solicitação e sem justificativa (campo 49 vazio)"
+                # A esteira ja sabe se o laudo tambem falta; sem isto o segundo
+                # bloqueio some do painel (caso EVELYN).
+                motivo = motivo_com_laudo_faltando(motivo, bool(x.get("falta_laudo")))
             elif cat == "sem_laudo" and x.get("falta_tele"):
                 # Doc ortodôntica com a panorâmica, mas sem o traçado. Motivo específico
                 # (o classificador reconhece como 'esperando_tele' → Radiologista).
@@ -1044,6 +1047,14 @@ _GRUPOS_PENDENCIA = [
      "e, se cobrir, anexar à mão."),
     ("pedido_nao_cobre", r"n[ãa]o cobre tudo que a guia autoriza|FALTA no pedido",
      "Clínica", "Pedir à clínica um pedido que inclua o exame que falta."),
+    # BLOQUEIO DUPLO (23/08, caso EVELYN 196330383): falta o pedido E o nosso laudo.
+    # Vem ANTES de sem_pedido porque o texto contem o motivo do pedido inteiro e
+    # casaria la, saindo como "Clinica" — mandando a operacao cobrar so metade.
+    ("sem_pedido_e_laudo", r"NÃO SAI SÓ COM O PEDIDO|NAO SAI SO COM O PEDIDO",
+     "Clínica + Radiologista",
+     "Faltam DUAS coisas: o pedido do dentista (cobrar da clínica) e o laudo do "
+     "exame (cobrar a emissão no PRORADIS). Cobrar os dois em paralelo — a guia só "
+     "fatura quando os dois chegarem."),
     ("sem_pedido", r"nenhum pedido do dentista|n[ãa]o h[áa] nenhum pedido|sem anexo candidato"
      r"|Sem solicita[çc][ãa]o e sem justificativa",
      "Clínica", "Pedir à clínica que anexe o pedido no prontuário."),
@@ -1096,6 +1107,25 @@ _GRUPOS_PENDENCIA = [
      "Conferência", "O robô ajustou a data da solicitação automaticamente. Conferir "
      "se a guia faturou ou se precisa reprocessar o dia."),
 ]
+
+
+_SUFIXO_LAUDO = (
+    " ⚠ ATENÇÃO — ESTA GUIA NÃO SAI SÓ COM O PEDIDO: falta também o LAUDO do "
+    "exame, que é NOSSO (radiologista RadioBras). Cobrar a emissão do laudo no "
+    "PRORADIS em paralelo — senão a clínica anexa o pedido e a guia continua parada.")
+
+
+def motivo_com_laudo_faltando(motivo: str, falta_laudo: bool) -> str:
+    """Junta o segundo bloqueio ao texto da pendencia.
+
+    A cadeia de categorizacao da esteira e excludente: quando faltam o pedido E o
+    laudo, `sem_solicitacao` vence e o laudo desaparece do motivo — embora o log da
+    mesma execucao ja tivesse escrito "FALTA: LAUDO+SOLICITACAO" (caso EVELYN,
+    196330383, 4 rodadas). A operacao cobrava so a clinica e a guia voltava parada.
+    """
+    if not falta_laudo:
+        return motivo or ""
+    return ((motivo or "").rstrip() + _SUFIXO_LAUDO).strip()
 
 
 def classificar_pendencia(motivo: str, categoria: str = "") -> tuple:

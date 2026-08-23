@@ -676,10 +676,14 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         if isinstance(detalhe, dict):
             detalhe["escolhida_idx"] = recente["idx"]
             detalhe["outras"] = len(cands_ok) - 1
-        # Confirmação humana também libera a COBERTURA: o usuário vouchou que a
-        # solicitação é do paciente e vale pra esta guia (na ilegível os exames nem
-        # sempre são lidos, então "cobre" seria falso à toa). O laudo ainda é exigido.
-        if recente["cobre"] or nome_confirmado:
+        # Confirmação humana libera a COBERTURA **só quando os exames não foram
+        # lidos** (pedido ilegível): ali "cobre" seria falso à toa e o olho humano é
+        # a única informação que existe. Quando o robô LEU os exames e eles não
+        # cobrem, o clique confirmou a PESSOA, não o CONTEÚDO do papel — caso LEDA
+        # (196391551, 18/08): guia pan+peri, folha lida como só periapical; sem esta
+        # condição um clique de identidade anexava a folha errada, e anexação é
+        # irreversível (glosa). O laudo continua exigido nos dois caminhos.
+        if recente["cobre"] or (nome_confirmado and not recente["ex"]):
             if isinstance(detalhe, dict):
                 detalhe["idxs"] = [recente["idx"]]
             return recente["idx"], recente["a"], None
@@ -3558,6 +3562,10 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         decisoes.append({
             "gto": r["gto"], "paciente": r["nome"], "categoria": cat,
             "falta_tele": bool(_falta_tele),   # p/ o motivo dizer que é o traçado
+            # BLOQUEIO DUPLO: a cadeia de `cat` e excludente, entao uma guia sem
+            # pedido E sem laudo sai categorizada so como sem_solicitacao. Levar o
+            # flag junto e o que permite ao motivo citar os dois (caso EVELYN).
+            "falta_laudo": bool(_laudo_falta),
             "data_exame_real": r.get("data_exame_real"),
             "anexado": r.get("anexado"),
             "anexar_erro": r.get("anexar_erro"),   # p/ o motivo da pendência ser o REAL
