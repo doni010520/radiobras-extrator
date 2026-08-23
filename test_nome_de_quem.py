@@ -6,8 +6,10 @@ Hoje as duas situacoes abaixo caem no mesmo grupo `nome_nao_bate`, marcado como
   A) SO O PRENOME difere; todos os sobrenomes batem exatamente.
      ANETE ANDRADE DE MATTOS      <- 'Plunet Andrade de Mattos'
      CASSIANA DOS SANTOS NASCIMENTO <- 'Camara dos Santos Nascimento'
-     E leitura do prenome que falhou. Precisa de OLHO HUMANO -> Conferencia, com o
-     botao "Confirmei que e o paciente" que a tela ja tem.
+     E leitura do prenome que falhou. A IA LEU e a leitura nao casou -> pendencia
+     da CLINICA (regra do dono, 23/08): re-tentar nao faz nome divergente casar, e
+     quem pode anexar um pedido com o nome legivel e ela. O botao "Confirmei que e o
+     paciente" segue na tela como atalho para quem conferir o papel.
 
   B) PRENOME E SOBRENOME diferem — e documento de OUTRA PESSOA.
      HOSANA BARRETO DOS SANTOS    <- 'GLADYS FREITAS DOS SANTOS'
@@ -102,16 +104,28 @@ _MSG_OUTRO = ("NÃO FATUROU porque nenhum documento do prontuário está no nome
               "OUTRA pessoa")
 
 
-def test_prenome_mal_lido_vai_para_CONFERENCIA():
-    """Antes caia em nome_nao_bate -> 'Nos' -> sumia do painel e ficava presa no
-    retry para sempre. Nao e nossa: precisa de olho humano."""
-    from db import classificar_pendencia, eh_nosso, eh_pendencia_front
+def test_prenome_mal_lido_vai_para_a_CLINICA():
+    """Regra do dono, 23/08: *"se existe uma divergencia de leitura entre o nome do
+    paciente e o nome lido na solicitacao, a IA na verdade fez a leitura mas a
+    leitura nao casa. entao e uma falha tecnica... isso deve virar pendencia para a
+    clinica resolver."*
+
+    O ponto: a IA LEU. Nao e 'documento ilegivel' nem 'nao encontrei nada' — a
+    leitura saiu e simplesmente nao bate. Re-tentar nunca faz um nome divergente
+    passar a casar, entao segurar na fila tecnica prende a guia para sempre. Quem
+    resolve e a clinica, anexando um pedido com o nome legivel.
+
+    Passou por 'Nos' (sumia do painel, preso no retry) e por 'Conferencia' antes de
+    chegar aqui. O botao de confirmar continua na tela como atalho para quem
+    conferir o papel — o DONO da pendencia e que mudou."""
+    from db import classificar_pendencia, eh_nosso, eh_pendencia_front, classe_retry
     chave, quem, acao = classificar_pendencia(_MSG_PRENOME, "sem_solicitacao")
     assert chave == "prenome_mal_lido"
-    assert quem == "Conferência"
+    assert quem == "Clínica"
     assert eh_nosso(_MSG_PRENOME, "sem_solicitacao") is False
     assert eh_pendencia_front(_MSG_PRENOME, "sem_solicitacao") is True
-    assert "confirmar" in acao.lower()
+    assert classe_retry(_MSG_PRENOME, "sem_solicitacao") == "externo"
+    assert "clínica" in acao.lower()
 
 
 def test_documento_de_outro_paciente_continua_como_estava():

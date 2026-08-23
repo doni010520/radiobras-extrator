@@ -319,6 +319,40 @@ def _card_wl_por_nome_nascimento(cards, nome_guia, nascimento):
     return casam[0] if len(casam) == 1 else None
 
 
+_CONECTIVOS_BUSCA = {"DE", "DA", "DO", "DAS", "DOS", "E", "D"}
+
+
+def _termos_de_busca(nome_limpo: str, cod_s: str, tem_nascimento: bool = False) -> list:
+    """Termos que a busca do #patient_search vai tentar, do mais especifico ao mais amplo.
+
+    Encurtar pelo prefixo resolve o cadastro com sobrenome a mais (ANGELICA OLIVEIRA
+    LEAHY, 27/07), mas encurtar SEM olhar o que sobra produz busca inutil: 'MARIA DE
+    FATIMA LAMOEDO' virava 'MARIA DE' — um prenome comunissimo mais uma preposicao —
+    e o PRORADIS devolvia dezenas de cards. A guia 196370003 morreu assim sete vezes.
+
+    Regra: um termo encurtado precisa manter 2 tokens SIGNIFICATIVOS (conectivo nao
+    conta). As travas antigas continuam: sem codigo real nao encurta (com cod vazio
+    qualquer card 'contem' o codigo — code review 31/07), e 'WL*' so encurta com
+    nascimento, porque so ali a aceitacao exige nascimento igual + card unico."""
+    nome_limpo = " ".join(str(nome_limpo or "").split())
+    if not nome_limpo:
+        return []
+    termos = [nome_limpo]
+    cod_s = str(cod_s or "").strip()
+    pode_encurtar = (bool(cod_s) and not cod_s.startswith("WL")) or                     (cod_s.startswith("WL") and bool(tem_nascimento))
+    if not pode_encurtar:
+        return termos
+    toks = nome_limpo.split(" ")
+    for n in range(len(toks) - 1, 1, -1):
+        prefixo = toks[:n]
+        significativos = [t for t in prefixo
+                          if t.upper() not in _CONECTIVOS_BUSCA and len(t) > 1]
+        if len(significativos) < 2:
+            break          # daqui pra baixo so fica mais amplo; nao adianta seguir
+        termos.append(" ".join(prefixo))
+    return termos
+
+
 def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
     """Busca o paciente, abre prontuario + anexos, retorna [{id, filename, url}].
 
@@ -330,24 +364,16 @@ def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
     (cod "WL*", sem prova) NAO se encurta: uma busca mais ampla com aceite de
     card unico poderia abrir o prontuario de OUTRA pessoa."""
     nome_limpo = " ".join(str(nome or "").split())
-    tentativas = [nome_limpo]
-    toks = nome_limpo.split(" ")
     cod_s = str(cod or "").strip()
     cod_efetivo = cod    # cod usado p/ abrir anexos; vira o cod REAL se o nascimento desempatar
-    # Encurtar exige codigo REAL e nao-vazio: com cod vazio, o ''.includes()
-    # do _record_href e true para QUALQUER card, e a busca cada vez mais larga
-    # aceitaria o primeiro paciente que aparecesse (achado do code review 31/07)
-    if cod_s and not cod_s.startswith("WL"):
-        tentativas += [" ".join(toks[:n]) for n in range(len(toks) - 1, 1, -1)]
-    elif cod_s.startswith("WL") and _norm_nasc(nascimento):
-        # WL + nascimento (site-2): pode ENCURTAR a busca. E seguro porque a
-        # aceitacao (abaixo, _card_wl_por_nome_nascimento) exige NASCIMENTO igual +
-        # nome compativel + card UNICO — nunca aceita card so por aparecer. Cobre o
-        # cadastro com nome do meio a mais (MATEUS ...MONTEIRO...) que o
-        # #patient_search nao acha pelo nome cheio (caso MATEUS, 05/08).
-        tentativas += [" ".join(toks[:n]) for n in range(len(toks) - 1, 1, -1)]
+    tentativas = _termos_de_busca(nome_limpo, cod_s, bool(_norm_nasc(nascimento)))
 
     href, n_cards = None, 0
+    # Contagem da busca pelo NOME COMPLETO. `n_cards` e reatribuido a cada tentativa,
+    # entao no fim do laco ele guarda o resultado da busca mais CURTA — e a mensagem
+    # de erro anunciava esse numero ao lado do nome INTEIRO. Nao havia 24 pacientes
+    # chamados 'MARIA DE FATIMA LAMOEDO'; os 24 eram de 'MARIA DE'.
+    n_cards_cheio = None
     for busca in tentativas:
         page.goto(f"{BASE}/patients", wait_until="networkidle")
         page.wait_for_timeout(1200)
@@ -358,6 +384,8 @@ def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
         page.wait_for_timeout(2500)
         r = _record_href(page, cod) or {}
         href, n_cards = r.get("href"), r.get("n", 0)
+        if n_cards_cheio is None:
+            n_cards_cheio = n_cards          # a 1a tentativa e sempre o nome cheio
         if href:
             break
 
@@ -389,12 +417,13 @@ def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
     if not href:
         # O motivo tem que dizer a VERDADE: 0 cards e 2+ cards sao problemas
         # diferentes e mandam a operadora procurar coisas diferentes.
-        if n_cards == 0:
+        _n = n_cards_cheio if n_cards_cheio is not None else n_cards
+        if _n == 0:
             raise ProntuarioAmbiguo(
                 f"paciente {nome_limpo!r} não encontrado no cadastro do PRORADIS — "
                 f"conferir se o nome está escrito igual nos dois sistemas")
         raise ProntuarioAmbiguo(
-            f"{n_cards} pacientes com o nome {nome_limpo!r} no PRORADIS — não foi "
+            f"{_n} paciente(s) com o nome {nome_limpo!r} no PRORADIS — não foi "
             f"possível identificar o prontuário com segurança")
     # PRONTUARIO DUPLICADO (caso IRAMAIA, 27/07): antes de sair da tela de
     # busca, verifica se ha outro card do MESMO paciente (nome + nascimento

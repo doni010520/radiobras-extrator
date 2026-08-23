@@ -997,11 +997,19 @@ _GRUPOS_PENDENCIA = [
     # difere — ANETE ANDRADE DE MATTOS lida como 'Plunet Andrade de Mattos'. E
     # leitura, nao documento de terceiro. Vem ANTES de nome_nao_bate, que mandaria
     # "solicite a clinica o pedido correto" de um pedido que ja esta la.
+    # DIVERGENCIA DE LEITURA DO NOME -> CLINICA (regra do dono, 23/08). A IA LEU o
+    # documento; a leitura simplesmente nao casa com o nome da guia. Isso e falha
+    # tecnica de leitura/casamento, e re-tentar NUNCA faz um nome divergente passar
+    # a casar — segurar na fila tecnica prende a guia para sempre. Quem resolve e a
+    # CLINICA, anexando um pedido com o nome correto/legivel. O botao de confirmar
+    # continua na tela como atalho para quem CONFERIR o papel e reconhecer o
+    # paciente; o dono da pendencia, porem, e a clinica.
     ("prenome_mal_lido", r"TODOS OS SOBRENOMES BATEM|erro de leitura do prenome",
-     "Conferência", "O pedido provavelmente É deste paciente — só o primeiro nome "
-     "saiu errado na leitura. Abrir a solicitação no prontuário, conferir o nome "
-     "com os próprios olhos e, se for dele, confirmar aqui para liberar o "
-     "faturamento. Se for de outra pessoa, não anexar nada."),
+     "Clínica", "A IA leu o pedido, mas o nome não casou com o da guia — todos os "
+     "sobrenomes batem e só o primeiro nome saiu diferente, o que tem cara de leitura "
+     "ruim (letra de médico, carimbo borrado). Pedir à clínica um pedido em que o nome "
+     "do paciente esteja legível. Se alguém abrir a solicitação e reconhecer o "
+     "paciente, dá para liberar pelo botão — nunca anexar sem conferir."),
     # MODELO sem render (22/08): a guia de MODELO nao tem laudo por definicao — o
     # entregavel e o render 3D. Vem ANTES de sem_entregavel, que mandaria "cobrar a
     # emissao do laudo" de um exame que nunca tera laudo.
