@@ -1115,6 +1115,23 @@ _SUFIXO_LAUDO = (
     "PRORADIS em paralelo — senão a clínica anexa o pedido e a guia continua parada.")
 
 
+def nomes_lidos_resumo(lido: str) -> list:
+    """Os nomes que a IA leu nos anexos, em ordem, sem repetir.
+
+    Serve para a operadora ver O QUE ESTA ESCRITO no documento antes de clicar em
+    "Confirmei que e o paciente" — clique irreversivel. Escondido num <details>
+    colapsado, o nome nao chegava a ela: a HOSANA (196346585) tem um pedido que diz
+    "Para Sr(a): GLADYS FREITAS DOS SANTOS" e mesmo assim o botao aparecia limpo.
+    """
+    import re as _re
+    out = []
+    for m in _re.finditer(r"paciente='([^']*)'", str(lido or "")):
+        nome = (m.group(1) or "").strip()
+        if nome and nome not in out:
+            out.append(nome)
+    return out
+
+
 def motivo_com_laudo_faltando(motivo: str, falta_laudo: bool) -> str:
     """Junta o segundo bloqueio ao texto da pendencia.
 

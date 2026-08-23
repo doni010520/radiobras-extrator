@@ -126,6 +126,8 @@
     border:1px solid var(--rb-success,#0b6b4f);background:var(--rb-success,#0b6b4f);color:#fff}
   .conf-btn:disabled{opacity:.7;cursor:default}
   .conf-msg{font-size:12.5px;margin-left:10px;font-weight:600}
+  .conf-lido{background:#fff8e6;border:1px solid #e6c76b;border-radius:6px;padding:8px 11px;margin-bottom:8px;font-size:13px;line-height:1.55}
+  .conf-lido-alvo{color:#6b7684}
   .conf-warn{margin-top:8px;font-size:11.5px;color:var(--rb-fg-muted);line-height:1.45}
   .conf-warn b{color:var(--rb-fg)}
 
@@ -238,6 +240,15 @@
      rotulo errado por uma tela sem saida (o grupo novo nao tinha o clique). #}
           {% if p.chave in ('pedido_ilegivel','solic_nao_confirmada','nome_nao_bate','prenome_mal_lido') and not p.resolvido %}
           <div class="conf-box">
+            {# O NOME LIDO, na cara da operadora. A HOSANA tem um pedido que diz
+               "Para Sr(a): GLADYS FREITAS DOS SANTOS" e o botao aparecia limpo,
+               com o nome escondido num <details> colapsado la em cima. #}
+            {% if p.nomes_lidos %}
+            <div class="conf-lido">A IA leu no documento:
+              {% for n in p.nomes_lidos %}<b>{{ n }}</b>{% if not loop.last %} · {% endif %}{% endfor %}
+              <br><span class="conf-lido-alvo">Paciente da guia: <b>{{ p.paciente }}</b></span>
+            </div>
+            {% endif %}
             <button class="conf-btn" onclick="confirmar({{ p.id }}, this, event)">✔ Confirmei que é o paciente — pode faturar</button>
             <span class="conf-msg"></span>
             <div class="conf-warn">⚠ Isso <b>libera o faturamento</b> desta guia (anexação real, irreversível). Confirme só depois de <b>abrir a solicitação e conferir que o nome é do paciente</b>. O laudo ainda é exigido — se não tiver, fatura quando sair.</div>

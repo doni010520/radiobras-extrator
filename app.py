@@ -1403,6 +1403,9 @@ def pendencias_page():
         p["exames_gto"] = _l.get("exames_gto")
         p["exames_lidos"] = _l.get("exames_lidos")
         p["lido"] = _l.get("lido")
+        # o nome LIDO no documento, ao lado do botao de confirmar: o clique e
+        # irreversivel e a operadora precisa ver o que esta escrito no papel.
+        p["nomes_lidos"] = db.nomes_lidos_resumo(_l.get("lido"))
         # quantos arquivos guardados desta guia — 0 quando o volume nao esta
         # montado ou a execucao e antiga. So mostra o bloco se houver algo; link
         # que abre em 404 e pior do que nao ter link.
