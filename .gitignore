@@ -73,3 +73,6 @@ arvore_decisao_faturamento.pdf
 
 # dumps de diagnostico gerados a mao
 reconciliacao_*.txt
+
+# screenshot de debug do login (extrator_odontoprev grava na falha)
+login_failed.png
