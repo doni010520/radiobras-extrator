@@ -3250,6 +3250,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             "em alguns minutos.")
     tmp = tempfile.mkdtemp(prefix="_esteira_")
     _limpar_temporarios_antigos()   # varre sobras antigas antes de gerar as novas
+    # EXPURGO da pasta de pendencia (TTL PROPRIO, 30 dias — nao reaproveita o
+    # REVIEW_TTL_DIAS de 90: sao razoes diferentes e misturar faz perder as duas).
+    # Dado transitorio: depois que a operadora anexa, a pasta e peso morto — e
+    # imagem de paciente parada em disco vira problema de LGPD, nao de espaco.
+    try:
+        import arquivos_pendencia as _apx
+        if _apx.base_dir():
+            _rr = _apx.expurgar(_apx.base_dir(),
+                                int(os.environ.get("PENDENCIAS_RETENCAO_DIAS", "30")))
+            if _rr.get("removidas"):
+                log(f"[ARQ] expurgo: {_rr['removidas']} pasta(s) alem do prazo")
+    except Exception:
+        pass
 
     # ---- 2) lança os pools (descoberta-API + download + decisão + anexação) ----
     tds = [threading.Thread(target=descobridor_api, args=(token, alvos), daemon=True)]
@@ -3475,6 +3488,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             "anexado": r.get("anexado"),
             "anexar_erro": r.get("anexar_erro"),   # p/ o motivo da pendência ser o REAL
             "laudo_imgs": dec.get("plano_laudo_imgs", []),
+            # pasta temporaria do plano — a esteira apaga tudo no fim; o bloco
+            # [ARQ] copia dela o que a operacao vai precisar conferir a mao.
+            "pasta_dl": dec.get("pasta_dl"),
             # EVIDENCIA durável: o que foi anexado de fato, o que foi retirado do
             # plano e o funil de anexos do prontuário.
             "arquivos_anexados": r.get("arquivos_anexados") or [],
@@ -3522,6 +3538,45 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     _t(f"[GEMINI] {_gem_tokens['chamadas']} chamadas "
        f"({resumo['gemini_chamadas_por_gto']}/GTO) | tokens in={_gem_tokens['in']:,} "
        f"out={_gem_tokens['out']:,} | thinking_budget={_GEM_THINKING}")
+    # PASTA DA PENDENCIA (22/08, pedido da Andrea): antes de apagar tudo, guarda os
+    # arquivos das guias que NAO faturaram, para a operacao conferir e anexar a mao
+    # quando o robo nao conseguiu. Nao ha download novo — e copia do que ja esta em
+    # disco. Falha quieto: guardar arquivo nunca pode derrubar um faturamento.
+    try:
+        import arquivos_pendencia as _ap
+        _base = _ap.base_dir()
+        if _base:
+            _guardados, _guias = 0, 0
+            for _d in decisoes:
+                if _d.get("anexado") == "OK":
+                    continue                    # faturou: nao ha o que conferir
+                _pd = _d.get("pasta_dl")
+                if not _pd or not os.path.isdir(_pd):
+                    continue
+                # re-lista a pasta em vez de usar plano_laudo_imgs: a SOLICITACAO e
+                # gravada depois da decisao, e e justamente ela que a operadora
+                # precisa ver quando a leitura falhou.
+                _arqs = sorted(os.listdir(_pd))
+                # NAO entregar o que o robo EXCLUIU de proposito. A pasta da rodada
+                # guarda tambem laudo de exame PARTICULAR e de accession fora desta
+                # guia — `_filtrar_arquivos_da_gto` os descarta. Copiar tudo poria na
+                # mao da operadora justamente o documento que causa glosa se anexado.
+                _fora = {os.path.basename(str(x))
+                         for x in (_d.get("laudos_excluidos") or [])}
+                _arqs = [a for a in _arqs if a not in _fora]
+                if not _arqs:
+                    continue
+                _r = _ap.guardar(_base, conta, data, _d.get("gto"),
+                                 _d.get("paciente"), _pd, _arqs)
+                if _r["qtd"]:
+                    _guardados += _r["qtd"]
+                    _guias += 1
+            if _guias:
+                _t(f"[ARQ] {_guardados} arquivo(s) de {_guias} guia(s) guardados "
+                   f"para conferencia da operacao")
+    except Exception as e:
+        _t(f"[ARQ] guardar arquivos falhou (nao afeta faturamento): {str(e)[:90]}")
+
     # Laudos e imagens do dia já foram anexados — apaga a pasta da execução.
     # (Só nomes de arquivo seguem no resumo; ninguém lê o conteúdo depois daqui.)
     try:

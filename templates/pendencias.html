@@ -128,7 +128,23 @@
   .conf-msg{font-size:12.5px;margin-left:10px;font-weight:600}
   .conf-warn{margin-top:8px;font-size:11.5px;color:var(--rb-fg-muted);line-height:1.45}
   .conf-warn b{color:var(--rb-fg)}
-</style>
+
+    /* arquivos da guia */
+    .arqs{margin:10px 0;padding:10px 12px;border:1px solid #d9e2ec;border-radius:8px;background:#fbfdff}
+    .arqs-cab{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;font-size:13px}
+    .arqs-zip{font-size:12px;text-decoration:none;color:#0f7a4f;border:1px solid #0f7a4f;
+              border-radius:6px;padding:3px 9px;white-space:nowrap}
+    .arqs-zip:hover{background:#0f7a4f;color:#fff}
+    .arqs-lista{display:flex;flex-wrap:wrap;gap:10px}
+    .arq{width:118px;border:1px solid #e3e8ee;border-radius:6px;background:#fff;overflow:hidden;
+         text-align:center;font-size:11px}
+    .arq img{width:100%;height:86px;object-fit:cover;display:block;background:#f1f4f8}
+    .arq .ico{height:86px;display:flex;align-items:center;justify-content:center;font-size:30px;background:#f1f4f8}
+    .arq .nm{padding:4px 5px;color:#334;word-break:break-all;line-height:1.25}
+    .arq .tam{color:#8a94a6;font-size:10px;padding-bottom:5px}
+    .arq a{text-decoration:none;color:inherit;display:block}
+    .arqs-vazio{color:#8a94a6;font-size:12px}
+  </style>
 </head>
 <body>
 {% include '_topnav.html' %}
@@ -202,6 +218,21 @@
           {% endif %}
           {% if p.lido %}<details class="evid-det"><summary>🔍 O que a IA leu, por anexo</summary><div class="evid-raw">{{ p.lido }}</div></details>{% endif %}
           {% if p.acao %}<div class="det-acao"><b>O que fazer:</b> {{ p.acao }}</div>{% endif %}
+          {# ARQUIVOS DA GUIA (22/08, pedido da Andrea): o que o robo ja baixou,
+             para conferir e anexar a mao. Vem ANTES do botao de faturar de
+             proposito — aquele botao e irreversivel, e a pessoa tem que ver os
+             documentos antes de chegar nele. Carga preguicosa: so busca quando a
+             linha abre, senao seriam N leituras de disco a cada carregamento. #}
+          {% if p.n_arquivos %}
+          <div class="arqs" data-pid="{{ p.id }}" data-carregado="0">
+            <div class="arqs-cab">
+              <b>📎 Arquivos desta guia ({{ p.n_arquivos }})</b>
+              <a class="arqs-zip" href="/pendencias/{{ p.id }}/arquivos.zip"
+                 onclick="event.stopPropagation()">⬇ Baixar tudo (.zip)</a>
+            </div>
+            <div class="arqs-lista">carregando…</div>
+          </div>
+          {% endif %}
           {% if p.chave in ('pedido_ilegivel','solic_nao_confirmada','nome_nao_bate') and not p.resolvido %}
           <div class="conf-box">
             <button class="conf-btn" onclick="confirmar({{ p.id }}, this, event)">✔ Confirmei que é o paciente — pode faturar</button>
@@ -246,6 +277,7 @@ function toggleDet(row){
   if(det && det.classList.contains('det')){
     var open = det.classList.toggle('open');
     row.classList.toggle('exp', open);
+    if(open) carregarArquivos(det);   // so le o disco quando a linha abre
   }
 }
 async function marcar(id, el){
@@ -290,6 +322,32 @@ async function confirmar(id, btn, ev){
     if(j.ok){ btn.textContent = '✔ Confirmado — faturando'; }
     else { btn.disabled = false; }
   }catch(e){ msg.style.color='#b3261e'; msg.textContent='Erro de rede.'; btn.disabled=false; }
+}
+
+// ARQUIVOS DA GUIA — carga preguicosa ao abrir a linha
+function carregarArquivos(det){
+  var box = det.querySelector('.arqs');
+  if(!box || box.dataset.carregado === '1') return;
+  box.dataset.carregado = '1';
+  var pid = box.dataset.pid, alvo = box.querySelector('.arqs-lista');
+  fetch('/pendencias/' + pid + '/arquivos', {headers:{'X-Requested-With':'fetch'}})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var it = (d && d.itens) || [];
+      if(!it.length){ alvo.innerHTML = '<span class="arqs-vazio">nenhum arquivo guardado.</span>'; return; }
+      alvo.innerHTML = it.map(function(a){
+        var url = '/pendencias/' + pid + '/arquivo/' + encodeURIComponent(a.nome);
+        var kb = (a.bytes/1024).toFixed(0) + ' KB';
+        var topo = a.tipo === 'imagem'
+          ? '<img src="' + url + '?inline=1" loading="lazy" alt="">'
+          : '<div class="ico">' + (a.tipo === 'pdf' ? '📄' : '📎') + '</div>';
+        return '<div class="arq"><a href="' + url + '?inline=1" target="_blank" ' +
+               'onclick="event.stopPropagation()">' + topo +
+               '<div class="nm">' + a.nome + '</div>' +
+               '<div class="tam">' + kb + '</div></a></div>';
+      }).join('');
+    })
+    .catch(function(){ alvo.innerHTML = '<span class="arqs-vazio">falha ao listar.</span>'; });
 }
 </script>
 </body>

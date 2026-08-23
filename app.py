@@ -1368,6 +1368,8 @@ def pendencias_page():
     if status not in ("abertas", "resolvidas", "todas"):
         status = "abertas"
     itens = db.listar_pendencias(status=status)
+    import arquivos_pendencia as _ap
+    _ap_base = _ap.base_dir()
     _gtos = [p.get("gto") for p in itens]
     _leituras = db.leituras_por_gtos(_gtos)   # o que a IA leu (evidência)
     _tent = db.tentativas_por_gtos(_gtos)      # p/ saber se um transitório já esgotou
@@ -1401,6 +1403,14 @@ def pendencias_page():
         p["exames_gto"] = _l.get("exames_gto")
         p["exames_lidos"] = _l.get("exames_lidos")
         p["lido"] = _l.get("lido")
+        # quantos arquivos guardados desta guia — 0 quando o volume nao esta
+        # montado ou a execucao e antiga. So mostra o bloco se houver algo; link
+        # que abre em 404 e pior do que nao ter link.
+        try:
+            p["n_arquivos"] = len(_ap.listar(_ap_base, p.get("conta"), p.get("dia"),
+                                             p.get("gto"), p.get("paciente")))                 if _ap_base else 0
+        except Exception:
+            p["n_arquivos"] = 0
     # front (o usuário vê) tira TUDO que é INTERNO (nosso) — em reprocessamento ou já
     # esgotado. O resto aparece agrupado por dia, nada escondido da operação. Falha
     # nossa não some em silêncio: vai pro WhatsApp do dono (notificador.py) e pro loop
@@ -1437,6 +1447,88 @@ def pendencias_page():
                            itens=front, status=status, prazo=_prazo_dias(), sla_ct=sla_ct,
                            n_abertas=sum(1 for p in front if not p.get("resolvido")),
                            n_vencidas=0)
+
+
+# ── ARQUIVOS DA PENDENCIA (22/08, pedido da Andrea) ─────────────────────────
+# "criar pasta com imagens resolvidas para casos de nao conseguir ler solicitacoes,
+# depois ela anexa tudo". Os arquivos ja foram baixados na rodada; a esteira copia
+# pra /dados/pendencias/<plano>/<data>/<GTO_PACIENTE>/ antes de limpar.
+#
+# NADA e servido como estatico: sao laudo e imagem de paciente (LGPD). Estas rotas
+# passam pelo guard de login como o resto do app, e o caminho e resolvido a partir
+# do ID da pendencia no BANCO — se viesse pela URL, daria pra pedir a pasta de
+# qualquer outro paciente.
+def _pasta_da_pendencia(pid):
+    """(base, pendencia) ou (None, None) se o recurso estiver desligado/inexistente."""
+    import arquivos_pendencia as ap
+    base = ap.base_dir()
+    if not base:
+        return None, None
+    pend = db.pendencia_por_id(pid)
+    return (base, pend) if pend else (None, None)
+
+
+@app.route("/pendencias/<int:pid>/arquivos")
+def pendencia_arquivos(pid):
+    """O que ha na pasta desta guia — para a tela montar miniatura e download."""
+    import arquivos_pendencia as ap
+    base, pend = _pasta_da_pendencia(pid)
+    if not base:
+        return jsonify({"itens": [], "motivo": "pasta nao configurada"})
+    itens = ap.listar(base, pend["conta"], pend["dia"], pend["gto"], pend["paciente"])
+    return jsonify({"itens": itens, "gto": pend["gto"],
+                    "paciente": pend["paciente"], "dia": pend["dia"]})
+
+
+@app.route("/pendencias/<int:pid>/arquivo/<path:nome>")
+def pendencia_arquivo(pid, nome):
+    """Um arquivo. `inline` para ver no navegador; sem ele, baixa."""
+    import arquivos_pendencia as ap
+    base, pend = _pasta_da_pendencia(pid)
+    if not base:
+        return ("Pasta de arquivos não configurada.", 404)
+    caminho = ap.caminho_do_arquivo(base, pend["conta"], pend["dia"], pend["gto"],
+                                    pend["paciente"], nome)
+    if not caminho:
+        # nome suspeito (../) ou arquivo inexistente — a mesma resposta para os dois,
+        # para nao contar a quem sonda se o arquivo existe
+        return ("Arquivo não encontrado.", 404)
+    # XSS COM O COOKIE DA OPERADORA: os arquivos vem do prontuario do PRORADIS, ou
+    # seja de TERCEIRO. Servir .html/.svg inline renderiza a pagina dentro da sessao
+    # dela. So imagem e PDF abrem inline; o resto baixa. Mais o nosniff, para o
+    # navegador nao adivinhar tipo pelo conteudo.
+    _ext = os.path.splitext(caminho)[1].lower()
+    _pode_inline = _ext in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf")
+    inline = request.args.get("inline") == "1" and _pode_inline
+    resp = send_file(caminho, as_attachment=not inline,
+                     download_name=os.path.basename(caminho))
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@app.route("/pendencias/<int:pid>/arquivos.zip")
+def pendencia_arquivos_zip(pid):
+    """Tudo de uma vez — e o que a operadora quer quando vai anexar no portal."""
+    import zipfile
+    import arquivos_pendencia as ap
+    base, pend = _pasta_da_pendencia(pid)
+    if not base:
+        return ("Pasta de arquivos não configurada.", 404)
+    itens = ap.listar(base, pend["conta"], pend["dia"], pend["gto"], pend["paciente"])
+    if not itens:
+        return ("Nenhum arquivo guardado para esta guia.", 404)
+    bio = io.BytesIO()
+    with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as z:
+        for it in itens:
+            caminho = ap.caminho_do_arquivo(base, pend["conta"], pend["dia"],
+                                            pend["gto"], pend["paciente"], it["nome"])
+            if caminho:
+                z.write(caminho, arcname=it["nome"])
+    bio.seek(0)
+    _pac = re.sub(r"[^A-Za-z0-9]+", "_", str(pend.get("paciente") or "")).strip("_")
+    nome_zip = f"{pend['gto']}_{_pac}.zip" if _pac else f"{pend['gto']}.zip"
+    return send_file(bio, as_attachment=True, download_name=nome_zip,
+                     mimetype="application/zip")
 
 
 @app.route("/pendencias/<int:pid>/resolver", methods=["POST"])

@@ -510,6 +510,19 @@ def contar_pendencias_front(so_no_prazo: bool = False, prazo: int = 7) -> int:
         return 0
 
 
+def pendencia_por_id(pid: int) -> dict:
+    """conta/dia/gto/paciente de UMA pendencia. A tela de arquivos resolve o caminho
+    da pasta a partir DAQUI, nunca da URL: se o caminho viesse por parametro, daria
+    para montar a pasta de qualquer outro paciente."""
+    with SessionLocal() as s:
+        p = s.get(Pendencia, int(pid))
+        if not p:
+            return {}
+        return {"id": p.id, "conta": p.conta, "dia": p.dia, "gto": p.gto,
+                "paciente": p.paciente, "categoria": p.categoria,
+                "resolvido": bool(p.resolvido)}
+
+
 def listar_pendencias(status: str = "abertas", limit: int = 5000) -> list:
     with SessionLocal() as s:
         q = s.query(Pendencia)
