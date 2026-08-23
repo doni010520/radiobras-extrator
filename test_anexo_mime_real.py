@@ -69,10 +69,11 @@ def test_tiff_disfarcado_de_jpg_e_convertido():
 
 
 # ── lixo: recusa INDIVIDUAL, nunca envenena o lote ────────────────────────
-def test_bytes_ilegiveis_sao_recusados_com_motivo():
-    mime, motivo = preparar_anexo("pedido.jpg", b"nao sou imagem nenhuma" * 20)
-    assert mime is None
-    assert isinstance(motivo, str) and motivo
+# NOTA: aqui havia dois testes que exigiam DESCARTE (mime is None) para bytes
+# ilegiveis e para JPEG truncado. A producao desmentiu os dois na rodada #674 e eles
+# foram substituidos por `test_jpg_ilegivel_cai_na_extensao_em_vez_de_sumir` e
+# `test_jpeg_truncado_no_fim_ainda_e_aproveitado`, no bloco de REGRESSAO ao final.
+# Eram testes que fixavam uma decisao minha, nao um comportamento observado.
 
 
 def test_arquivo_vazio_e_recusado():
@@ -80,11 +81,13 @@ def test_arquivo_vazio_e_recusado():
     assert mime is None
 
 
-def test_jpeg_truncado_e_recusado_e_nao_sobe_como_jpeg():
-    """O modo de falha real: upload cortado pela metade. A assinatura BATE (comeca
-    com FFD8FF), entao farejar nao basta — tem de conseguir DECODIFICAR."""
-    mime, _ = preparar_anexo("pedido.jpg", _jpeg()[:60])
-    assert mime is None
+def test_jpeg_truncado_nao_sobe_com_mime_mentiroso():
+    """Truncado ainda e aproveitado (o Gemini le), mas o MIME tem de descrever o
+    que esta sendo enviado de fato."""
+    mime, blob = preparar_anexo("pedido.jpg", _jpeg()[:60])
+    assert mime in ("image/jpeg", None)
+    if mime:
+        assert blob
 
 
 # ── nao pode quebrar o caminho normal ─────────────────────────────────────
@@ -114,3 +117,70 @@ def test_tiff_com_extensao_certa_continua_convertendo():
 def test_sem_extensao_decide_pelos_bytes():
     mime, _ = preparar_anexo("anexo_sem_ponto", _png())
     assert mime == "image/png"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# REGRESSAO medida em producao na rodada #674 (mesmo dia da correcao).
+#
+# O FABRICIO (196307916) saiu de `cand=2 descartados=0` para `cand=0 descartados=2`,
+# com o motivo nomeando os arquivos:
+#     FABRICIO...jpg: formato .jpg nao suportado ou arquivo corrompido
+#     FABRICIO...pdf: formato .pdf nao suportado ou arquivo corrompido
+#
+# Recusar um .pdf foi o sinal. A funcao passou a DESCARTAR o que antes ela apenas
+# deixava passar — troquei um envenenamento de lote (ja resolvido pelo resgate
+# um-a-um) por perda silenciosa de anexo.
+#
+# Dois modos de falha provados:
+#   1. JPEG truncado — sem o marcador de fim (FFD9). E o corte classico de upload,
+#      e o Gemini lia sem reclamar. Pillow recusa por padrao.
+#   2. PDF cujo '%PDF' nao esta no byte 0 — espaco em branco antes do cabecalho e
+#      LEGAL na especificacao, e varios geradores fazem isso.
+#
+# A regra que faltava: farejar e re-encodar so podem ACRESCENTAR capacidade. Quando
+# nada disso resolve, cai no comportamento ANTIGO (confia na extensao) em vez de
+# descartar. Se o arquivo for mesmo ilegivel, o resgate um-a-um isola ele sozinho.
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_jpeg_truncado_no_fim_ainda_e_aproveitado():
+    """Falta so o EOI. O Gemini lia; nao podemos jogar fora."""
+    b = _jpeg()[:-2]
+    mime, blob = preparar_anexo("pedido.jpg", b)
+    assert mime is not None, "anexo valido foi descartado"
+    assert mime.startswith("image/")
+
+
+def test_jpeg_cortado_pela_metade_ainda_e_aproveitado():
+    b = _jpeg()
+    mime, _ = preparar_anexo("pedido.jpg", b[:len(b) // 2])
+    assert mime is not None
+
+
+def test_pdf_com_espaco_antes_do_cabecalho():
+    """Espaco antes de '%PDF' e legal na especificacao."""
+    mime, _ = preparar_anexo("solic.pdf", b"   \n%PDF-1.4\n" + b"x" * 400)
+    assert mime == "application/pdf"
+
+
+def test_pdf_que_nao_da_para_farejar_cai_na_extensao():
+    """Antes passava; nao pode virar descarte."""
+    mime, _ = preparar_anexo("solic.pdf", b"conteudo estranho sem assinatura" * 20)
+    assert mime == "application/pdf"
+
+
+def test_jpg_ilegivel_cai_na_extensao_em_vez_de_sumir():
+    """O resgate um-a-um isola o anexo ruim. Descartar aqui perde o anexo BOM
+    junto, quando o palpite de corrompido estiver errado."""
+    mime, _ = preparar_anexo("pedido.jpg", b"nao sou imagem nenhuma" * 20)
+    assert mime == "image/jpeg"
+
+
+def test_sem_extensao_e_sem_assinatura_ai_sim_recusa():
+    """Sem nenhum sinal, nao ha o que enviar."""
+    mime, motivo = preparar_anexo("anexo_sem_ponto", b"lixo binario" * 20)
+    assert mime is None and isinstance(motivo, str)
+
+
+def test_extensao_desconhecida_e_sem_assinatura_recusa():
+    mime, _ = preparar_anexo("arquivo.xyz", b"lixo" * 50)
+    assert mime is None

@@ -1208,7 +1208,13 @@ def classe_retry(motivo: str, categoria: str = "") -> str:
     if _TRANSITORIO_RE.search(m):
         return "transitorio"
     _chave, quem, _acao = classificar_pendencia(m, categoria)
-    if quem in ("Radiologista", "Clínica", "Cadastro"):
+    # RESPONSAVEL COMPOSTO (23/08): 'Clinica + Radiologista' nao casava na tupla e
+    # caia em 'logica'. A EVETLYN — a guia de bloqueio DUPLO, a mais travada da fila
+    # — virava tipo 'conferir' (sem ter documento para conferir) e ia para o FIM do
+    # relatorio, atras das que dependem de um lado so. Se QUALQUER responsavel for
+    # externo, a guia espera terceiro: compor responsaveis nao muda a natureza da
+    # espera.
+    if any(_x in str(quem or "") for _x in ("Radiologista", "Clínica", "Cadastro")):
         return "externo"
     return "logica"
 

@@ -658,11 +658,16 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
             # (aceita ilegível/mal-lido/nome de outra leitura). As outras travas ficam:
             # tem de ser 'solicitacao' legível, e o LAUDO segue obrigatório no chamador.
             a["_via"] = "confirmado_humano"
-        elif _nomes_compat(_lido, nome_gto) and _mesma_geracao(_lido, nome_gto):
-            # _mesma_geracao AQUI, e nao dentro de _nomes_compat: este e o portao do
-            # DOCUMENTO, onde aceitar o pedido do pai como sendo do filho e o dano.
-            # No match do PACIENTE (worklist) o mesmo veto quebrou o HELIO — ver o
-            # docstring de _mesma_geracao.
+        elif _nomes_compat(_lido, nome_gto):
+            # VETO GERACIONAL REVERTIDO TAMBEM AQUI (23/08). Ficou so como
+            # `_mesma_geracao`, sem uso no fluxo — ver o docstring dela para o
+            # porque. Resumo: custo medido e real (a GTO 195540484, ja FATURADA,
+            # passaria a dar PACIENTE_INCOMPATIVEL, e GILDASIO ...SOBRINHO herdaria
+            # o mesmo risco quando a clinica anexar o pedido), beneficio nao
+            # observado (nenhum caso de pai/filho registrado). E o dentista omitir
+            # 'JUNIOR' ao escrever o pedido e comum; nao e documento de terceiro.
+            # Bloquear faturamento que funciona em troca de protecao teorica e a
+            # troca errada — e nao e decisao para tomar sozinho.
             a["_via"] = "nome"
         elif _nome_ausente(_lido, nome_gto):
             # NOME NAO LIDO — nao e prova contra. Aceita se houver OUTRO sinal: o
@@ -1313,6 +1318,16 @@ _MIME_DIRETO = {"pdf": "application/pdf", "png": "image/png",
 _CONVERTER = {"tif", "tiff", "bmp", "gif"}
 
 
+# JPEG cortado no upload — falta o marcador de fim (FFD9). E o modo de falha mais
+# comum de anexo do prontuario, e o Gemini lia sem reclamar; o Pillow, por padrao,
+# recusa. Sem isto a leitura do anexo virava descarte (medido no FABRICIO, #674).
+try:
+    from PIL import ImageFile as _PILImageFile
+    _PILImageFile.LOAD_TRUNCATED_IMAGES = True
+except Exception:
+    pass
+
+
 def _decodifica(blob) -> bool:
     """O Pillow consegue LER a imagem inteira? Assinatura certa nao basta: upload
     cortado pela metade comeca com FFD8FF e mesmo assim nao decodifica — foi assim
@@ -1358,18 +1373,33 @@ def preparar_anexo(filename, blob):
         return None, "arquivo vazio"
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     real = _mime_do_conteudo(blob) or ("image/webp" if _eh_webp(blob) else "")
+    # '%PDF' nao precisa estar no byte 0: espaco em branco antes do cabecalho e
+    # LEGAL na especificacao e varios geradores fazem isso. Sem esta busca, um PDF
+    # perfeitamente valido caia como "formato nao suportado" (FABRICIO, #674).
+    if not real and b"%PDF" in blob[:1024]:
+        real = "application/pdf"
     if real == "application/pdf":
         return real, blob                      # PDF o Pillow nao valida; assinatura basta
     if real:                                   # PNG/JPEG/WEBP declarados pelos BYTES
         if real == "image/webp" or _decodifica(blob):
             return real, blob
-        # assinatura certa mas ilegivel (upload cortado) -> tenta salvar o que der
         _b = _reencoda(blob)
-        return ("image/jpeg", _b) if _b else (None, f"imagem ilegível (.{ext or '?'})")
-    # sem assinatura conhecida: TIFF/BMP/GIF/HEIC e afins -> re-encoda
-    _b = _reencoda(blob)
-    if _b:
-        return "image/jpeg", _b
+        if _b:
+            return "image/jpeg", _b
+    else:
+        # sem assinatura conhecida: TIFF/BMP/GIF/HEIC e afins -> re-encoda
+        _b = _reencoda(blob)
+        if _b:
+            return "image/jpeg", _b
+    # NADA RESOLVEU -> cai no comportamento ANTIGO (confia na extensao) em vez de
+    # DESCARTAR. Esta e a licao da rodada #674: farejar e re-encodar so podem
+    # ACRESCENTAR capacidade. Quando substituiram o caminho antigo, trocamos um
+    # envenenamento de lote — que o resgate um-a-um ja resolve — por PERDA
+    # SILENCIOSA de anexo: o FABRICIO foi de cand=2 para cand=0, com um .pdf
+    # recusado como "formato nao suportado". Se o arquivo for mesmo ilegivel, o
+    # resgate isola ele sozinho e a guia segue com os outros.
+    if ext in _MIME_DIRETO:
+        return _MIME_DIRETO[ext], blob
     return None, f"formato .{ext or '?'} não suportado ou arquivo corrompido"
 
 
@@ -1996,6 +2026,35 @@ def _motivo_nao_cobre(pede, falta, cn):
             f"{lista_amigavel(pede)}; o pedido encontrado no prontuário pede "
             f"{lista_amigavel(cn)}. O QUE FAZER: pedir à clínica um pedido que inclua "
             f"{lista_amigavel(falta)}.")
+
+
+def _erro_de_leitura_amigavel(erro) -> str:
+    """Texto da pendencia quando `_decidir` falhou.
+
+    Quando a causa JA E CONHECIDA, ela sai por extenso. O envelope generico
+    ("falha tecnica na leitura dos documentos... reprocessar o dia") era aplicado a
+    TODO motivo de categoria 'erro', e o classificador — que e first-match-wins —
+    casava `falha_tecnica` (db.py:1095) antes de `paciente_nao_achado` (db.py:1099).
+    A causa real ficava no "Detalhe:" e nunca era lida.
+
+    Caso MARIA DE FATIMA LAMOEDO (196370003): "paciente nao encontrado no cadastro
+    do PRORADIS" saia rotulado como falha NOSSA, escondido do painel e no retry —
+    sendo que nenhuma re-tentativa faz um paciente aparecer. Ele esta cadastrado com
+    outro nome (caso VALDEMIR: o PRORADIS traz 'VALDEMIR DOS SANTOS PEREIRA' e a
+    guia chama de 'DOS ANJOS'). Quem resolve e o cadastro.
+
+    Homonimo NAO entra aqui de proposito: com 2+ cards o nascimento desempata num
+    re-run (caso ALESSANDRA), entao ali insistir funciona e continua sendo nosso."""
+    _e = str(erro or "")
+    if re.search(r"n[ãa]o encontrado no cadastro do PRORADIS", _e, re.I):
+        return _e if _e.startswith("NÃO FATUROU") else (
+            "NÃO FATUROU porque o " + _e.split("anexos:", 1)[-1].strip()
+            + " O QUE FAZER: conferir no PRORADIS se o paciente está cadastrado com "
+              "outro nome (sobrenome a mais, nome de casada) e acertar o cadastro. "
+              "Reprocessar NÃO resolve — o robô vai procurar pelo mesmo nome.")
+    return ("NÃO FATUROU por falha técnica na leitura dos documentos "
+            "— não é problema do documento nem da clínica. "
+            "O QUE FAZER: reprocessar o dia. Detalhe: " + _e[:160])
 
 
 def _motivo_sem_candidatos(n_prontuario, descartados):
@@ -3766,9 +3825,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                "(Falha nossa — o documento do paciente pode estar "
                                "perfeito.) Detalhe: " + _e[:120])
             elif _e:
-                dec["erro"] = ("NÃO FATUROU por falha técnica na leitura dos documentos "
-                               "— não é problema do documento nem da clínica. "
-                               "O QUE FAZER: reprocessar o dia. Detalhe: " + _e[:160])
+                dec["erro"] = _erro_de_leitura_amigavel(_e)
         elif d.get("indice_solicitacao") is None:
             cat = "sem_solicitacao"
         else:
