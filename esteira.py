@@ -1077,6 +1077,10 @@ _MIME_POR_ASSINATURA = [
     (bytes([0x89]) + b"PNG", "image/png"),
     (bytes([0xFF, 0xD8, 0xFF]), "image/jpeg"),
 ]
+# WEBP nao cabe na tabela acima (assinatura partida: "RIFF" + 4 bytes de tamanho +
+# "WEBP"), mas o Gemini aceita — sem isto um .webp legitimo seria re-encodado a toa.
+def _eh_webp(b: bytes) -> bool:
+    return len(b) >= 12 and b[:4] == b"RIFF" and b[8:12] == b"WEBP"
 
 
 def _mime_do_conteudo(b: bytes) -> str:
@@ -1254,24 +1258,64 @@ _MIME_DIRETO = {"pdf": "application/pdf", "png": "image/png",
 _CONVERTER = {"tif", "tiff", "bmp", "gif"}
 
 
+def _decodifica(blob) -> bool:
+    """O Pillow consegue LER a imagem inteira? Assinatura certa nao basta: upload
+    cortado pela metade comeca com FFD8FF e mesmo assim nao decodifica — foi assim
+    que um anexo derrubou a leitura da guia inteira."""
+    try:
+        Image.open(io.BytesIO(blob)).load()
+        return True
+    except Exception:
+        return False
+
+
+def _reencoda(blob):
+    """Re-encoda para JPEG o que o Pillow le e o Gemini nao aceita. (None) se nem
+    o Pillow le."""
+    try:
+        img = Image.open(io.BytesIO(blob))
+        # TIFF multipágina: só a 1ª. O pedido do dentista cabe numa folha.
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
 def preparar_anexo(filename, blob):
     """(mime, blob) pronto para o Gemini, ou (None, motivo) se não dá.
-    Converte o que o Pillow lê e o Gemini não aceita."""
+
+    O TIPO SAI DOS BYTES, NAO DO NOME (23/08). Antes o MIME vinha da extensao e os
+    bytes passavam intactos: um arquivo chamado '.jpg' que era HEIC, TIFF ou um JPEG
+    truncado ia rotulado como image/jpeg, o Gemini nao decodificava e respondia
+    `400 INVALID_ARGUMENT — Unable to process input image`. Como os anexos vao TODOS
+    numa requisicao so, o lote inteiro caia junto e a guia virava "falha tecnica" com
+    o pedido valido do lado: FABRICIO (196307916) e as duas DILMA (196307961,
+    196308165), 18/08. `_mime_do_conteudo` ja existia no modulo e fazia exatamente a
+    farejada que faltava aqui.
+
+    Ordem: assinatura real -> decodificacao verificada -> re-encode -> recusa
+    INDIVIDUAL. Recusar um anexo e barato (vira 'descartado' e a guia segue); recusar
+    o lote nao."""
+    if not blob:
+        return None, "arquivo vazio"
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-    if ext in _MIME_DIRETO:
-        return _MIME_DIRETO[ext], blob
-    if ext in _CONVERTER:
-        try:
-            img = Image.open(io.BytesIO(blob))
-            # TIFF multipágina: só a 1ª. O pedido do dentista cabe numa folha.
-            if img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=90)
-            return "image/jpeg", buf.getvalue()
-        except Exception as e:
-            return None, f"{ext} ilegível ({str(e)[:40]})"
-    return None, f"formato .{ext or '?'} não suportado"
+    real = _mime_do_conteudo(blob) or ("image/webp" if _eh_webp(blob) else "")
+    if real == "application/pdf":
+        return real, blob                      # PDF o Pillow nao valida; assinatura basta
+    if real:                                   # PNG/JPEG/WEBP declarados pelos BYTES
+        if real == "image/webp" or _decodifica(blob):
+            return real, blob
+        # assinatura certa mas ilegivel (upload cortado) -> tenta salvar o que der
+        _b = _reencoda(blob)
+        return ("image/jpeg", _b) if _b else (None, f"imagem ilegível (.{ext or '?'})")
+    # sem assinatura conhecida: TIFF/BMP/GIF/HEIC e afins -> re-encoda
+    _b = _reencoda(blob)
+    if _b:
+        return "image/jpeg", _b
+    return None, f"formato .{ext or '?'} não suportado ou arquivo corrompido"
 
 
 # Janela de busca do exame, em dias, em torno da data da guia. 0 desliga (volta ao
