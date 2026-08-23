@@ -1567,6 +1567,55 @@ def _consulta_inicial(pg, data, tentativas: int = 3, _sleep=None) -> tuple:
     return False, erro
 
 
+def _nome_apenas_abreviado(leituras, nome_guia) -> bool:
+    """O nome lido e uma ABREVIACAO do nome da guia — nao o nome de outra pessoa?
+
+    Caso LUCIANA SOUZA SANTOS (196397719): o unico anexo do prontuario le
+    'S. Santos'. O texto de `nome_nao_bate` AFIRMA "o prontuario so tem documento de
+    OUTRA pessoa" e "gera glosa" — e ali nao ha prova nenhuma disso. 'S. Santos' e
+    inicial + sobrenome, compativel com L. S. Santos, dentro do prontuario DELA.
+
+    Compare com a HOSANA, onde ha prova de verdade: o papel diz por extenso
+    "Para Sr(a): GLADYS FREITAS DOS SANTOS", com nascimento 12/11/1972.
+
+    O sinal: o lido tem MENOS tokens significativos que a guia, e cada token que ele
+    tem ou e uma INICIAL ou e um sobrenome que aparece na guia. Isso nao prova
+    identidade — nem prova o contrario. E exatamente essa indefinicao que separa
+    "conferir" de "acusar a clinica de anexar documento de terceiro"."""
+    try:
+        import db as _db
+    except Exception:
+        return False
+    alvo = _db._tokens_nome(nome_guia)
+    if len(alvo) < 2:
+        return False
+    for l in (leituras or []):
+        lido = ""
+        if isinstance(l, dict):
+            lido = l.get("paciente_lido") or l.get("paciente") or l.get("nome") or ""
+        else:
+            lido = str(l or "")
+        toks = _db._tokens_nome(lido)
+        # Conta so os tokens INFORMATIVOS (inicial nao informa nada): 'L S Santos'
+        # tem tres tokens e um unico nome de verdade — e tao abreviado quanto
+        # 'S. Santos'. Comparar o total deixaria esse caso de fora.
+        _info = [t for t in toks if len(t) > 1]
+        if not toks or len(_info) >= len([a for a in alvo if len(a) > 1]):
+            continue          # nome cheio: e outra pergunta (mal lido ou de terceiro)
+        _ok = True
+        for t in toks:
+            if len(t) == 1:                       # inicial: compativel com qualquer
+                if not any(a.startswith(t) for a in alvo):
+                    _ok = False
+                    break
+            elif t not in alvo:
+                _ok = False
+                break
+        if _ok:
+            return True
+    return False
+
+
 def _prenome_provavelmente_mal_lido(leituras, nome_guia) -> bool:
     """Algum nome lido nos anexos bate com o da guia em TODOS os sobrenomes,
     diferindo so no prenome? Ver db.so_o_prenome_difere para o porque."""
@@ -2551,6 +2600,18 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                             "ilegível ou pede exame diferente do que a guia autoriza. "
                             "O QUE FAZER: abrir o prontuário, conferir a solicitação e, "
                             "se ela cobrir o exame da guia, anexar à mão.")
+                    elif _nome_apenas_abreviado(leituras, pac["nome"]):
+                        # NOME ABREVIADO != NOME DE TERCEIRO. Ver
+                        # _nome_apenas_abreviado; caso LUCIANA (196397719).
+                        _motivo = (
+                            "NÃO FATUROU porque o nome lido no pedido está ABREVIADO "
+                            "e não dá para afirmar que é o paciente — nem que não é. "
+                            "O documento está no prontuário DESTE paciente e o nome "
+                            "lido é compatível (inicial/sobrenome), mas incompleto. "
+                            "O QUE FAZER: abrir o anexo e ler o nome por extenso; se "
+                            "for deste paciente, confirmar aqui na tela para liberar "
+                            "o faturamento. Só cobrar da clínica DEPOIS de confirmar "
+                            "que o papel é de outra pessoa.")
                     elif _prenome_provavelmente_mal_lido(leituras, pac["nome"]):
                         # Todos os SOBRENOMES batem e so o PRENOME difere: e leitura
                         # do prenome que falhou, nao documento de terceiro. Casos

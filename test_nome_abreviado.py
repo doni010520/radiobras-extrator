@@ -105,3 +105,64 @@ def test_as_tres_chaves_tem_botao_de_confirmar():
     bloco = tpl[max(0, i - 1200):i]
     for chave in ("prenome_mal_lido", "nome_nao_bate", "nome_abreviado"):
         assert chave in bloco, chave
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# A ESTEIRA precisa EMITIR o texto — senao o grupo novo nunca casa.
+#
+# Depois de criar `nome_abreviado`, ANETE e CASSIANA migraram para Conferencia mas a
+# LUCIANA (196397719) NAO: o grupo casa num texto que a esteira ainda nao produzia.
+# Classificar e so metade; quem escreve o motivo e a esteira.
+#
+# O sinal: o nome lido tem MENOS tokens significativos que o da guia e os que tem sao
+# compativeis (inicial ou sobrenome que aparece na guia). 'S. Santos' contra 'LUCIANA
+# SOUZA SANTOS'. Isso nao prova identidade — nem prova o contrario, e e essa a
+# diferenca que separa "conferir" de "acusar a clinica".
+# ══════════════════════════════════════════════════════════════════════════
+
+from esteira import _nome_apenas_abreviado
+
+
+def test_luciana_e_nome_abreviado():
+    assert _nome_apenas_abreviado([{"paciente_lido": "S. Santos"}],
+                                  "LUCIANA SOUZA SANTOS") is True
+
+
+def test_inicial_sem_ponto_tambem():
+    assert _nome_apenas_abreviado([{"paciente_lido": "L S Santos"}],
+                                  "LUCIANA SOUZA SANTOS") is True
+
+
+def test_nome_completo_de_outra_pessoa_NAO_e_abreviado():
+    """Caso HOSANA/GLADYS: nome inteiro, de terceiro. Tem de continuar acusando."""
+    assert _nome_apenas_abreviado([{"paciente_lido": "GLADYS FREITAS DOS SANTOS"}],
+                                  "HOSANA BARRETO DOS SANTOS") is False
+
+
+def test_sobrenome_que_nao_existe_na_guia_NAO_e_abreviado():
+    assert _nome_apenas_abreviado([{"paciente_lido": "M. Pereira"}],
+                                  "LUCIANA SOUZA SANTOS") is False
+
+
+def test_nome_completo_compativel_NAO_e_abreviado():
+    """Se bate inteiro, nem chega aqui — e nao pode ser rotulado de abreviado."""
+    assert _nome_apenas_abreviado([{"paciente_lido": "LUCIANA SOUZA SANTOS"}],
+                                  "LUCIANA SOUZA SANTOS") is False
+
+
+def test_prenome_mal_lido_NAO_e_abreviado():
+    """'Plunet Andrade de Mattos' tem o mesmo numero de tokens — e outra categoria."""
+    assert _nome_apenas_abreviado([{"paciente_lido": "Plunet Andrade de Mattos"}],
+                                  "ANETE ANDRADE DE MATTOS") is False
+
+
+def test_leitura_vazia_nao_quebra():
+    assert _nome_apenas_abreviado([], "ALGUEM") is False
+    assert _nome_apenas_abreviado(None, None) is False
+    assert _nome_apenas_abreviado([{"paciente_lido": ""}], "ALGUEM") is False
+
+
+def test_basta_um_anexo_abreviado():
+    leituras = [{"paciente_lido": "OUTRO NOME QUALQUER AQUI"},
+                {"paciente_lido": "S. Santos"}]
+    assert _nome_apenas_abreviado(leituras, "LUCIANA SOUZA SANTOS") is True
