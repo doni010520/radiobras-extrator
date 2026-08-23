@@ -1125,7 +1125,16 @@ def _baixar_anexo_portal(sess, gto, sequencial=None, _t=None):
         return None, ""
 
 
-def _anexos_via_api(token, gto):
+def _token_expirou(status, texto) -> bool:
+    """A falha e de CREDENCIAL (token vencido/invalido)? So nesses casos vale a pena
+    pagar um login novo — 500/timeout renovando so gastaria sessao a toa."""
+    if status in (401, 403):
+        return True
+    return bool(re.search(r"jwt.{0,6}expir|token.{0,10}expir|unauthorized",
+                          str(texto or ""), re.I))
+
+
+def _anexos_via_api(token, gto, renovar=None):
     """(count, nomes, err) dos anexos pela API /v1/gto/imagens — a MESMA fonte
     AUTORITATIVA que a descoberta usa e confia (lista completa, com nomeArquivo e o
     flag imagemGTO). Serve de fallback quando o scrape do DOM (_anexos_count/
@@ -1148,6 +1157,7 @@ def _anexos_via_api(token, gto):
     except Exception as e:
         return -1, set(), f"setup: {type(e).__name__}: {str(e)[:80]}"
     _falha = None
+    _renovou = False
     for _tent in range(3):
         try:
             r = sess.get(f"{_ODO_API}/v1/gto/imagens?numeroFicha={gto}", timeout=25)
@@ -1160,6 +1170,25 @@ def _anexos_via_api(token, gto):
                 _falha = "resposta 200 nao-lista"
             else:
                 _falha = f"HTTP {r.status_code} {r.text[:80]!r}"
+                # TOKEN VENCIDO -> RENOVA (23/08, item 5 da Andrea). O Bearer e
+                # capturado UMA VEZ no login da descoberta e reusado o resto da
+                # rodada; quando a anexacao roda 20+ min depois (comum sob throttle)
+                # ele ja venceu. Antes o retry insistia com o MESMO token morto:
+                # tres 401 identicos e a guia caia em "nao consegui ler quantos
+                # anexos". Cinco guias de 17/08 morreram assim — e o print do portal
+                # mostrava a documentacao la, so nao contada.
+                # UMA renovacao por chamada: se o token novo tambem nao servir, o
+                # problema e outro e insistir viraria loop de login.
+                if renovar and not _renovou and _token_expirou(r.status_code, r.text):
+                    _renovou = True
+                    try:
+                        _novo = renovar()
+                    except Exception as e:
+                        _novo = None
+                        _falha = f"{_falha} | renovacao falhou: {str(e)[:60]}"
+                    if _novo:
+                        sess.headers.update({"Authorization": _novo})
+                        continue          # tenta ja, sem gastar o backoff
         except Exception as e:
             _falha = f"{type(e).__name__}: {str(e)[:100]}"
         if _tent < 2:
@@ -1167,10 +1196,10 @@ def _anexos_via_api(token, gto):
     return -1, set(), _falha
 
 
-def _anexos_count_api(token, gto, _t=None):
+def _anexos_count_api(token, gto, _t=None, renovar=None):
     """So a CONTAGEM (para a trava da esteira). Delega em _anexos_via_api. Retorna
     (n, err); loga o erro real quando falha, para o proximo run ter a pista."""
-    n, _nomes, err = _anexos_via_api(token, gto)
+    n, _nomes, err = _anexos_via_api(token, gto, renovar=renovar)
     if n < 0 and _t:
         _t(f"[API] recontagem de anexos falhou (gto {gto}): {err}")
     return n, err
@@ -3161,6 +3190,33 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 _t(f"[ANEX{wid}] login OdontoPrev falhou: {str(e)[:80]}")
                 return
             ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
+            # BEARER VIVO DESTE WORKER (23/08, item 5 da Andrea). O token usado na
+            # contagem de anexos vem do login da DESCOBERTA e ja venceu quando a
+            # anexacao roda 20+ min depois — cinco guias de 17/08 morreram em
+            # "nao consegui ler quantos anexos (HTTP 401 Jwt is expired)" com a
+            # documentacao la, so nao contada. Este worker acabou de logar por conta
+            # propria: o Authorization que ELE emite esta vivo. Guardamos sempre o
+            # mais recente e usamos como renovacao quando a API devolve 401 — sem
+            # pagar login novo, sem Playwright extra dentro da thread.
+            _bearer = {"v": None}
+
+            def _grab_bearer(req):
+                try:
+                    if "credenciado.odontoprev.com.br" in req.url:
+                        a = req.headers.get("authorization")
+                        if a and a.lower().startswith("bearer"):
+                            _bearer["v"] = a
+                except Exception:
+                    pass
+            try:
+                ctx.on("request", _grab_bearer)
+            except Exception:
+                pass          # captura e um bonus; nunca derruba o worker
+
+            def _renovar_bearer():
+                """Token vivo deste worker, ou None (ai o comportamento e o de antes)."""
+                return _bearer["v"]
+
             _ok_lista, _err_lista = _consulta_inicial(pg, data)
             if not _ok_lista:
                 # SEM LISTA, NAO PROCESSA A FILA. Antes o worker seguia e cada guia
@@ -3313,7 +3369,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                         # (nada enviado). upload_arquivos ainda RE-checa pelo DOM: duas
                         # fontes independentes antes da escrita irreversivel.
                         _n_agora, _fonte_cont, _cont_err = _reconta_anexos(
-                            _dom_n, lambda: _anexos_count_api(token, item["gto"], _t))
+                            _dom_n, lambda: _anexos_count_api(token, item["gto"], _t,
+                                                              renovar=_renovar_bearer))
                         if _fonte_cont == "API":
                             _t(f"[ANEX{wid}] GTO {item['gto']}: DOM nao leu os anexos; "
                                f"recontei pela API autoritativa = {_n_agora}")
@@ -3348,7 +3405,8 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                         # upload bloqueia (nada enviado).
                         res = upload_arquivos(
                             gp, arquivos, max_antes=_lim,
-                            contar_fallback=lambda: _anexos_via_api(token, item["gto"])[:2])
+                            contar_fallback=lambda: _anexos_via_api(
+                                token, item["gto"], renovar=_renovar_bearer)[:2])
                         try:
                             gp.close()
                         except Exception:
