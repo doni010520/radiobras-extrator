@@ -559,14 +559,35 @@ def _analises_em(texto) -> set:
     return {nome for nome, padrao in _ANALISES if re.search(padrao, t, re.I)}
 
 
+# Acima disto, o papel esta LISTANDO opcoes, nao pedindo. Medido na base em 23/08:
+# 153 itens com 1 analise, 25 com 2 — e depois um salto para 11 com 3, 1 com 5 e 8
+# com AS SEIS (Jarabak+McNamara+Ricketts+Steiner+Tweed+USP). Nenhum dentista pede
+# seis; o texto lido nesses casos e o cardapio impresso da clinica.
+_TETO_ANALISES_PEDIDO = 3
+
+
 def analises_pedidas(texto) -> set:
     """Quais analises cefalometricas o PEDIDO nomeia. Conjunto VAZIO quando o pedido
     nao nomeia nenhuma — que e o caso mais comum ("Telerradiografia", seco).
 
     REGRA DE PROJETO: so se exige o que foi escrito. A maioria dos pedidos nao nomeia
     analise; exigir por padrao (ou exigir "sempre as duas") seguraria faturamento
-    legitimo em massa. Falso positivo aqui custa dinheiro do dono, nao da clinica."""
-    return _analises_em(texto)
+    legitimo em massa. Falso positivo aqui custa dinheiro do dono, nao da clinica.
+
+    FORMULARIO-CATALOGO (23/08): varias clinicas usam papel impresso com o cardapio
+    inteiro de servicos, e a IA transcreve o menu como se fosse a receita. Com o gate
+    de analise vivo, isso SEGURARIA faturamento exigindo analises que ninguem pediu —
+    o erro que o dono apontou, invertido: em vez de exigir por causa da definicao de
+    documentacao ortodontica, exigir por causa do papel timbrado.
+
+    Um dentista marca uma analise, as vezes duas ("USP e Ricketts"). Tres ou mais so
+    aparece em lista de opcoes. Sem saber o que foi marcado, o lado seguro e NAO
+    exigir — mesma logica do paragrafo acima.
+
+    O teto vale SO para o pedido. `analises_no_texto`, que le o LAUDO, nao tem teto:
+    um CEPH traz varias secoes de proposito."""
+    r = _analises_em(texto)
+    return set() if len(r) >= _TETO_ANALISES_PEDIDO else r
 
 
 def analises_no_texto(texto) -> set:
