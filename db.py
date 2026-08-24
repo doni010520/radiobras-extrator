@@ -1098,6 +1098,14 @@ _GRUPOS_PENDENCIA = [
      "Nós", "A decisão passou e a anexação foi barrada. Conferir se o exame é do convênio."),
     # Falha do robô/leitura (ex.: "gemini: ..." — caso SOPHIA, 27/07): é NOSSA,
     # vai para a fila técnica, não para a operação
+    # ARQUIVO SUMIU DO SERVIDOR (23/08, caso FABRICIO 196307916). Vem ANTES de
+    # anexo_corrompido: nao e arquivo ruim, e arquivo AUSENTE. O PRORADIS lista o
+    # anexo e devolve a propria pagina de erro no lugar do documento
+    # ("Undefined variable: fullpath", "file_get_contents(): Filename cannot be
+    # empty"). Nenhuma re-tentativa traz de volta arquivo que nao esta no disco, e
+    # mandar a operadora "abrir na pasta" e impossivel: la vao 1 KB de erro de PHP.
+    ("anexo_sumiu", r"NÃO ESTÁ MAIS no servidor do PRORADIS|nao esta mais no servidor",
+     "Clínica", "O documento foi anexado no prontuário, mas o arquivo NÃO ESTÁ MAIS no servidor do PRORADIS — ele aparece na lista e o download devolve erro. Não é arquivo corrompido: sumiu. Pedir à clínica que ANEXE O PEDIDO DE NOVO."),
     # ANEXO CORROMPIDO (23/08, caso FABRICIO 196307916). Vem ANTES de falha_tecnica,
     # que casaria pelo prefixo generico "gemini:" e mandaria a guia para o retry.
     # 400 INVALID_ARGUMENT nao e instabilidade: e o servidor dizendo que o CONTEUDO

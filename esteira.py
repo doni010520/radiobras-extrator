@@ -1394,6 +1394,36 @@ def _reencoda(blob):
         return None
 
 
+def _eh_pagina_de_erro(blob) -> bool:
+    """O "anexo" e na verdade uma pagina de ERRO do servidor?
+
+    Caso FABRICIO (196307916), 23/08: os dois anexos do prontuario baixavam com 1050
+    bytes comecando em '<div s'. Nao eram documentos — eram a pagina de erro do
+    proprio PRORADIS:
+
+        A PHP Error was encountered
+        Message: Undefined variable: fullpath
+        Filename: controllers/patients.php   Line: 944, 949, 951
+        Warning: file_get_contents(): Filename cannot be empty
+
+    O anexo EXISTE no cadastro (aparece na lista) mas o arquivo fisico sumiu do
+    servidor. Passei o dia tratando isso como arquivo corrompido — Pillow, MuPDF e
+    Gemini falhavam todos, e falhavam porque os tres recebiam HTML.
+
+    Detectar isso importa por tres motivos: a mensagem passa a dizer a verdade, a
+    guia para de queimar retry contra algo que nao volta, e a operadora deixa de ser
+    mandada abrir um arquivo que e 1 KB de erro de PHP."""
+    if not blob:
+        return False
+    try:
+        ini = bytes(blob[:400]).lstrip()[:200].lower()
+    except Exception:
+        return False
+    if ini.startswith(b"<!doctype html") or ini.startswith(b"<html") or ini.startswith(b"<div"):
+        return True
+    return b"a php error was encountered" in bytes(blob[:2000]).lower()
+
+
 def _render_com_fitz(blob):
     """PNG da 1a pagina, via MuPDF — ou None. ULTIMO recurso de leitura.
 
@@ -1451,6 +1481,12 @@ def preparar_anexo(filename, blob):
     o lote nao."""
     if not blob:
         return None, "arquivo vazio"
+    if _eh_pagina_de_erro(blob):
+        # NAO cai no fallback da extensao: HTML o Gemini nunca vai ler, e mandar so
+        # queima uma chamada e polui o diagnostico. Ver _eh_pagina_de_erro.
+        return None, ("o arquivo NÃO ESTÁ MAIS no servidor do PRORADIS — o anexo "
+                      "aparece na lista do prontuário, mas o download devolve erro "
+                      "do servidor em vez do documento")
     ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     real = _mime_do_conteudo(blob) or ("image/webp" if _eh_webp(blob) else "")
     # '%PDF' nao precisa estar no byte 0: espaco em branco antes do cabecalho e
