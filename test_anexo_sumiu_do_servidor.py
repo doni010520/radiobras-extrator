@@ -90,3 +90,68 @@ def test_sai_do_retry():
 
 def test_aparece_no_painel():
     assert db.eh_pendencia_front(_MOTIVO, "sem_solicitacao") is True
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# O ENVELOPE de novo. Segunda vez no mesmo dia que uma causa conhecida e engolida
+# por um texto generico — e o mesmo mecanismo: o classificador e first-match-wins e
+# le o COMECO da frase.
+#
+# `_motivo_sem_candidatos` abre com "provavelmente falha temporaria da leitura"
+# sempre que o prontuario tem documento e nenhum virou pedido. Isso e verdade quando
+# o documento e manuscrito ou a leitura oscilou. NAO e verdade quando os arquivos
+# sumiram do servidor: ali nao ha nada de temporario, e o retry queima tentativas
+# contra um arquivo que nao volta.
+#
+# Medido no FABRICIO depois do primeiro conserto: chave='anexo_sumiu'/Clinica (certo),
+# mas classe_retry='transitorio', eh_nosso=True e front=False — ou seja, continuava
+# escondido do painel e no loop. A regra que faltava: se TODOS os anexos descartados
+# sumiram do servidor, a causa e essa, e ela vai na frente.
+# ══════════════════════════════════════════════════════════════════════════
+
+from esteira import _motivo_sem_candidatos
+
+_SUMIU = ("FABRICIO DOS SANTOS SOUZA120260818.jpg: o arquivo NÃO ESTÁ MAIS no "
+          "servidor do PRORADIS")
+_SUMIU2 = ("FABRICIO DOS SANTOS SOUZA.pdf: o arquivo NÃO ESTÁ MAIS no servidor "
+           "do PRORADIS")
+_ILEGIVEL = "OUTRO.jpg: formato .jpg não suportado ou arquivo corrompido"
+
+
+def test_todos_sumiram_a_causa_vai_na_frente():
+    m = _motivo_sem_candidatos(2, [_SUMIU, _SUMIU2])
+    assert "falha tempor" not in m.lower(), m
+    assert "NÃO ESTÁ MAIS no servidor" in m
+
+
+def test_e_ai_sai_do_retry_e_aparece():
+    m = _motivo_sem_candidatos(2, [_SUMIU, _SUMIU2])
+    assert db.classe_retry(m, "sem_solicitacao") == "externo"
+    assert db.deve_entrar_no_retry(m, "sem_solicitacao") is False
+    assert db.eh_nosso(m, "sem_solicitacao") is False
+    assert db.eh_pendencia_front(m, "sem_solicitacao") is True
+    assert db.classificar_pendencia(m, "sem_solicitacao")[0] == "anexo_sumiu"
+
+
+def test_mistura_continua_como_leitura():
+    """Se UM anexo sumiu e outro so nao foi lido, ainda pode ser leitura nossa —
+    re-tentar tem chance. Nao arrastar para 'sumiu'."""
+    m = _motivo_sem_candidatos(2, [_SUMIU, _ILEGIVEL])
+    assert "falha tempor" in m.lower()
+
+
+def test_prontuario_vazio_nao_muda():
+    m = _motivo_sem_candidatos(0, [])
+    assert "nenhum pedido do dentista" in m
+    assert db.classificar_pendencia(m, "sem_solicitacao")[1] == "Clínica"
+
+
+def test_sem_descartados_nao_muda():
+    m = _motivo_sem_candidatos(3, [])
+    assert "falha tempor" in m.lower()
+
+
+def test_categoria_erro_nao_reengole():
+    """Mesmo com categoria='erro', a causa nomeada vence (como paciente_nao_achado)."""
+    m = _motivo_sem_candidatos(2, [_SUMIU, _SUMIU2])
+    assert db.eh_nosso(m, "erro") is False

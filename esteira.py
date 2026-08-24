@@ -2238,6 +2238,20 @@ def _motivo_sem_candidatos(n_prontuario, descartados):
     Trace 17/08: KAUA/ALINE tinham o pedido (funil cand=2) e saíam 'não encontrou
     NENHUM documento'; na releitura saíram 'auto'. A distinção é o funil prontuario>0."""
     desc = descartados or []
+    # ARQUIVO SUMIU DO SERVIDOR: quando TODOS os anexos descartados sao isso, a causa
+    # nao e "leitura temporaria" — e ausencia permanente, e o retry queima tentativas
+    # contra um arquivo que nao volta. A causa vai NA FRENTE porque o classificador e
+    # first-match-wins e le o comeco da frase (mesmo mecanismo que engoliu a LAMOEDO).
+    # Mistura (um sumiu, outro so nao foi lido) continua como leitura: ali re-tentar
+    # ainda tem chance.
+    if desc and all(re.search(r"N[ÃA]O EST[ÁA] MAIS no servidor", str(d), re.I)
+                    for d in desc):
+        return ("NÃO FATUROU porque o arquivo do anexo NÃO ESTÁ MAIS no servidor do "
+                "PRORADIS: ele aparece na lista do prontuário, mas o download devolve "
+                "erro do servidor em vez do documento. Não é arquivo corrompido — "
+                "sumiu. O QUE FAZER: pedir à clínica que ANEXE O PEDIDO DE NOVO no "
+                "prontuário. (Reprocessar não resolve: o arquivo não está no disco.) "
+                f"Anexo(s): {'; '.join(str(d).split(':')[0] for d in desc)[:120]}")
     _suf = (f" ({len(desc)} anexo(s) não puderam ser lidos: {'; '.join(desc)[:160]})"
             if desc else "")
     if int(n_prontuario or 0) <= 0:

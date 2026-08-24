@@ -1294,7 +1294,8 @@ def so_o_prenome_difere(nome_guia, nome_lido) -> bool:
 
 # Chaves que, mesmo com categoria 'erro', NAO sao falha nossa: o texto ja nomeia
 # uma causa que nenhuma re-tentativa resolve.
-_ERRO_MAS_DE_TERCEIRO = ("paciente_nao_achado", "anexo_corrompido")
+_ERRO_MAS_DE_TERCEIRO = ("paciente_nao_achado", "anexo_corrompido",
+                         "anexo_sumiu")
 
 
 def eh_nosso(motivo: str, categoria: str = "") -> bool:
