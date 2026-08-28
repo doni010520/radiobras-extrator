@@ -1094,6 +1094,18 @@ _GRUPOS_PENDENCIA = [
     ("guia_ilegivel", r"n[ãa]o conseguiu ler quais exames a guia autoriza|GTO ileg[íi]vel"
      r"|sem exames de refer[êe]ncia",
      "Nós", "Não lemos o que a guia autoriza. Abrir a guia no portal e conferir."),
+    # IMAGEM FALTANDO (28/08): o laudo esta pronto e a folha de imagens nao. Vem
+    # ANTES de anexacao porque o motivo chega com o prefixo "anexacao falhou" que o
+    # salvar_execucao poe em toda guia com `anexar_erro` — casando ali, a guia
+    # virava NOSSA: sumia do painel, entrava no loop de retry e virava WhatsApp de
+    # falha tecnica, re-tentando anexar uma imagem que nao existe. Quem gera a folha
+    # e o PRORADIS. Caso PALOMA (195670786, 31/07): faturou sem imagem e voltou
+    # GLOSADA 3230.
+    ("sem_imagem", r"n[ãa]o h[áa] imagem do exame|folha de imagens",
+     "Radiologista", "O laudo saiu, mas a folha de imagens do exame não foi gerada "
+     "no PRORADIS — exame sem template não gera folha. Sem a imagem a operadora "
+     "glosa por documentação incompleta (3230). Cobrar a geração da folha; o robô "
+     "anexa sozinho assim que ela sair."),
     ("anexacao", r"anexa[çc][ãa]o falhou|n[ãa]o sobrou nenhum laudo|upload",
      "Nós", "A decisão passou e a anexação foi barrada. Conferir se o exame é do convênio."),
     # Falha do robô/leitura (ex.: "gemini: ..." — caso SOPHIA, 27/07): é NOSSA,
@@ -1685,6 +1697,7 @@ _TITULO_GRUPO = {
     "modelo_sem_render": "Modelo sem o render 3D gerado",
     "esperando_analise": "Esperando o laudo da análise cefalométrica",
     "sem_entregavel": "Exame sem laudo e sem imagem",
+    "sem_imagem": "Laudo pronto, mas sem a folha de imagens",
     "esperando_tele": "Esperando o laudo da telerradiografia (traçado)",
     "falta_laudo": "Esperando o laudo do radiologista",
     "pedido_ilegivel": "Pedido do dentista com caligrafia ilegível",

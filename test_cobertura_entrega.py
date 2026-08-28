@@ -9,6 +9,7 @@ na folha. A clinica so descobriu conferindo a mao.
 
 Mesma familia do caso PALOMA (GTO 195670786, 31/07, Camacari), que faturou com
 dois laudos e ZERO imagem e voltou GLOSADA 3230 "documentacao incompleta"."""
+import db
 from esteira import (_entregavel_faltando, _exames_sem_laudo,
                      _falta_qual_entregavel, _sem_imagem_no_plano)
 
@@ -106,3 +107,32 @@ def test_diz_que_falta_o_LAUDO_quando_so_ha_imagem():
 def test_nada_falta_quando_o_par_esta_completo():
     plano = ["ENTREGA_ab12cd34ef.jpg", "LAUDO_PANORAMICA_40342953_OFICIAL.pdf"]
     assert _falta_qual_entregavel(False, plano) == ""
+
+
+# O motivo chega ao painel com o prefixo que o `salvar_execucao` poe em toda guia
+# que tem `anexar_erro`. Sem um grupo proprio, "anexacao falhou" casa primeiro e a
+# guia vira NOSSA: sai do painel, entra no loop de retry e vira WhatsApp de falha
+# tecnica — re-tentando anexar uma imagem que nao existe. Quem gera a folha e o
+# PRORADIS, entao a pendencia e da operacao, nao do robo.
+_MOTIVO_SEM_IMAGEM = (
+    "Documentação OK, mas a anexação falhou: o laudo está pronto, mas NÃO há "
+    "imagem do exame para anexar — guia radiológica precisa das duas coisas, e sem "
+    "a imagem a operadora glosa por documentação incompleta (3230). A guia pede "
+    "panorâmica. O QUE FAZER: conferir no PRORADIS se a folha de imagens foi gerada "
+    "— exame sem template não gera folha — e reprocessar o dia.")
+
+
+def test_guia_segurada_por_falta_de_imagem_fica_no_painel():
+    assert db.eh_pendencia_front(_MOTIVO_SEM_IMAGEM, "auto") is True
+
+
+def test_guia_segurada_por_falta_de_imagem_nao_entra_no_retry():
+    # Re-tentar nao faz o PRORADIS gerar folha. Retry cego so gasta proxy e quota.
+    assert db.eh_nosso(_MOTIVO_SEM_IMAGEM, "auto") is False
+    assert db.deve_entrar_no_retry(_MOTIVO_SEM_IMAGEM, "auto") is False
+
+
+def test_guia_segurada_por_falta_de_imagem_tem_grupo_proprio():
+    chave, quem, _acao = db.classificar_pendencia(_MOTIVO_SEM_IMAGEM, "auto")
+    assert chave == "sem_imagem"
+    assert quem == "Radiologista"
