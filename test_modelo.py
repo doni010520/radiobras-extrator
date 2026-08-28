@@ -36,7 +36,13 @@ def test_modelo_aceita_qualquer_imagem_de_entrega():
 def test_guia_radiologica_segue_exigindo_LAUDO_e_nao_foto():
     # o caminho comum NAO pode regredir: foto sozinha nunca substituiu laudo
     assert _entregavel_faltando(False, ["ENTREGA_ab12cd34ef.jpg"]) is True
-    assert _entregavel_faltando(False, ["LAUDO_PANORAMICA_40342953_OFICIAL.pdf"]) is False
+    # 28/08: laudo SOZINHO tambem deixou de bastar. Esta linha afirmava o
+    # contrario, e era ela que autorizava faturar sem imagem — caso PALOMA
+    # (195670786), GLOSADA 3230 "documentacao incompleta". Ver
+    # test_cobertura_entrega.py. Guia radiologica agora exige laudo E imagem.
+    assert _entregavel_faltando(False, ["LAUDO_PANORAMICA_40342953_OFICIAL.pdf"]) is True
+    assert _entregavel_faltando(False, ["LAUDO_PANORAMICA_40342953_OFICIAL.pdf",
+                                        "ENTREGA_ab12cd34ef.jpg"]) is False
 
 
 def test_laudo_tambem_serve_pra_guia_de_modelo():

@@ -76,3 +76,4 @@ reconciliacao_*.txt
 
 # screenshot de debug do login (extrator_odontoprev grava na falha)
 login_failed.png
+auditoria_cobertura.txt

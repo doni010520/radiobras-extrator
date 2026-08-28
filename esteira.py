@@ -1577,6 +1577,65 @@ def _laudo_tele_faltando(exames_canon, laudos_no_plano) -> bool:
     return True
 
 
+# Exames que NAO exigem laudo: o entregavel deles e a propria foto. Lista FECHADA
+# do que dispensa — exame desconhecido cai fora dela e segue exigindo laudo, mesma
+# postura conservadora de `gto_dispensa_laudo` ("na duvida, exige").
+_DISPENSAM_LAUDO = {"modelo", "fotografia"}
+
+
+# A GTO pede o procedimento FECHADO ('Doc Orto Compl' -> 'documentacao'); os laudos
+# saem com o nome do COMPONENTE (LAUDO_PANORAMICA, LAUDO_TELERRADIOGRAFIA). Sem
+# expandir, 'documentacao' nunca acharia laudo nenhum e toda doc orto viraria
+# suspeita. Ancoras (regra do dono, mesma de `_laudo_tele_faltando`): documentacao
+# ortodontica SEMPRE inclui panoramica E telerradiografia.
+_DOC_COMPONENTES = {"panoramica", "telerradiografia"}
+
+
+# Exames em que o laudo e a NORMA — falta dele e anomalia que vale sinalizar.
+# Medido em 28/08 sobre as 853 guias que o robo anexou desde 22/07: panoramica sai
+# sem laudo em 9% dos casos e telerradiografia em 11%, contra 64% do periapical e
+# 81% do interproximal. Nesses dois o laudo e a EXCECAO: cobra-lo produziria
+# centenas de pendencias falsas — o erro do gate de imagem por accession, ligado e
+# revertido em 12/08. Para periapical/interproximal a cobertura so pode ser
+# conferida na IMAGEM, nao na existencia de laudo.
+_LAUDO_ESPERADO = {"panoramica", "telerradiografia", "tomografia"}
+
+
+def _exames_sem_laudo(exames_canon, arquivos_no_plano, apenas_esperados=False) -> set:
+    """Exames que a guia autoriza e que NAO tem laudo correspondente no plano.
+
+    `apenas_esperados` limita a resposta aos exames de `_LAUDO_ESPERADO` — use ao
+    SINALIZAR (a falta ali e anomalia); sem ele a resposta e crua, todos os exames
+    sem laudo, que serve para auditoria e diagnostico."""
+    exigidos = set()
+    for e in (exames_canon or ()):
+        if e in ("documentacao", "documentacao_completa"):
+            exigidos |= _DOC_COMPONENTES
+        else:
+            exigidos.add(e)
+    tem = set()
+    for f in (arquivos_no_plano or []):
+        if os.path.basename(str(f)).upper().startswith("LAUDO_"):
+            tem |= _exame_do_laudo(f)
+    faltando = {e for e in exigidos if e not in tem and e not in _DISPENSAM_LAUDO}
+    return {e for e in faltando if e in _LAUDO_ESPERADO} if apenas_esperados else faltando
+
+
+def _sem_imagem_no_plano(exames_canon, arquivos_no_plano) -> bool:
+    """Guia com exame RADIOLOGICO e NENHUMA folha de imagem no plano.
+
+    Caso PALOMA (GTO 195670786, 31/07, Camacari): faturou com LAUDO_PANORAMICA +
+    LAUDO_TELERRADIOGRAFIA + solicitacao e nenhuma imagem — a guarda
+    `_entregavel_faltando` deixou passar porque havia laudo. Voltou GLOSADA 3230,
+    "documentacao incompleta". Medido em 28/08 sobre 853 guias que o robo anexou:
+    so 17 sairam sem imagem, entao isso e anomalia, nao o fluxo normal."""
+    exige_imagem = any(e not in _DISPENSAM_LAUDO for e in (exames_canon or ()))
+    if not exige_imagem:
+        return False
+    return not any(os.path.basename(str(f)).upper().startswith("ENTREGA_")
+                   for f in (arquivos_no_plano or []))
+
+
 def _consulta_inicial(pg, data, tentativas: int = 3, _sleep=None) -> tuple:
     """Carrega a lista de GTOs do dia no worker de anexacao. (ok, erro).
 
@@ -1680,13 +1739,36 @@ def _entregavel_faltando(dispensa_laudo, nomes) -> bool:
     por inteiro, e como imagem ausente e so uma "nota" (nunca pendencia), uma guia de
     modelo podia ser faturada com ZERO entregavel, so com a solicitacao anexada.
 
-    Guia radiologica: exige LAUDO_* (foto nunca substituiu laudo).
+    Guia radiologica: exige LAUDO_* E a imagem (ENTREGA_*). Ate 28/08 bastava o
+    laudo — e foi por ai que a PALOMA (195670786, 31/07, Camacari) subiu dois
+    laudos e NENHUMA imagem e voltou GLOSADA 3230, "documentacao incompleta". Laudo
+    sem imagem nao e documentacao completa; foto sem laudo tambem nunca foi.
+    Custo medido antes de ligar: das 853 guias que o robo anexou desde 22/07, so 17
+    (2%) sairam sem imagem — meia guia por dia passa a esperar em vez de faturar.
     Guia de modelo/fotografia: aceita a foto (ENTREGA_*) OU um laudo, se houver."""
     nomes = [str(n).upper() for n in (nomes or [])]
     tem_laudo = any(n.startswith("LAUDO_") for n in nomes)
+    tem_imagem = any(n.startswith("ENTREGA_") for n in nomes)
     if not dispensa_laudo:
-        return not tem_laudo
-    return not (tem_laudo or any(n.startswith("ENTREGA_") for n in nomes))
+        return not (tem_laudo and tem_imagem)
+    return not (tem_laudo or tem_imagem)
+
+
+def _falta_qual_entregavel(dispensa_laudo, nomes) -> str:
+    """'laudo' | 'imagem' | 'ambos' | '' — o que falta, para a mensagem mandar a
+    pessoa ao lugar certo. O ramo generico do anexador diz "nao ha nenhum laudo
+    para anexar"; numa guia como a da PALOMA, que TINHA os laudos e nao tinha
+    imagem, isso e falso e manda cobrar do radiologista o que ele ja entregou."""
+    if not _entregavel_faltando(dispensa_laudo, nomes):
+        return ""
+    nomes = [str(n).upper() for n in (nomes or [])]
+    tem_laudo = any(n.startswith("LAUDO_") for n in nomes)
+    tem_imagem = any(n.startswith("ENTREGA_") for n in nomes)
+    if tem_laudo and not tem_imagem:
+        return "imagem"
+    if tem_imagem and not tem_laudo:
+        return "laudo"
+    return "ambos"
 
 
 def _analises_faltando_no_plano(dec) -> tuple:
@@ -3571,6 +3653,22 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                             "o que faturar. O QUE FAZER: conferir se a foto do modelo "
                             "(com as várias faces) foi gerada no PRORADIS e reprocessar "
                             "o dia.")
+                    elif _falta_qual_entregavel(
+                            _dec_it.get("dispensa_laudo"), nomes) == "imagem":
+                        # LAUDO PRESENTE, IMAGEM AUSENTE. Sem este ramo a mensagem
+                        # cairia no generico "não há nenhum laudo para anexar" —
+                        # falso aqui, e mandaria a clínica cobrar do radiologista um
+                        # laudo que ele já entregou. Caso PALOMA (195670786, 31/07),
+                        # que faturou assim e voltou GLOSADA 3230.
+                        item["anexar_erro"] = (
+                            f"o laudo está pronto, mas NÃO há imagem do exame para "
+                            f"anexar — guia radiológica precisa das duas coisas, e "
+                            f"sem a imagem a operadora glosa por documentação "
+                            f"incompleta (3230). A guia pede "
+                            f"{_ex_guia or '(exames ilegíveis)'}. O QUE FAZER: "
+                            f"conferir no PRORADIS se a folha de imagens foi gerada "
+                            f"— exame sem template não gera folha — e reprocessar o "
+                            f"dia.")
                     elif excluidos and _ex_fora:
                         item["anexar_erro"] = (
                             f"a guia pede {_ex_guia or 'exames que não consegui ler'}, "
