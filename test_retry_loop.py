@@ -5,17 +5,22 @@ from db import (retry_backoff_min, deve_retentar, MAX_RETRIES_TRANSITORIO,
                 classe_efetiva)
 
 
-def test_backoff_imediato_depois_escala():
-    # Regra do dono (17/08): a 2a tentativa (1o retry) é IMEDIATA — o que só depende
-    # de reprocessar não espera 15min. Índices 0 e 1 = 0min (imediato); depois escala
-    # para dar tempo ao 503/throttle limpar, sem estourar o teto em segundos.
+def test_backoff_e_so_a_tentativa_imediata():
+    """A escada longa ([0,0,5,20,60,240], teto 6) foi cortada em 29/08.
+
+    Regra do dono (17/08) que FICA: a 2a tentativa e IMEDIATA — o que so depende de
+    reprocessar nao espera 15min; resolve o 503 do Gemini de graca.
+
+    O que SAIU: os degraus de 5min a 4h. Eles davam uma janela de ~5h30 por item e
+    foi o que fez o domingo 23/08 bater de hora em hora ate 11h22 — cada tentativa
+    com um login no OdontoPrev pelo proxy. Regra do dono (28/08): "nao ficar
+    tentando varias vezes no mesmo dia; pode ser duas tentativas por dia, uma pela
+    manha e uma pela tarde". O que nao resolve na imediata espera a proxima RODADA,
+    que agora sao duas (ver test_duas_rodadas.py) e reprocessa o dia inteiro."""
     assert retry_backoff_min(0) == 0      # imediato
     assert retry_backoff_min(1) == 0      # 2a tentativa também imediata (seed=1)
-    assert retry_backoff_min(2) == 5
-    assert retry_backoff_min(3) == 20
-    assert retry_backoff_min(4) == 60
-    assert retry_backoff_min(5) == 240
-    assert retry_backoff_min(9) == 240    # satura no último, nunca passa de 4h
+    assert retry_backoff_min(2) == 0      # satura: nao ha mais degrau
+    assert retry_backoff_min(9) == 0
 
 
 def test_so_transitorio_retenta():

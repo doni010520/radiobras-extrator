@@ -981,19 +981,61 @@ def _faturar_cron_body():
         app.logger.error("Alerta SLA falhou: %s", str(e)[:120])
 
 
+def _horas_do_cron() -> list:
+    """Janelas do dia, em hora local. Uma segunda janela e opcional: sem
+    FATURAR_CRON_HOUR_2 o comportamento e o de antes (uma rodada)."""
+    def _h(nome, padrao):
+        try:
+            v = int(os.environ.get(nome, padrao))
+            return v if 0 <= v <= 23 else None
+        except (TypeError, ValueError):
+            return None
+    horas = [h for h in (_h("FATURAR_CRON_HOUR", "5"),
+                         _h("FATURAR_CRON_HOUR_2", "17")) if h is not None]
+    return sorted(set(horas)) or [5]
+
+
+def _slot_devido(agora, last_at, horas):
+    """Qual janela esta devida agora? A hora dela, ou None.
+
+    Substitui o `_faturar_rodou_hoje()` de janela unica: com duas rodadas nao basta
+    perguntar "ja rodou hoje" — a da tarde precisa disparar mesmo tendo rodado de
+    manha. Compara a ULTIMA janela ja vencida com o horario da ultima rodada, entao
+    container que sobe as 20h roda a das 17h e nao a das 5h (que ja passou), e nunca
+    repete a mesma janela."""
+    passadas = [h for h in sorted(horas or []) if agora.hour >= h]
+    if not passadas:
+        return None
+    alvo_h = passadas[-1]
+    alvo = agora.replace(hour=alvo_h, minute=0, second=0, microsecond=0)
+    if last_at is None or last_at < alvo:
+        return alvo_h
+    return None
+
+
 def _faturar_scheduler():
-    """Dispara o faturamento automático 1x/dia (após FATURAR_CRON_HOUR, Brasília).
+    """Dispara o faturamento automático nas janelas de `_horas_do_cron` (Brasília).
     Desligado por padrão — ligue com FATURAR_CRON=1. gunicorn 1 worker -> sem
-    concorrência de agendadores."""
-    try:
-        hora = int(os.environ.get("FATURAR_CRON_HOUR", "5"))
-    except ValueError:
-        hora = 5
+    concorrência de agendadores.
+
+    DUAS RODADAS (29/08): antes era 1x/dia. Um laudo assinado as 10h so era anexado
+    as 5h do dia seguinte — e com o prazo de 7 dias da operadora, esse dia perdido
+    custou seis guias de 20/08 que venceram por UM dia. A segunda janela tambem
+    substitui a escada longa de retry: o que nao resolve na tentativa imediata
+    espera a proxima rodada, que reprocessa o dia inteiro de qualquer jeito."""
     while not _glosa_stop.is_set():
         try:
             agora = datetime.now(_TZ) if _TZ else datetime.now()
-            if agora.hour >= hora and not _faturar_rodou_hoje():
-                app.logger.info("Cron faturar iniciando…")
+            _last = db.cron_faturar_last_at()
+            if _last is not None:
+                if _last.tzinfo is None:
+                    from datetime import timezone as _tzc
+                    _last = _last.replace(tzinfo=_tzc.utc)
+                _last = _last.astimezone(_TZ) if _TZ else _last
+                _last = _last.replace(tzinfo=None)
+            _slot = _slot_devido(agora.replace(tzinfo=None), _last, _horas_do_cron())
+            if _slot is not None:
+                app.logger.info("Cron faturar iniciando (janela %sh)…", _slot)
                 _faturar_cron_rodar()
         except Exception as e:
             app.logger.error("Faturar scheduler: %s", e)

@@ -11,6 +11,7 @@ Tabelas:
 """
 import json
 import os
+import re
 from datetime import datetime, timezone, date, timedelta
 
 from sqlalchemy import (
@@ -802,6 +803,31 @@ def _gto_dia(conta, dia) -> str:
     return f"__DIA__{conta}__{dia}"
 
 
+_SEM_MOVIMENTO_RE = re.compile(r"n[ãa]o retornou laudos|nada a faturar", re.I)
+
+
+def eh_dia_sem_movimento(erro) -> bool:
+    """O aborto foi 'nao havia nada a fazer' em vez de falha?
+
+    Domingo 23/08 abortou nas tres unidades com "o PRORADIS nao retornou laudos".
+    Como todo aborto virava falha nossa, o dia inteiro entrou na fila de retry: 6
+    tentativas x 3 unidades, cada uma com login no OdontoPrev pelo proxy, das 05h as
+    11h22. Re-tentar nao faz domingo virar segunda."""
+    return bool(_SEM_MOVIMENTO_RE.search(str(erro or "")))
+
+
+def deve_avisar_dia_vazio(dia: str) -> bool:
+    """Dia vazio merece aviso? SIM, exceto domingo.
+
+    O silencio total seria perigoso: se o relatorio do PRORADIS quebrar (convenio
+    renomeado, credencial trocada), o sintoma e exatamente 'veio vazio'. Domingo e o
+    unico dia em que vazio e o esperado — a clinica abre inclusive sabado."""
+    d = _parse_ddmmaaaa(dia)
+    if not d:
+        return True                    # sem data legivel, avisa (falha segura)
+    return d.weekday() != 6            # 6 = domingo
+
+
 def registrar_retry_dia(conta, dia, erro) -> bool:
     """Enfileira o DIA INTEIRO pra nova tentativa. Retorna True se e a PRIMEIRA vez
     (pro aviso nao repetir a cada re-tentativa que aborta de novo)."""
@@ -840,10 +866,20 @@ def salvar_execucao_falha(dia: str, conta: str, dry_run: bool, erro: str,
     # Agora entra na fila (o sistema tenta de novo) e o dono sabe na hora.
     if not dry_run:
         try:
-            _primeira = registrar_retry_dia(conta, dia, erro)
-            if _primeira:
-                import notificador
-                notificador.avisar_aborto(dia, conta, erro, execucao_id=_id)
+            if eh_dia_sem_movimento(erro):
+                # DIA VAZIO (29/08): nao e falha, entao NAO entra na fila — re-tentar
+                # nao faz domingo virar segunda. Custava 18 logins de proxy por
+                # domingo (6 tentativas x 3 unidades) e terminava marcando o dia como
+                # "nossa, nao recuperou". O aviso segue nos dias uteis: relatorio do
+                # PRORADIS quebrado tem exatamente este sintoma.
+                if deve_avisar_dia_vazio(dia):
+                    import notificador
+                    notificador.avisar_aborto(dia, conta, erro, execucao_id=_id)
+            else:
+                _primeira = registrar_retry_dia(conta, dia, erro)
+                if _primeira:
+                    import notificador
+                    notificador.avisar_aborto(dia, conta, erro, execucao_id=_id)
         except Exception as e:
             print(f"[db] aviso de aborto falhou: {e}", flush=True)
     return _id
@@ -1425,8 +1461,13 @@ def deve_entrar_no_retry(motivo: str, categoria: str = "") -> bool:
 # retry) e IMEDIATA (regra do dono 17/08: o que so depende de reprocessar nao espera
 # 15min). Depois escala pra dar tempo ao 503/throttle limpar sem estourar o teto em
 # segundos: imediato -> imediato -> 5m -> 20m -> 1h -> 4h. Teto 6 -> janela ~5.5h.
-MAX_RETRIES_TRANSITORIO = 6
-_BACKOFF_MIN = [0, 0, 5, 20, 60, 240]
+# ESCADA CURTA (29/08). Era [0, 0, 5, 20, 60, 240] com teto 6 — janela de ~5h30.
+# Foi ela que fez o domingo 23/08 bater ate 11h22, e e a "tentativa de hora em hora"
+# que o dono pediu para acabar. Fica so a re-tentativa IMEDIATA, que resolve o 503
+# do Gemini de graca; o que nao resolver ali espera a proxima RODADA (manha ou
+# tarde), que reprocessa o dia inteiro de qualquer forma.
+MAX_RETRIES_TRANSITORIO = 2
+_BACKOFF_MIN = [0, 0]
 
 
 def retry_backoff_min(tentativa: int) -> int:
