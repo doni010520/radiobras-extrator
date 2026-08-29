@@ -481,6 +481,26 @@ def eh_pendencia_front(motivo: str, categoria: str = "", tentativas: int = 0) ->
     return not eh_nosso(motivo, categoria)
 
 
+# A OdontoPrev aceita anexo por 7 dias a partir do exame (imagem e laudo). Depois
+# disso a guia so entra por RECURSO DE GLOSA — insistir em anexar nao adianta.
+PRAZO_ANEXO_DIAS = 7
+
+
+def virou_recurso(dia: str, hoje=None) -> bool:
+    """A guia passou dos 7 dias e so pode ser recuperada por recurso?
+
+    Serve para o painel parar de misturar as duas coisas: na auditoria de 28/08,
+    80 das 93 guias com documentacao incompleta ja estavam fora da janela e
+    apareciam como se fossem trabalho a fazer. Quem olha a fila precisa saber onde
+    vale gastar esforco."""
+    import datetime as _dt
+    d = _parse_ddmmaaaa(dia)
+    if not d:
+        return False
+    ref = hoje or _dt.date.today()
+    return (ref - d).days > PRAZO_ANEXO_DIAS
+
+
 def contar_pendencias_front(so_no_prazo: bool = False, prazo: int = 7) -> int:
     """Nº de pendências que o usuário VÊ no front (sem as nossas em reprocessamento).
     `so_no_prazo=True` conta SÓ as dentro do prazo (exclui as vencidas) — é o
@@ -1106,6 +1126,13 @@ _GRUPOS_PENDENCIA = [
      "no PRORADIS — exame sem template não gera folha. Sem a imagem a operadora "
      "glosa por documentação incompleta (3230). Cobrar a geração da folha; o robô "
      "anexa sozinho assim que ela sair."),
+    # PEDIDO DE OUTRO DENTISTA (29/08, caso INGRID 196333450): re-ler o documento
+    # nao muda quem assinou, entao NUNCA e retry. E conferencia humana: ou existe o
+    # pedido deste atendimento no prontuario, ou a guia esta com o dentista errado.
+    ("outro_dentista", r"assinado por OUTRO dentista",
+     "Conferência", "O pedido do prontuário é de outro dentista (normalmente de um "
+     "atendimento anterior). Conferir se há o pedido deste atendimento e anexar à "
+     "mão; se o dentista da guia estiver errado, corrigir na guia."),
     ("anexacao", r"anexa[çc][ãa]o falhou|n[ãa]o sobrou nenhum laudo|upload",
      "Nós", "A decisão passou e a anexação foi barrada. Conferir se o exame é do convênio."),
     # Falha do robô/leitura (ex.: "gemini: ..." — caso SOPHIA, 27/07): é NOSSA,
@@ -1698,6 +1725,7 @@ _TITULO_GRUPO = {
     "esperando_analise": "Esperando o laudo da análise cefalométrica",
     "sem_entregavel": "Exame sem laudo e sem imagem",
     "sem_imagem": "Laudo pronto, mas sem a folha de imagens",
+    "outro_dentista": "Pedido assinado por outro dentista",
     "esperando_tele": "Esperando o laudo da telerradiografia (traçado)",
     "falta_laudo": "Esperando o laudo do radiologista",
     "pedido_ilegivel": "Pedido do dentista com caligrafia ilegível",

@@ -657,6 +657,7 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
     comum, depois o mais recente (idx menor). Retorna (idx, leitura, motivo_ou_None)."""
     melhor = None
     algum_pac = False
+    outro_dentista = False  # algum pedido foi barrado por ser de OUTRO dentista
     cands_ok = []          # candidatas validas (tipo/legivel/paciente), em ordem
     # CORROBORAÇÃO só vale quando o pedido de nome ILEGÍVEL é ÚNICO. Com dois ou
     # mais (o do paciente + o de um irmão mal-arquivado, mesmo dentista da
@@ -742,6 +743,21 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
                 a["_via"] = "nome_mal_lido"
             else:
                 continue
+        # DENTISTA — TRAVA GERAL (29/08). `_dentista_contradiz` ja existia, mas so
+        # era consultado nos ramos de FALLBACK (nome ausente / mal lido). No caminho
+        # feliz — nome do paciente bate e exames cobrem — o pedido de OUTRO dentista
+        # passava direto. Caso INGRID EMILE DE SOUZA (196333450, 18/08): sem pedido
+        # do atendimento de 2026, o robo pegou o mais recente que existia (07/10/2025,
+        # outro episodio, outro dentista), reescreveu a data por cima da imagem e
+        # anexou. A operacao viu no portal "faturando com nome de dentista solicitante
+        # diferente". Regra do dono: comparar o dentista e obrigatorio e basico.
+        #
+        # Continua conservador: `_dentista_contradiz` so acusa com 2+ tokens legiveis,
+        # ZERO em comum e sem CRO batendo. Letra ilegivel, leitura parcial ou
+        # sobrenome em comum NAO barram.
+        if _dentista_contradiz(a, dentista_gto, gto_txt):
+            outro_dentista = True
+            continue
         algum_pac = True
         # expande SÓ o lado da solicitação: quem pede os componentes (panorâmica +
         # telerradiografia + ...) está pedindo uma documentação. A recíproca não vale.
@@ -871,6 +887,10 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
     if not gto_ex:
         return None, None, "GTO_ILEGIVEL"
     if not algum_pac:
+        # Motivo PROPRIO: dizer "paciente incompativel" mandaria a operacao conferir
+        # o nome do paciente, que esta certo. O que nao bate e o dentista.
+        if outro_dentista:
+            return None, None, "OUTRO_DENTISTA"
         return None, None, "PACIENTE_INCOMPATIVEL"
     return None, None, "NAO_COBRE"
 
@@ -1752,6 +1772,103 @@ def _entregavel_faltando(dispensa_laudo, nomes) -> bool:
     if not dispensa_laudo:
         return not (tem_laudo and tem_imagem)
     return not (tem_laudo or tem_imagem)
+
+
+# A propria GTO assinada nao e documentacao — nasce com a guia.
+_GTO_NO_PORTAL = ("IMG_ASSINADA", "IMAGEMGTO")
+
+
+def _motivo_ja_anexada(falta, n_anexos, n_docs, anexos, exames_portal=None) -> str:
+    """Motivo da guia que ja tinha documento quando o robo chegou.
+
+    Ate 29/08 havia um texto so — "nao foi preciso faturar" — e ele era usado tanto
+    para a guia COMPLETA quanto para a incompleta. Foi assim que a LILIA (196485745)
+    apareceu como faturada tres dias seguidos sem o laudo da panoramica."""
+    if falta == "imagem":
+        return ("A guia ja tem documento anexado, mas ele NAO cobre o que ela "
+                "autoriza: nao ha imagem do exame entre os anexos — a folha de "
+                "imagens nao foi gerada ou nao foi anexada. Sem ela a operadora "
+                "glosa por documentacao incompleta (3230). O QUE FAZER: conferir a "
+                "folha de imagens no PRORADIS e anexar a mao.")
+    if falta == "laudo":
+        return (f"A guia ja tem documento anexado, mas FALTA o laudo de um dos exames "
+                f"que ela autoriza ({lista_amigavel(sorted(exames_portal or []))}). "
+                f"Faturar assim entrega menos do que a guia autoriza e a operadora "
+                f"glosa por documentacao incompleta (3230). O QUE FAZER: conferir se "
+                f"o laudo ja saiu no PRORADIS e anexar a mao.")
+    return (f"NAO FOI PRECISO FATURAR: a guia ja tinha {n_anexos} anexo(s) "
+            + (f"— {n_docs} documento(s) alem da propria GTO — " if n_docs else "")
+            + "quando o robo chegou: a documentacao ja havia sido anexada, por outra "
+              "execucao ou a mao. O robo NAO enviou nada: o portal nao permite "
+              "remover anexo, e duplicar seria irreversivel."
+            + (f" Anexos na guia: {', '.join(anexos)}." if anexos else ""))
+
+
+def _falta_no_portal(exames_canon, nomes_no_portal) -> str:
+    """'' | 'laudo' | 'imagem' — o que falta na guia que JA TEM documento.
+
+    Serve a descoberta: ate 29/08 bastava existir um documento para a guia ser
+    marcada JA_ANEXADO e contada como faturada, e o robo nunca mais voltava nela.
+    Caso LILIA (196485745, 21/08) e mais quatro: o laudo da panoramica estava
+    pronto no PRORADIS e a guia so tinha o do tracado; o skip se repetiu em 26, 27
+    e 28/08 e as guias foram salvas a mao no ultimo dia do prazo.
+
+    Leitura TOLERANTE, ao contrario de `_exames_sem_laudo`: aqui os nomes vem do
+    PORTAL, onde o anexo feito a mao tem nome livre ("Laudo Panoramico FULANO.pdf")
+    em vez do padrao do robo. Falso positivo custa uma pendencia para conferir;
+    falso negativo custa a guia inteira."""
+    exames = set(exames_canon or ())
+    if not exames:
+        return ""                      # sem referencia, nao ha o que cobrar
+    nomes = [str(n) for n in (nomes_no_portal or [])]
+    uteis = [n for n in nomes
+             if not any(str(n).upper().startswith(x) for x in _GTO_NO_PORTAL)]
+    tem_imagem = any(n.upper().endswith((".JPG", ".JPEG", ".PNG"))
+                     and "LAUDO" not in n.upper()
+                     and not n.upper().startswith("SOLICITACAO")
+                     for n in uteis)
+    if not tem_imagem:
+        return "imagem"
+    tem_laudo = set()
+    for n in uteis:
+        u = n.upper()
+        if "LAUDO" in u or "CEPH" in u:
+            tem_laudo |= canon_exames(n)
+    exigidos = set()
+    for e in exames:
+        exigidos |= (_DOC_COMPONENTES if e in ("documentacao", "documentacao_completa")
+                     else {e})
+    falta = {e for e in exigidos
+             if e in _LAUDO_ESPERADO and e not in tem_laudo}
+    return "laudo" if falta else ""
+
+
+def _documentacao_incompleta(dispensa_laudo, exames_canon, nomes) -> str:
+    """'' | 'laudo' | 'imagem' — o que impede esta guia de faturar.
+
+    Junta as duas perguntas que o portao de escrita precisa fazer:
+      1. ha entregavel? (laudo E imagem na guia radiologica) — `_entregavel_faltando`
+      2. o que ha COBRE os exames que a guia autoriza? — `_exames_sem_laudo`
+
+    A segunda foi ligada em 29/08. Ate entao a guarda perguntava so "existe algum
+    LAUDO_*": a guia da CARLANIA (195315958, 23/07) autoriza panoramica e
+    periapical, tinha o laudo do periapical e faturou sem o da panoramica. Foram 71
+    guias assim na auditoria de 28/08.
+
+    `apenas_esperados=True` de proposito: medido sobre 853 guias, periapical sai sem
+    laudo em 64% dos casos e interproximal em 81% — ali o laudo e a excecao. So
+    panoramica, telerradiografia e tomografia sinalizam."""
+    if _entregavel_faltando(dispensa_laudo, nomes):
+        _q = _falta_qual_entregavel(dispensa_laudo, nomes)
+        # Guia de MODELO nao tem laudo por definicao — o entregavel dela e a foto.
+        # Dizer "ambos" mandaria cobrar um laudo que nunca vai existir.
+        if dispensa_laudo:
+            return "imagem"
+        return _q or "imagem"
+    if dispensa_laudo:
+        return ""
+    return "laudo" if _exames_sem_laudo(exames_canon, nomes,
+                                        apenas_esperados=True) else ""
 
 
 def _falta_qual_entregavel(dispensa_laudo, nomes) -> str:
@@ -2718,6 +2835,17 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     # culpar a clínica por um pedido que EXISTE (caso MARIA CLARA). O
                     # pedido legível que não cobre segue como antes (pedir à clínica).
                     _motivo = _motivo_nao_cobre(_pede, _falta, _cn)
+                elif _motivo == "OUTRO_DENTISTA":
+                    # O nome do paciente bate e os exames cobrem; o que nao bate e
+                    # QUEM assinou o pedido. Mandar conferir o paciente aqui faria a
+                    # operacao procurar a coisa errada. Caso INGRID (196333450).
+                    _motivo = (
+                        "NÃO FATUROU porque o pedido encontrado no prontuário está "
+                        "assinado por OUTRO dentista, diferente do que consta na guia "
+                        "— costuma ser pedido de um atendimento anterior, arquivado no "
+                        "mesmo prontuário. O QUE FAZER: conferir se existe o pedido "
+                        "deste atendimento; se existir, anexar à mão. Se o dentista da "
+                        "guia estiver errado, corrigir na guia.")
                 elif _motivo == "PACIENTE_INCOMPATIVEL":
                     if _ha_leitura_no_nome(leituras, pac["nome"]):
                         # CARINA (28/07): HA um RG no nome EXATO do paciente, mas a
@@ -3628,7 +3756,18 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 # GUARDA por ENTREGAVEL, nao por laudo: guia de modelo dispensa o
                 # laudo mas NAO dispensa a foto. Antes, dispensa_laudo pulava esta
                 # guarda inteira e a guia podia faturar so com a solicitacao.
-                if _entregavel_faltando(_dec_it.get("dispensa_laudo"), nomes):
+                # COBERTURA POR EXAME (29/08): ate aqui a guarda so perguntava
+                # "existe algum LAUDO_*". A guia da CARLANIA (195315958) autoriza
+                # panoramica e periapical, tinha o laudo do periapical e faturou sem
+                # o da panoramica — 71 guias assim na auditoria de 28/08. Agora o
+                # que esta anexado tem de COBRIR o que a guia autoriza.
+                _exames_da_guia = (_dec_it.get("gto_exames")
+                                   or item.get("exames_gto") or [])
+                _falta_cob = set()
+                if not _dec_it.get("dispensa_laudo"):
+                    _falta_cob = _exames_sem_laudo(_exames_da_guia, nomes,
+                                                   apenas_esperados=True)
+                if _entregavel_faltando(_dec_it.get("dispensa_laudo"), nomes) or _falta_cob:
                     item["anexado"] = "ERRO"
                     # A MENSAGEM PRECISA DIZER *QUAIS* EXAMES. "Conferir se o exame e
                     # do convenio" escondia dois casos opostos e a pessoa nao tinha
@@ -3653,6 +3792,19 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                             "o que faturar. O QUE FAZER: conferir se a foto do modelo "
                             "(com as várias faces) foi gerada no PRORADIS e reprocessar "
                             "o dia.")
+                    elif _falta_cob and not _entregavel_faltando(
+                            _dec_it.get("dispensa_laudo"), nomes):
+                        # HA laudo e imagem — so nao do exame certo. Dizer "nao ha
+                        # nenhum laudo" aqui seria falso e mandaria cobrar o que ja
+                        # existe.
+                        _nomes_falta = lista_amigavel(sorted(_falta_cob))
+                        item["anexar_erro"] = (
+                            f"a guia autoriza {_ex_guia or '(exames ilegíveis)'}, mas "
+                            f"NÃO há o laudo de {_nomes_falta} entre os documentos — "
+                            f"faturar assim entrega menos do que a guia autoriza e a "
+                            f"operadora glosa por documentação incompleta (3230). "
+                            f"O QUE FAZER: cobrar a emissão desse laudo; o robô anexa "
+                            f"sozinho assim que ele sair no PRORADIS.")
                     elif _falta_qual_entregavel(
                             _dec_it.get("dispensa_laudo"), nomes) == "imagem":
                         # LAUDO PRESENTE, IMAGEM AUSENTE. Sem este ramo a mensagem
@@ -3982,6 +4134,13 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             # re-assinatura em 31/07)
             _na = r.get("n_anexos") or (len(_an) or 2)
             _nd = r.get("n_docs") or 0
+            # A guia TEM documento — mas cobre o que ela autoriza? Ate 29/08 a
+            # resposta era presumida SIM e a guia virava faturada, sem o robo voltar
+            # nela nunca mais. Caso LILIA (196485745) e mais quatro de 21-22/08: o
+            # laudo da panoramica estava pronto no PRORADIS e a guia so tinha o do
+            # tracado; o skip se repetiu tres dias seguidos e elas foram salvas a mao
+            # no ultimo dia do prazo.
+            _falta_portal = _falta_no_portal(r.get("exames_portal") or [], _an)
             decisoes.append({
                 "gto": r["gto"], "paciente": r["nome"],
                 # categoria PROPRIA: antes vinha como "auto"/anexado OK, igual a uma
@@ -3989,18 +4148,13 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 # em que o robo nao encostou, e a operadora nao tinha como saber a
                 # diferenca. Nada pode ser silencioso.
                 "categoria": "ja_anexada",
-                "anexado": "OK", "laudo_imgs": [], "solicitacao": None,
+                "anexado": ("OK" if not _falta_portal else "ERRO"),
+                "laudo_imgs": [], "solicitacao": None,
                 "anexar_solic": False, "justificativa": None,
                 "gto_exames": r.get("exames_portal") or [],
                 "candidatos": [], "solic_idx": None,
-                "gemini": {"motivo": (
-                    f"NAO FOI PRECISO FATURAR: a guia ja tinha {_na} anexo(s) "
-                    + (f"— {_nd} documento(s) alem da propria GTO — "
-                       if _nd else "")
-                    + f"quando o robo chegou: a documentacao ja havia sido anexada, "
-                    f"por outra execucao ou a mao. O robo NAO enviou nada: o portal "
-                    f"nao permite remover anexo, e duplicar seria irreversivel."
-                    + (f" Anexos na guia: {', '.join(_an)}." if _an else ""))},
+                "gemini": {"motivo": _motivo_ja_anexada(_falta_portal, _na, _nd,
+                                                        _an, r.get("exames_portal"))},
                 "erro": None, "arquivos_anexados": _an,
             })
             continue

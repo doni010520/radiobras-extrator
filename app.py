@@ -724,15 +724,27 @@ def _prazo_dias():
         return 7
 
 
+# PRAZO DA OPERADORA (28/08): a OdontoPrev aceita anexo por 7 DIAS a partir do
+# exame — imagem e laudo. Depois disso a guia so entra por RECURSO DE GLOSA.
+#
+# NAO confundir com FATURAR_PRAZO_DIAS, que diz ate onde o cron REPROCESSA. Sao
+# coisas diferentes e o SLA tem de seguir esta: com a producao em 17, o alerta
+# saia quando faltavam 2 dias para o dia 17, ou seja no DIA 15 — oito dias depois
+# de a guia ja ter morrido. Medido na auditoria de cobertura: das 93 guias com
+# documentacao incompleta, 80 estavam fora da janela e seis (exame de 20/08)
+# perderam por UM dia.
+PRAZO_ANEXO_DIAS = 7
+
+
 def _sla_dias_restantes(dia_str):
-    """Dias que faltam pro prazo de faturamento estourar (dia do exame + prazo).
-    None se a data não parseia. Negativo/0 = vencido."""
+    """Dias que faltam pro prazo da OPERADORA estourar (dia do exame + 7).
+    None se a data não parseia. Negativo/0 = vencido, só por recurso."""
     from datetime import date
     d = db._parse_ddmmaaaa(dia_str)
     if not d:
         return None
     hoje = datetime.now(_TZ).date() if _TZ else date.today()
-    return _prazo_dias() - (hoje - d).days
+    return PRAZO_ANEXO_DIAS - (hoje - d).days
 
 
 def _send_email(assunto, corpo_txt, corpo_html=None):
@@ -896,7 +908,19 @@ def _esteira_liberar(dia, conta, tag):
 
 
 def _dia_alvo_cron(hoje):
-    """Dia-alvo do cron diário: D-4 (quatro dias atrás), formatado 'DD/MM/AAAA'."""
+    """Dia-alvo do cron diário: D-4 (quatro dias atrás), formatado 'DD/MM/AAAA'.
+
+    NÃO MEXER PARA D-1 (tentado e revertido em 29/08). O raciocínio era devolver
+    margem dentro do prazo de 7 dias da operadora, mas ele ignora a realidade da
+    produção: o laudo do radiologista leva três a quatro dias para sair. Rodar em
+    D-1 produz uma rodada em que quase nada tem laudo — gasta proxy e Gemini e
+    enche o painel de "falta laudo" que não é pendência de ninguém, só exame
+    recente.
+
+    A margem curta (D-4 + 7 dias de prazo = 3 dias úteis de reação) é real, mas se
+    resolve em outro lugar: o alerta de SLA conta os 7 dias (PRAZO_ANEXO_DIAS) e
+    avisa em D+5, e o dia volta à rodada enquanto tiver pendência aberta dentro do
+    prazo."""
     from datetime import timedelta
     return (hoje - timedelta(days=4)).strftime("%d/%m/%Y")
 

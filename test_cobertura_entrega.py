@@ -10,7 +10,8 @@ na folha. A clinica so descobriu conferindo a mao.
 Mesma familia do caso PALOMA (GTO 195670786, 31/07, Camacari), que faturou com
 dois laudos e ZERO imagem e voltou GLOSADA 3230 "documentacao incompleta"."""
 import db
-from esteira import (_entregavel_faltando, _exames_sem_laudo,
+from esteira import (_documentacao_incompleta, _entregavel_faltando,
+                     _exames_sem_laudo,
                      _falta_qual_entregavel, _sem_imagem_no_plano)
 
 
@@ -136,3 +137,60 @@ def test_guia_segurada_por_falta_de_imagem_tem_grupo_proprio():
     chave, quem, _acao = db.classificar_pendencia(_MOTIVO_SEM_IMAGEM, "auto")
     assert chave == "sem_imagem"
     assert quem == "Radiologista"
+
+
+def test_guia_de_dois_exames_com_laudo_de_um_so_nao_fatura():
+    """Ligar a COBERTURA no portao de escrita. Ate 29/08 a guarda perguntava so
+    "existe algum LAUDO_*" — e por isso a guia da CARLANIA (195315958, 23/07), que
+    autoriza panoramica e periapical, faturou com o laudo do periapical e sem o da
+    panoramica. Foram 71 guias assim na auditoria de 28/08.
+
+    Usa `apenas_esperados`: periapical e interproximal saem sem laudo na maioria
+    das vezes (64% e 81%), entao cobrar os dois inventaria pendencia falsa."""
+    exames = {"panoramica", "periapical"}
+    plano = ["ENTREGA_5333468dd6.jpg",
+             "LAUDO_PERIAPICAL BOCA COMPLETA_40335880_OFICIAL.pdf"]
+    assert _entregavel_faltando(False, plano) is False   # tem laudo E imagem
+    assert _exames_sem_laudo(exames, plano, apenas_esperados=True) == {"panoramica"}
+
+
+def test_o_inverso_passa():
+    exames = {"panoramica", "periapical"}
+    plano = ["ENTREGA_5333468dd6.jpg", "LAUDO_PANORAMICA_40335880_OFICIAL.pdf"]
+    assert _exames_sem_laudo(exames, plano, apenas_esperados=True) == set()
+
+
+# ── o portao de escrita: junta entregavel + cobertura ────────────────────────
+
+def test_portao_barra_guia_sem_o_laudo_do_exame_que_ela_autoriza():
+    # CARLANIA (195315958): guia pan+peri faturou com o laudo do periapical.
+    assert _documentacao_incompleta(
+        False, {"panoramica", "periapical"},
+        ["ENTREGA_a.jpg", "LAUDO_PERIAPICAL BOCA COMPLETA_1_OFICIAL.pdf"]) == "laudo"
+
+
+def test_portao_barra_guia_sem_imagem():
+    # PALOMA (195670786): dois laudos, nenhuma imagem -> GLOSADA 3230.
+    assert _documentacao_incompleta(
+        False, {"documentacao"},
+        ["LAUDO_PANORAMICA_1_OFICIAL.pdf", "LAUDO_TELERRADIOGRAFIA_1_CEPH.pdf"]) == "imagem"
+
+
+def test_portao_libera_quando_esta_completo():
+    assert _documentacao_incompleta(
+        False, {"panoramica", "periapical"},
+        ["ENTREGA_a.jpg", "LAUDO_PANORAMICA_1_OFICIAL.pdf"]) == ""
+
+
+def test_portao_nao_cobra_laudo_de_periapical_nem_de_interproximal():
+    """Periapical sai sem laudo em 64% das guias e interproximal em 81%: exigir os
+    dois inventaria pendencia falsa. O laudo da PANORAMICA basta para a guia toda.
+    (Guia radiologica sem laudo NENHUM continua barrada — regra anterior.)"""
+    assert _documentacao_incompleta(
+        False, {"panoramica", "periapical", "interproximal"},
+        ["ENTREGA_a.jpg", "LAUDO_PANORAMICA_1_OFICIAL.pdf"]) == ""
+
+
+def test_portao_de_guia_de_modelo_exige_so_a_foto():
+    assert _documentacao_incompleta(True, {"modelo"}, ["ENTREGA_a.jpg"]) == ""
+    assert _documentacao_incompleta(True, {"modelo"}, ["SOLICITACAO_a.pdf"]) == "imagem"

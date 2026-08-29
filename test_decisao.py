@@ -435,7 +435,11 @@ def test_rotas_admin_esteira_nao_existem_mais():
 # pendência nunca fechava -> o alerta de SLA seguia cobrando guia já faturada).
 
 def test_dia_alvo_cron_e_D_menos_4():
-    """O alvo do cron é D-4 (quatro dias atrás), não D-3."""
+    """O alvo do cron é D-4 (quatro dias atrás), não D-3 — e não D-1.
+
+    D-1 foi tentado em 28/08 (para ganhar margem no prazo de 7 dias) e revertido no
+    dia seguinte: o laudo do radiologista leva três a quatro dias para sair, então
+    uma rodada em D-1 acha quase tudo sem laudo e gera pendência falsa em massa."""
     from datetime import date
     import app
     assert app._dia_alvo_cron(date(2026, 8, 2)) == "29/07/2026"   # atravessa o mês
