@@ -713,8 +713,17 @@ def upload_arquivos(gp, arquivos: list, max_antes: int = 1, contar_fallback=None
                 except Exception:
                     pass
                 break
-        gp.wait_for_timeout(1000)
-        fi = gp.query_selector("input[type=file]")
+        # INSISTE em vez de desistir em 1s. Casos JEFTE (196499739, 27/08) e GIOVANA
+        # (30/08): "Documentacao OK, mas a anexacao falhou: input[type=file] nao
+        # encontrado". Nos dois a documentacao estava pronta e a guia so nao faturou
+        # por isso — e o JEFTE passou na re-tentativa 24min depois, o que prova que o
+        # elemento APARECE; so nao no primeiro segundo. A popup do portal e Vue e
+        # renderiza a secao de upload depois do resto.
+        for _ in range(12):
+            gp.wait_for_timeout(1000)
+            fi = gp.query_selector("input[type=file]")
+            if fi:
+                break
     if not fi:
         raise RuntimeError("input[type=file] de upload não encontrado na GTO.")
     fi.set_input_files(faltam)

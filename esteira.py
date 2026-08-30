@@ -1656,6 +1656,39 @@ def _sem_imagem_no_plano(exames_canon, arquivos_no_plano) -> bool:
                    for f in (arquivos_no_plano or []))
 
 
+def _motivo_login_odonto(cod, detalhe) -> str:
+    """Mensagem do login que falhou — apontando a causa CERTA.
+
+    Tres situacoes diferentes moravam no mesmo texto "verifique/cadastre a senha do
+    portal":
+      - PROXY fora (saldo/credencial do residencial);
+      - nao ALCANCAR o portal (timeout de navegacao, rede) — o robo nao chegou nem a
+        ver o formulario, entao a senha e irrelevante;
+      - o portal RESPONDER e recusar a credencial — ai sim e a senha.
+
+    Rodada de 30/08, Tancredo: `Page.goto: Timeout 60000ms exceeded` virou "confira a
+    senha", e a mesma conta logou tres minutos depois. Mesmo erro ja documentado
+    quando o bloqueio de IP se disfarcava de "usuario ou senha invalidos"."""
+    det = str(detalhe or "")
+    low = det.lower()
+    if "proxy" in low or "err_proxy" in low or "tunnel" in low:
+        return (f"Não foi possível conectar ao OdontoPrev pelo proxy (código {cod}) "
+                f"— NÃO é a senha do portal. É o proxy residencial que dá acesso ao "
+                f"OdontoPrev que falhou (saldo/dados acabaram, credencial mudou, ou "
+                f"instabilidade do provedor). O QUE FAZER: conferir a conta do proxy "
+                f"(ODONTO_PROXY_URL) e o saldo/dados; depois tentar de novo. "
+                f"Detalhe técnico: {det[:140]}")
+    if ("timeout" in low or "net::err" in low or "econnreset" in low
+            or "connection" in low):
+        return (f"Não foi possível ALCANÇAR o portal do OdontoPrev (código {cod}) — "
+                f"NÃO é a senha: o robô não chegou nem a ver a tela de login. É rede, "
+                f"proxy lento ou o portal fora do ar. Costuma passar sozinho na "
+                f"próxima rodada. O QUE FAZER: se repetir em rodadas seguidas, "
+                f"conferir o proxy e o status do portal. Detalhe técnico: {det[:140]}")
+    return (f"Login no RedeUna/OdontoPrev falhou para o código {cod} — "
+            f"verifique/cadastre a senha do portal. Detalhe: {det[:140]}")
+
+
 def _consulta_inicial(pg, data, tentativas: int = 3, _sleep=None) -> tuple:
     """Carrega a lista de GTOs do dia no worker de anexacao. (ok, erro).
 
@@ -4016,17 +4049,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         # por proxy). Mandar "cadastre a senha do portal" aqui manda a operacao
         # para o lugar errado — a senha esta certa, quem falhou foi o proxy (saldo/
         # dados acabaram, credencial trocou, ou instabilidade do provedor).
-        if "proxy" in _low or "err_proxy" in _low or "tunnel" in _low:
-            raise RuntimeError(
-                f"Não foi possível conectar ao OdontoPrev pelo proxy (código {_cod}) "
-                f"— NÃO é a senha do portal. É o proxy residencial que dá acesso ao "
-                f"OdontoPrev que falhou (saldo/dados acabaram, credencial mudou, ou "
-                f"instabilidade do provedor). O QUE FAZER: conferir a conta do proxy "
-                f"(ODONTO_PROXY_URL) e o saldo/dados; depois tentar de novo. "
-                f"Detalhe técnico: {_det_odo[:140]}")
-        raise RuntimeError(
-            f"Login no RedeUna/OdontoPrev falhou para o código {_cod} — "
-            f"verifique/cadastre a senha do portal. Detalhe: {_det_odo[:140]}")
+        raise RuntimeError(_motivo_login_odonto(_cod, _det_odo))
     if setup.get("err_prorad") is not None:
         _ep = str(setup["err_prorad"])
         if "sem linhas" in _ep.lower() or "vazi" in _ep.lower():
