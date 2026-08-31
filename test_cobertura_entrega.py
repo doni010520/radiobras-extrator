@@ -194,3 +194,36 @@ def test_portao_nao_cobra_laudo_de_periapical_nem_de_interproximal():
 def test_portao_de_guia_de_modelo_exige_so_a_foto():
     assert _documentacao_incompleta(True, {"modelo"}, ["ENTREGA_a.jpg"]) == ""
     assert _documentacao_incompleta(True, {"modelo"}, ["SOLICITACAO_a.pdf"]) == "imagem"
+
+
+# ── roteamento da pendencia de COBERTURA ────────────────────────────────────
+# O `salvar_execucao` prefixa toda guia com `anexar_erro` com "Documentacao OK, mas
+# a anexacao falhou:". Com esse prefixo o motivo casava primeiro no grupo `anexacao`
+# -> responsavel "Nos" -> saia do painel e entrava no retry. Aconteceu de verdade:
+# em 31/08 as guias de REBECA (196718705), LUCCA (196712279) e DEISIANE (196691026),
+# corretamente barradas por falta do laudo da panoramica, ficaram invisiveis para a
+# clinica e queimando re-tentativa. Mesmo erro que a mensagem de imagem teve em
+# 28/08 — e que eu nao repliquei aqui.
+
+_MOTIVO_SEM_COBERTURA = (
+    "Documentação OK, mas a anexação falhou: a guia autoriza documentação "
+    "ortodôntica e periapical, mas NÃO há o laudo de panorâmica entre os documentos "
+    "— faturar assim entrega menos do que a guia autoriza e a operadora glosa por "
+    "documentação incompleta (3230). O QUE FAZER: cobrar a emissão desse laudo; o "
+    "robô anexa sozinho assim que ele sair no PRORADIS.")
+
+
+def test_falta_de_laudo_do_exame_fica_no_painel():
+    assert db.eh_pendencia_front(_MOTIVO_SEM_COBERTURA, "auto") is True
+
+
+def test_falta_de_laudo_do_exame_nao_entra_no_retry():
+    """Re-tentar nao faz o radiologista assinar. Retry cego so gasta proxy."""
+    assert db.eh_nosso(_MOTIVO_SEM_COBERTURA, "auto") is False
+    assert db.deve_entrar_no_retry(_MOTIVO_SEM_COBERTURA, "auto") is False
+
+
+def test_falta_de_laudo_do_exame_e_do_radiologista():
+    chave, quem, _acao = db.classificar_pendencia(_MOTIVO_SEM_COBERTURA, "auto")
+    assert chave == "sem_laudo_do_exame"
+    assert quem == "Radiologista"

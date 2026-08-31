@@ -1150,6 +1150,17 @@ _GRUPOS_PENDENCIA = [
     ("guia_ilegivel", r"n[ãa]o conseguiu ler quais exames a guia autoriza|GTO ileg[íi]vel"
      r"|sem exames de refer[êe]ncia",
      "Nós", "Não lemos o que a guia autoriza. Abrir a guia no portal e conferir."),
+    # LAUDO DO EXAME FALTANDO (31/08): ha laudo na guia, mas nao o do exame que ela
+    # autoriza. Vem ANTES de anexacao pelo mesmo motivo da imagem — o prefixo
+    # "anexacao falhou" que o salvar_execucao poe faria a guia virar NOSSA, sair do
+    # painel e entrar no retry. Aconteceu com REBECA (196718705), LUCCA (196712279) e
+    # DEISIANE (196691026) em 31/08: barradas corretamente pela cobertura e
+    # invisiveis para a clinica. Re-tentar nao faz o radiologista assinar.
+    ("sem_laudo_do_exame", r"n[ãa]o h[áa] o laudo de",
+     "Radiologista", "A guia tem documento anexado, mas falta o laudo de um dos "
+     "exames que ela autoriza. Faturar assim entrega menos do que a guia autoriza e "
+     "a operadora glosa por documentação incompleta (3230). Cobrar a emissão desse "
+     "laudo; o robô anexa sozinho assim que ele sair no PRORADIS."),
     # IMAGEM FALTANDO (28/08): o laudo esta pronto e a folha de imagens nao. Vem
     # ANTES de anexacao porque o motivo chega com o prefixo "anexacao falhou" que o
     # salvar_execucao poe em toda guia com `anexar_erro` — casando ali, a guia
@@ -1766,6 +1777,7 @@ _TITULO_GRUPO = {
     "esperando_analise": "Esperando o laudo da análise cefalométrica",
     "sem_entregavel": "Exame sem laudo e sem imagem",
     "sem_imagem": "Laudo pronto, mas sem a folha de imagens",
+    "sem_laudo_do_exame": "Falta o laudo de um dos exames da guia",
     "outro_dentista": "Pedido assinado por outro dentista",
     "esperando_tele": "Esperando o laudo da telerradiografia (traçado)",
     "falta_laudo": "Esperando o laudo do radiologista",
