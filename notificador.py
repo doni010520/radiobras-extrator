@@ -186,6 +186,35 @@ def avisar_falhas_da_rodada(dia: str, conta: str, itens: list, _post=None) -> bo
     return enviar_whatsapp(chr(10).join(linhas), _post=_post)
 
 
+def avisar_faturada_incompleta(itens: list, _post=None) -> bool:
+    """Guia que consta FATURADA mas o portal mostra documentacao incompleta.
+
+    Ate 01/09 o sistema confiava no proprio relato: upload OK = faturada. Ninguem
+    voltava ao portal para perguntar se a guia ficou completa. A diferenca entre "o
+    robo diz que anexou" e "o convenio confirma que esta la" foi o que produziu as
+    54 guias vencidas descobertas em 29/08.
+
+    UMA mensagem por rodada, uma linha por guia. Em condicao normal nao dispara: na
+    primeira conferencia real (01/09) foram 16 completas e zero incompletas. Se ele
+    tocar, algo passou pelo portao e nao deveria."""
+    itens = [i for i in (itens or []) if i]
+    if not itens:
+        return False
+    linhas = ["⚠️ *RadioBras — guia faturada com documentação incompleta*",
+              "",
+              f"{len(itens)} guia(s) constam faturadas, mas o portal mostra que "
+              f"falta documento:",
+              ""]
+    for i in itens:
+        linhas.append(f"• {i.get('paciente', '?')} — guia {i.get('gto', '?')} "
+                      f"({_nome_unidade(i.get('conta'))}, {str(i.get('dia', ''))[:5]}) "
+                      f"— falta {i.get('falta', '?')}")
+    linhas += ["",
+               "Essas guias JÁ FORAM enviadas ao convênio. O prazo para completar é "
+               "de 7 dias a partir do exame; depois disso só por recurso de glosa."]
+    return enviar_whatsapp(chr(10).join(linhas), _post=_post)
+
+
 def avisar_pausa(motivo: str, guias: int, minutos: int, dia: str = "", conta: str = "",
                  _post=None) -> bool:
     """APAGÃO: o mundo caiu (proxy fora, login não passa). UMA mensagem — não uma

@@ -925,6 +925,33 @@ def _dia_alvo_cron(hoje):
     return (hoje - timedelta(days=4)).strftime("%d/%m/%Y")
 
 
+def _conferir_pos_rodada(desde):
+    """Pergunta ao PORTAL se as guias que acabamos de faturar ficaram completas.
+
+    O sistema confiava no proprio relato: upload OK = faturada. A diferenca entre
+    "o robô diz que anexou" e "o convênio confirma que está lá" foi o que produziu
+    as 54 guias vencidas descobertas em 29/08. Aqui ele passa a se auditar contra a
+    fonte que não depende da nossa opinião.
+
+    Só leitura, e nunca derruba a rodada — o faturamento já aconteceu."""
+    if os.environ.get("CONFERIR_POS_RODADA", "1") == "0":
+        return
+    import conferencia
+    itens = conferencia.faturadas_desde(desde)
+    if not itens:
+        return
+    ok, incompletas, nao = conferencia.conferir(
+        itens, log=lambda m: app.logger.info("%s", m))
+    app.logger.info("Conferência pós-rodada: %s completa(s), %s incompleta(s), "
+                    "%s não conferida(s).", len(ok), len(incompletas), len(nao))
+    if incompletas:
+        try:
+            import notificador
+            notificador.avisar_faturada_incompleta(incompletas)
+        except Exception as e:
+            app.logger.error("Aviso de faturada incompleta falhou: %s", str(e)[:120])
+
+
 def _faturar_cron_body():
     from datetime import date
     try:
@@ -932,6 +959,7 @@ def _faturar_cron_body():
     except ValueError:
         prazo = 7
     hoje = datetime.now(_TZ).date() if _TZ else date.today()
+    _inicio = datetime.now(_TZ) if _TZ else datetime.now()
     target = _dia_alvo_cron(hoje)
     combos = {(c, target) for c in PLANOS}                       # D-4 nas 3 unidades
     combos |= set(db.dias_com_pendencia_aberta(prazo))           # + pendências no prazo
@@ -975,6 +1003,11 @@ def _faturar_cron_body():
             _esteira_liberar(dia, conta, _tag)
     db.cron_marcar_faturar(target)
     app.logger.info("Cron faturar concluído: %s execução(ões), %s faturada(s).", ndias, nfat)
+    try:
+        _conferir_pos_rodada(_inicio)
+    except Exception as e:
+        # NUNCA derruba a rodada: a conferência é leitura, o faturamento já aconteceu.
+        app.logger.error("Conferência pós-rodada falhou: %s", str(e)[:150])
     try:
         _enviar_alertas_sla()      # email só dos que vencem amanhã (1 dia p/ o prazo)
     except Exception as e:
