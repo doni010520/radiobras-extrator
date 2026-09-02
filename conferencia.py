@@ -101,3 +101,67 @@ def conferir(itens, pw=None, log=None):
             except Exception:
                 pass
     return completas, incompletas, nao
+
+_GTO_NO_PORTAL = ("IMG_ASSINADA", "IMAGEMGTO")
+
+
+def _eh_imagem(nome):
+    u = str(nome).upper()
+    if any(u.startswith(x) for x in _GTO_NO_PORTAL):
+        return False
+    if "LAUDO" in u or u.startswith("SOLICITACAO"):
+        return False
+    return u.endswith((".JPG", ".JPEG", ".PNG")) or "IMAGE" in u
+
+
+def _exames_com_laudo(nomes):
+    """Exames que JA tem laudo na guia. Le nome do robo (LAUDO_<EXAME>_<acc>) e
+    nome livre de quem anexa a mao ('Laudo Cefalometrico.pdf')."""
+    tem = set()
+    for n in nomes or []:
+        u = str(n).upper()
+        if "LAUDO" in u or "CEPH" in u:
+            tem |= canon_exames(str(n))
+    return tem
+
+
+def arquivos_que_faltam(exames_canon, no_portal, disponiveis) -> list:
+    """Quais dos `disponiveis` devem subir para completar a guia — comparando por
+    TIPO DE EXAME, nunca por nome de arquivo.
+
+    A idempotencia do `upload_arquivos` e por NOME, e quem anexa a mao usa nome
+    livre: a guia da JESSICA (196708276) tem 'Laudo Cefalometrico.pdf', que e o
+    mesmo exame do 'LAUDO_TELERRADIOGRAFIA_<acc>_CEPH.pdf' do robo. Por nome os dois
+    subiriam e a guia ficaria com laudo duplicado — irreversivel, o portal nao
+    remove anexo.
+
+    Conservadora nos dois sentidos:
+      - exame ja coberto NUNCA sobe de novo;
+      - arquivo cujo exame nao da para reconhecer NAO sobe (na duvida, nao arrisca).
+
+    Imagem: so entra quando a guia nao tem NENHUMA. A folha de entrega e composta —
+    sem saber o que ha dentro dela, acrescentar outra e arriscar duplicar."""
+    from esteira import _DOC_COMPONENTES, _LAUDO_ESPERADO
+    exigidos = set()
+    for e in (exames_canon or ()):
+        exigidos |= (_DOC_COMPONENTES
+                     if e in ("documentacao", "documentacao_completa") else {e})
+    ja = _exames_com_laudo(no_portal)
+    falta_laudo = {e for e in exigidos if e in _LAUDO_ESPERADO and e not in ja}
+    tem_imagem = any(_eh_imagem(n) for n in (no_portal or []))
+    out = []
+    for f in disponiveis or []:
+        u = str(f).upper()
+        if u.startswith("SOLICITACAO"):
+            continue                      # pedido do dentista e outro gate
+        if _eh_imagem(f):
+            if not tem_imagem:
+                out.append(f)
+            continue
+        if "LAUDO" not in u and "CEPH" not in u:
+            continue                      # nao da para saber que exame e -> nao sobe
+        ex = canon_exames(str(f))
+        if ex & falta_laudo:
+            out.append(f)
+    return out
+

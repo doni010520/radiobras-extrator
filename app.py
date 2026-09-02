@@ -944,10 +944,30 @@ def _conferir_pos_rodada(desde):
         itens, log=lambda m: app.logger.info("%s", m))
     app.logger.info("Conferência pós-rodada: %s completa(s), %s incompleta(s), "
                     "%s não conferida(s).", len(ok), len(incompletas), len(nao))
-    if incompletas:
+    if not incompletas:
+        return
+    # FECHAR O CICLO (02/09): ate aqui o robo detectava, avisava e parava — e toda
+    # vez alguem tinha de achar o documento no PRORADIS e anexar a mao. Agora ele
+    # completa. So o que falta, comparado por TIPO DE EXAME (nunca por nome de
+    # arquivo: a guia da JESSICA tinha "Laudo Cefalometrico.pdf", mesmo exame do
+    # LAUDO_TELERRADIOGRAFIA do robo — por nome, subiriam os dois).
+    feitas = []
+    if os.environ.get("COMPLETAR_INCOMPLETAS", "1") != "0":
+        try:
+            import completar
+            feitas, erros_c = completar.rodada(
+                incompletas, log=lambda m: app.logger.info("%s", m))
+            app.logger.info("Completar: %s guia(s) completada(s), %s erro(s).",
+                            len(feitas), len(erros_c))
+        except Exception as e:
+            app.logger.error("Completar falhou: %s", str(e)[:150])
+    # avisa SO o que sobrou — guia completada nao vira mensagem
+    _gtos_ok = {str(g.get("gto")) for g in feitas}
+    _resto = [i for i in incompletas if str(i.get("gto")) not in _gtos_ok]
+    if _resto:
         try:
             import notificador
-            notificador.avisar_faturada_incompleta(incompletas)
+            notificador.avisar_faturada_incompleta(_resto)
         except Exception as e:
             app.logger.error("Aviso de faturada incompleta falhou: %s", str(e)[:120])
 
