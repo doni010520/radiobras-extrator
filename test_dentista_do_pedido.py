@@ -91,3 +91,45 @@ def test_nao_suja_o_detalhe_quando_o_dentista_bate():
                           {"panoramica", "periapical"}, 1,
                           dentista_gto="FERNANDA KEURY SILVA ROCHA", detalhe=det)
     assert "dentista_lido" not in det
+
+
+# ── tolerancia a erro de leitura no NOME DO DENTISTA (04/09) ─────────────────
+# A comparacao era por igualdade EXATA de token. O nome do dentista sai de carimbo
+# borrado ou assinatura, e uma letra derruba tudo:
+#   TALITA SOUZA SANTA IZABEL (196843059): lido "Dr Leanna Brandiao", guia/PRORADIS
+#   "LUANNA BRANDAO". LEANNA x LUANNA e BRANDIAO x BRANDAO — uma letra cada — e a
+#   guia foi recusada como "pedido de outro dentista".
+# O codigo ja tolera isso no nome do PACIENTE (`_nomes_compat`, caso IONICE/JONICE)
+# usando `_dist_edicao`. O dentista ficou de fora.
+
+
+def test_uma_letra_de_diferenca_nao_e_outro_dentista():
+    """Caso TALITA: Leanna/Luanna e Brandiao/Brandao."""
+    leituras = [_folha(0, "TALITA SOUZA SANTA IZABEL", ["panoramica"],
+                       dentista="Dr Leanna Brandiao")]
+    idx, a, motivo = _escolher_solicitacao(
+        leituras, "TALITA SOUZA SANTA IZABEL", {"panoramica"}, 1,
+        dentista_gto="LUANNA BRANDAO")
+    assert idx == 0 and motivo is None, "recusou por erro de leitura de uma letra"
+
+
+def test_dentista_realmente_outro_continua_barrado():
+    """Caso MARCIO (196808825): guia diz IAGO SOARES SILVA, papel diz Eneias
+    Pereira da S. Neto. Nenhuma tolerancia de grafia aproxima esses dois — e a
+    recusa estava CERTA."""
+    leituras = [_folha(0, "MARCIO RIBEIRO LIMA", ["panoramica"],
+                       dentista="Eneias Pereira da S. Neto")]
+    idx, a, motivo = _escolher_solicitacao(
+        leituras, "MARCIO RIBEIRO LIMA", {"panoramica"}, 1,
+        dentista_gto="IAGO SOARES SILVA")
+    assert idx is None and motivo == "OUTRO_DENTISTA"
+
+
+def test_pedido_de_outra_clinica_continua_barrado():
+    """Caso GABRIEL (196841867): pedido de 2025, de outro dentista e outra clinica."""
+    leituras = [_folha(0, "GABRIEL DA SILVA SANTOS", ["panoramica"],
+                       dentista="Elder Franklin S. C. Leite")]
+    idx, a, motivo = _escolher_solicitacao(
+        leituras, "GABRIEL DA SILVA SANTOS", {"panoramica"}, 1,
+        dentista_gto="RENATA COSTA MENEZES")
+    assert idx is None and motivo == "OUTRO_DENTISTA"

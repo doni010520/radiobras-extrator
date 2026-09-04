@@ -488,7 +488,24 @@ def _dentista_contradiz(a: dict, dentista_gto: str, gto_txt: str = "") -> bool:
             if t not in _STOP_NOME and len(t) > 2}
     if not alvo or len(lidos) < 2:
         return False                    # sem referência ou leitura parcial
-    return len(lidos & alvo) == 0       # 2+ tokens legíveis, nenhum em comum
+    # TOLERA ERRO DE GRAFIA (04/09), como `_nomes_compat` ja faz no nome do PACIENTE
+    # (caso IONICE/JONICE). O nome do dentista sai de carimbo borrado ou assinatura,
+    # e a comparacao exata derrubava por UMA letra: a guia da TALITA SOUZA SANTA
+    # IZABEL (196843059) foi recusada com "Leanna Brandiao" lido contra "LUANNA
+    # BRANDAO" — LEANNA/LUANNA e BRANDIAO/BRANDAO, um caractere cada.
+    #
+    # Continua barrando divergencia REAL: MARCIO RIBEIRO LIMA (196808825) tinha
+    # IAGO SOARES SILVA na guia e Eneias Pereira da S. Neto no papel — nenhuma
+    # tolerancia de grafia aproxima esses dois, e a recusa estava certa.
+    for t in lidos:
+        for u in alvo:
+            if t == u:
+                return False
+            # so aproxima tokens de tamanho parecido: "SILVA" e "SILVEIRA" sao
+            # sobrenomes diferentes, nao erro de digitacao.
+            if abs(len(t) - len(u)) <= 1 and _dist_edicao(t, u, teto=1) <= 1:
+                return False
+    return True                         # 2+ tokens legíveis, nenhum sequer parecido
 
 
 # Distancia maxima, em dias, para considerar que dois pedidos do prontuario sao do
