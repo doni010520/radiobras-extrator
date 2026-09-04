@@ -757,6 +757,15 @@ def _escolher_solicitacao(leituras, nome_gto, gto_ex, n_cands, dentista_gto="",
         # sobrenome em comum NAO barram.
         if _dentista_contradiz(a, dentista_gto, gto_txt):
             outro_dentista = True
+            # GUARDA OS DOIS NOMES (04/09). A mensagem dizia "assinado por OUTRO
+            # dentista" sem dizer QUEM contra QUEM, e os nomes eram descartados
+            # depois da comparacao. Com quatro guias caindo aqui num dia so, nao
+            # havia como responder "qual era o dentista errado?" nem saber se era
+            # sempre o mesmo profissional.
+            if isinstance(detalhe, dict) and "dentista_lido" not in detalhe:
+                detalhe["dentista_gto"] = str(dentista_gto or "")
+                detalhe["dentista_lido"] = str(a.get("dentista_lido") or "")
+                detalhe["cro_lido"] = str(a.get("cro_lido") or "")
             continue
         algum_pac = True
         # expande SÓ o lado da solicitação: quem pede os componentes (panorâmica +
@@ -2869,6 +2878,12 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                     # pedido legível que não cobre segue como antes (pedir à clínica).
                     _motivo = _motivo_nao_cobre(_pede, _falta, _cn)
                 elif _motivo == "OUTRO_DENTISTA":
+                    _d_gto = (_det or {}).get("dentista_gto") or ""
+                    _d_lido = (_det or {}).get("dentista_lido") or ""
+                    _quem = ""
+                    if _d_gto or _d_lido:
+                        _quem = (f" A guia é do dentista {_d_gto or '(não lido)'} e o "
+                                 f"pedido está assinado por {_d_lido or '(não lido)'}.")
                     # O nome do paciente bate e os exames cobrem; o que nao bate e
                     # QUEM assinou o pedido. Mandar conferir o paciente aqui faria a
                     # operacao procurar a coisa errada. Caso INGRID (196333450).
@@ -2876,9 +2891,9 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                         "NÃO FATUROU porque o pedido encontrado no prontuário está "
                         "assinado por OUTRO dentista, diferente do que consta na guia "
                         "— costuma ser pedido de um atendimento anterior, arquivado no "
-                        "mesmo prontuário. O QUE FAZER: conferir se existe o pedido "
-                        "deste atendimento; se existir, anexar à mão. Se o dentista da "
-                        "guia estiver errado, corrigir na guia.")
+                        "mesmo prontuário." + _quem + " O QUE FAZER: conferir se existe "
+                        "o pedido deste atendimento; se existir, anexar à mão. Se o "
+                        "dentista da guia estiver errado, corrigir na guia.")
                 elif _motivo == "PACIENTE_INCOMPATIVEL":
                     if _ha_leitura_no_nome(leituras, pac["nome"]):
                         # CARINA (28/07): HA um RG no nome EXATO do paciente, mas a

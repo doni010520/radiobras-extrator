@@ -61,3 +61,33 @@ def test_sobrenome_em_comum_nao_e_contradicao():
         leituras, "INGRID EMILE DE SOUZA", {"panoramica", "periapical"}, 1,
         dentista_gto="FERNANDA KEURY SILVA ROCHA")
     assert idx == 0 and motivo is None
+
+
+def test_registra_OS_NOMES_dos_dois_dentistas():
+    """A mensagem dizia "assinado por OUTRO dentista" e mandava conferir — sem dizer
+    QUEM contra QUEM. Para saber, a pessoa tinha de abrir a guia e abrir o documento.
+
+    Em 04/09 quatro guias cairam aqui (GABRIEL DA SILVA, TATIANA DO AMPARO, MARCIO
+    RIBEIRO e TALITA SOUZA) e nao havia como responder "qual era o dentista errado?"
+    — os dois nomes eram usados na comparacao e descartados. Sem eles nao da para
+    saber se e a mesma dentista em todos os casos (alguem que saiu da clinica e cujos
+    pedidos seguem no prontuario) ou situacoes independentes."""
+    det = {}
+    leituras = [_folha(0, "INGRID EMILE DE SOUZA", ["panoramica", "periapical"],
+                       dentista="ROBERTO CARLOS ALVES PEREIRA")]
+    idx, a, motivo = _escolher_solicitacao(
+        leituras, "INGRID EMILE DE SOUZA", {"panoramica", "periapical"}, 1,
+        dentista_gto="FERNANDA KEURY SILVA ROCHA", detalhe=det)
+    assert motivo == "OUTRO_DENTISTA"
+    assert det.get("dentista_gto") == "FERNANDA KEURY SILVA ROCHA"
+    assert det.get("dentista_lido") == "ROBERTO CARLOS ALVES PEREIRA"
+
+
+def test_nao_suja_o_detalhe_quando_o_dentista_bate():
+    det = {}
+    leituras = [_folha(0, "INGRID EMILE DE SOUZA", ["panoramica", "periapical"],
+                       dentista="FERNANDA KEURY SILVA ROCHA")]
+    _escolher_solicitacao(leituras, "INGRID EMILE DE SOUZA",
+                          {"panoramica", "periapical"}, 1,
+                          dentista_gto="FERNANDA KEURY SILVA ROCHA", detalhe=det)
+    assert "dentista_lido" not in det
