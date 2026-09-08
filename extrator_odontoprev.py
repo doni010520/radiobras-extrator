@@ -583,6 +583,36 @@ def _resolver_contagem(dom_n, dom_nomes, fallback):
     return dom_n, dom_nomes
 
 
+def _confirmar_anexos(fallback, dom_nomes):
+    """Nomes dos anexos para CONFERIR um upload, com a API como fonte PRIMARIA.
+    Retorna (nomes, fonte) com fonte em {"API", "DOM", "nenhuma"}.
+
+    E o INVERSO de `_resolver_contagem`, de proposito. Aquela resolve a contagem de
+    ANTES, onde o DOM primeiro e barato e correto. Esta resolve a conferencia de
+    DEPOIS, e ai o DOM e justamente a tela onde acabamos de soltar os arquivos:
+    `_anexos_nomes` varre o body inteiro e o `input[type=file]` EXIBE os nomes
+    selecionados, entao os chips contem por construcao todos os `enviados` e a
+    conferencia pelo DOM nunca consegue acusar falta.
+
+    Caso ANA PAULA VIEIRA DIAS (196933166, rodada de 05/09): 3 enviados, log "OK",
+    chegou so o laudo — a folha de imagem e a solicitacao sumiram e a guia foi dada
+    por faturada SEM IMAGEM (glosa 3230). Mesmo desfecho em LUCA (196831581),
+    DAYANE (196811360) e VINICIUS (196850844): 4 guias em 04-08/09.
+
+    fonte "nenhuma" (API falhou e o DOM veio vazio) NAO e sucesso — quem chama tem
+    de tratar como nao-confirmado. A Camada 2 (conferencia pos-rodada) nao cobre
+    este buraco: ela compara por TIPO DE EXAME e aprovou as quatro guias acima."""
+    if callable(fallback):
+        try:
+            api_n, api_nomes = fallback()
+        except Exception:
+            api_n, api_nomes = -1, set()
+        if isinstance(api_n, int) and api_n >= 0:
+            return (api_nomes if isinstance(api_nomes, set) else set()), "API"
+    nomes = dom_nomes if isinstance(dom_nomes, set) else set()
+    return (nomes, "DOM") if nomes else (set(), "nenhuma")
+
+
 def _nao_grudaram(nomes_no_portal, enviados) -> list:
     """Dado o que o portal MOSTRA anexado e o que tentamos enviar, devolve os
     arquivos enviados cuja IDENTIDADE (_chave_anexo) NAO aparece no portal.
@@ -750,14 +780,25 @@ def upload_arquivos(gp, arquivos: list, max_antes: int = 1, contar_fallback=None
     # O ok acima pode ter vindo do fallback "toast 'sucesso' + aritmetica do
     # contador" — que NAO prova que CADA arquivo (o LAUDO em especial) persistiu
     # na guia. Casos NILSON/RENATA: laudo aceito pelo POST, ausente da guia =
-    # faturado sem laudo = glosa. Re-le os anexos pela fonte AUTORITATIVA (DOM,
-    # e API se o DOM falhar) e confere por IDENTIDADE que cada enviado esta la.
-    # So DERRUBA o ok quando a leitura foi REAL (nomes_depois nao vazio): leitura
-    # falha nao vira falso "nao grudou" (a Camada 2 cobre pagina ilegivel).
-    nomes_depois = _anexos_nomes(gp)
-    _dn, nomes_depois = _resolver_contagem(depois, nomes_depois, contar_fallback)
-    nao_grudaram = _nao_grudaram(nomes_depois, alvo_bn) if nomes_depois else []
-    if nao_grudaram:
+    # faturado sem laudo = glosa.
+    #
+    # A CONFERENCIA E PELA API, NAO PELO DOM (08/09). Ate aqui usava
+    # `_resolver_contagem`, que prefere o DOM sempre que o contador da popup
+    # renderiza — e o DOM e a MESMA tela onde os arquivos acabaram de ser soltos:
+    # `_anexos_nomes` varre o body e o `input[type=file]` EXIBE o que foi
+    # selecionado, entao os chips contem por construcao todos os `alvo_bn` e a
+    # conferencia nunca conseguia acusar falta. Quatro guias faturadas com arquivo
+    # faltando em 04-08/09 por causa disso: LUCA (196831581), DAYANE (196811360),
+    # VINICIUS (196850844) e ANA PAULA (196933166) — esta ultima sem a folha de
+    # imagem, que e glosa 3230 na certa.
+    #
+    # E leitura falha NAO e mais aprovacao. O comentario antigo dizia que "a
+    # Camada 2 cobre pagina ilegivel": nao cobre — a conferencia pos-rodada
+    # compara por TIPO DE EXAME e aprovou as quatro. Nao confirmar manda a guia
+    # para o retry, onde a idempotencia por _chave_anexo impede duplicar.
+    nomes_depois, _fonte = _confirmar_anexos(contar_fallback, _anexos_nomes(gp))
+    nao_grudaram = _nao_grudaram(nomes_depois, alvo_bn) if _fonte != "nenhuma" else []
+    if nao_grudaram or _fonte == "nenhuma":
         ok = False
 
     return {
