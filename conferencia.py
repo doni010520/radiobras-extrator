@@ -22,16 +22,50 @@ from extrator_odontoprev import (abrir_consultar_gtos, consultar_periodo,
 from solicitacao_utils import canon_exames
 
 
+def conferivel(item) -> bool:
+    """Esta linha da execucao deve ser conferida contra o portal?
+
+    Duas familias entram, por motivos diferentes:
+
+    - `auto`/`justificativa` FATURADAS: o robo diz que anexou, e "o robo diz" nao
+      e prova. Foi para isto que a conferencia nasceu.
+    - `ja_anexada` NAO faturada: a guia tem documento, mas `_falta_no_portal`
+      apontou que ele nao cobre o que ela autoriza. Ate 08/09 estas viravam so
+      mensagem — caso ANA PAULA (196933166), que repetiu "nao ha imagem do exame"
+      em seis rodadas seguidas sem ninguem poder agir, porque a trava
+      anti-duplicacao impede a esteira de escrever em guia que ja tem anexo.
+      `completar.py` sabe fazer isso com seguranca (7 dias, so o exame ausente,
+      `max_antes` da contagem viva); faltava a guia chegar ate ele.
+
+    Fica de fora `ja_anexada` faturada (a documentacao da clinica ja cobre — nao
+    gastar chamada nem risco), `auto` nao faturada (anexacao que falhou volta pela
+    esteira, com o retry) e as pendencias de verdade (sem_laudo, sem_solicitacao,
+    sem_exame): nelas nao ha o que completar, falta o insumo."""
+    cat = (item or {}).get("categoria")
+    fat = bool((item or {}).get("faturado"))
+    if cat in ("auto", "justificativa"):
+        return fat
+    if cat == "ja_anexada":
+        return not fat
+    return False
+
+
 def faturadas_desde(momento):
-    """Guias que o ROBO anexou a partir de `momento` (datetime tz-aware)."""
+    """Guias da rodada que precisam ser conferidas contra o portal.
+
+    O SQL so junta os CANDIDATOS; quem decide e `conferivel`, para a regra ficar
+    em Python e testavel. Antes o filtro morava aqui dentro e so trazia o que o
+    ROBO anexou — por isso a guia travada em `ja_anexada` incompleta nunca chegava
+    na conferencia (caso ANA PAULA)."""
     sql = """select distinct on (i.gto) i.gto, i.paciente, x.dia, x.conta,
-                    coalesce(i.exames_gto,'') eg
+                    coalesce(i.exames_gto,'') eg, i.categoria, i.faturado
              from execucao_itens i join execucoes x on x.id = i.execucao_id
-             where x.criado_em >= :m and i.faturado
-               and i.categoria in ('auto','justificativa')
+             where x.criado_em >= :m
+               and i.categoria in ('auto','justificativa','ja_anexada')
              order by i.gto, x.criado_em desc"""
     with db.engine.connect() as c:
-        return [dict(r) for r in c.execute(text(sql), {"m": momento}).mappings()]
+        linhas = [dict(r) for r in c.execute(text(sql), {"m": momento}).mappings()]
+    return [x for x in linhas if conferivel(x)]
 
 
 def conferir(itens, pw=None, log=None):
