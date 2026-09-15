@@ -31,6 +31,10 @@ from extrator_pacientes_analitico import (
 # ── Constantes ────────────────────────────────────────────────────────────────
 BATCH_SIZE = 10
 POPUP_WAIT_MS = 10000
+# Depois da espera fixa, quanto tempo a mais aguardar as imagens JA PEDIDAS pelo
+# composer terminarem de chegar (poll de 500ms). Estourou com imagem pendente ->
+# captura INCOMPLETA (ver baixar_imagens / caso RONALDO 15/09).
+IMG_PENDENTES_MAX_MS = 20000
 MAX_RETRIES = 2
 FORCE = False
 # Tempo de espera pela abertura do popup reports_doc (event 'page'). O viewer às
@@ -577,13 +581,32 @@ def baixar_imagens(
     """
     captured: list = []  # [(tail, body)]
     pendencias: list = []
+    # CAPTURA COMPLETA OU NADA (15/09, caso RONALDO SOUZA DA PAZ 197268351). Antes o
+    # body() que falhava era engolido e a imagem que nao chegava antes de fechar a
+    # janela simplesmente nao existia: 4 folhas no PRORADIS, 2 anexadas, e a guia
+    # seguia como documentacao completa. Agora conta o que o composer PEDIU contra o
+    # que CHEGOU e foi LIDO; qualquer diferenca = captura incompleta.
+    pedidas: set = set()
+    finalizadas: set = set()
+    falhas: list = []
+
+    def on_req(r):
+        if "viewer/u/image" in r.url:
+            pedidas.add(r.url)
+
+    def on_fail(r):
+        if "viewer/u/image" in r.url:
+            finalizadas.add(r.url)
+            falhas.append(r.url)
 
     def on_resp(r):
         if "viewer/u/image" not in r.url:
             return
+        finalizadas.add(r.url)
         try:
             body = r.body()
         except Exception:
+            falhas.append(r.url)
             return
         if body[:2] == b"\xff\xd8":
             q = dict(re.findall(r"[?&]([^=&]+)=([^&]+)", r.url))
@@ -605,6 +628,8 @@ def baixar_imagens(
         f.submit();
     }"""
 
+    ctx.on("request", on_req)
+    ctx.on("requestfailed", on_fail)
     ctx.on("response", on_resp)
     try:
         # Abrir popup (form POST target=docpop) para disparar o carregamento das
@@ -628,6 +653,12 @@ def baixar_imagens(
             except Exception:
                 pass
             popup.wait_for_timeout(POPUP_WAIT_MS)
+            # Espera por CONDICAO, nao so por relogio: enquanto houver imagem pedida
+            # sem resposta, aguarda mais (teto IMG_PENDENTES_MAX_MS).
+            _esperado = 0
+            while (pedidas - finalizadas) and _esperado < IMG_PENDENTES_MAX_MS:
+                popup.wait_for_timeout(500)
+                _esperado += 500
             try:
                 popup.close()
             except Exception:
@@ -635,6 +666,10 @@ def baixar_imagens(
 
     finally:
         ctx.remove_listener("response", on_resp)
+        ctx.remove_listener("request", on_req)
+        ctx.remove_listener("requestfailed", on_fail)
+    _pendentes = pedidas - finalizadas
+    completa = popup is not None and not falhas and not _pendentes
 
     # Salvar imagens no padrao de entrega: deteccao de logo + dedup perceptual.
     # seen_hashes guarda aHashes (int) das imagens ja salvas no escopo do paciente.
@@ -671,6 +706,8 @@ def baixar_imagens(
     return {
         "qtd": salvos, "arquivos": arquivos, "pendencias": pendencias,
         "next_n": n, "total_capturadas": total_capturadas,
+        "completa": completa, "pedidas": len(pedidas),
+        "falhas": len(falhas), "pendentes": len(_pendentes),
     }
 
 
@@ -1141,6 +1178,8 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
         n = 0
         arquivos: list = []
         img_pendencias: list = []
+        tentativas_incompletas: list = []
+        achou_completa = False
         for d in docs:
             try:
                 img_res = baixar_imagens(
@@ -1151,9 +1190,27 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
                 continue
             n = img_res["next_n"]
             arquivos.extend(img_res["arquivos"])
+            if not img_res.get("completa", True):
+                # Captura PARCIAL nao conta como sucesso (caso RONALDO 15/09): tenta a
+                # proxima linha em vez de parar com metade das folhas.
+                tentativas_incompletas.append(
+                    f"{img_res.get('qtd', 0)} folha(s) salva(s), "
+                    f"{img_res.get('falhas', 0)} falha(s), "
+                    f"{img_res.get('pendentes', 0)} sem resposta")
+                continue
+            achou_completa = achou_completa or img_res["qtd"] > 0
             if img_res["qtd"] > 0:
                 break  # reports_doc retorna todos os grupos -> uma chamada basta
         resultado["imagens"] = {"qtd": n, "arquivos": arquivos}
+        if tentativas_incompletas and not achou_completa:
+            # Nenhuma captura completa: NAO pode seguir para o anexador — faturaria
+            # documentacao pela metade. Texto com "falha técnica" -> db.eh_nosso ->
+            # sai do painel da clinica e entra no retry (regra do dono: nos refazemos).
+            resultado["imagens_incompletas"] = True
+            img_pendencias.append(
+                "falha técnica: as folhas de imagem do PRORADIS não carregaram por "
+                "completo em nenhuma tentativa (" + "; ".join(tentativas_incompletas)
+                + ") — nada foi anexado; o robô refaz no retry")
         # Imagens sao best-effort: capturamos TODAS no padrao de entrega (logo).
         # Ausencia de imagem entregavel e nota, nao pendencia (o laudo e o entregavel
         # obrigatorio). Ex.: panoramica sem lamina gerada ainda.

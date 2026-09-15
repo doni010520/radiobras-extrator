@@ -1251,6 +1251,32 @@ def _token_expirou(status, texto) -> bool:
                           str(texto or ""), re.I))
 
 
+def _bearer_renovado(capturado, token_falho, forcar=None, recapturar=None):
+    """Token novo para repetir a chamada, ou None se nao ha um.
+
+    NUNCA devolve o token que acabou de falhar. `_renovar_bearer` no worker de
+    anexacao devolvia `_bearer["v"]` cru — a captura passiva do ultimo request do
+    navegador. Quando a anexacao roda 20+ min depois do login (comum sob throttle) o
+    navegador nao emitiu request novo, entao essa captura E o token vencido: a
+    "renovacao" devolvia o morto, o retry levava outro 401 e a guia caia em "nao
+    consegui ler quantos anexos a guia ja tem". 31 guias assim em 30 dias — a maior
+    causa isolada de falha nossa no anexador.
+
+    Captura velha -> `forcar()` gera trafego no navegador (que reemite o header) e
+    `recapturar()` le o token de novo. Sem token novo, None: a trava de duplicidade
+    bloqueia, que e o desfecho seguro (o portal nao remove anexo)."""
+    if capturado and capturado != token_falho:
+        return capturado
+    if not forcar or not recapturar:
+        return None
+    try:
+        forcar()
+        novo = recapturar()
+    except Exception:
+        return None
+    return novo if novo and novo != token_falho else None
+
+
 def _anexos_via_api(token, gto, renovar=None):
     """(count, nomes, err) dos anexos pela API /v1/gto/imagens — a MESMA fonte
     AUTORITATIVA que a descoberta usa e confia (lista completa, com nomeArquivo e o
@@ -2126,6 +2152,21 @@ def _build_by_norm(df):
     return by
 
 
+def _status_download(res, nf):
+    """(status, erro) do estagio de download.
+
+    Download com as folhas de imagem INCOMPLETAS vira ERRO — nunca BAIXADO. Caso
+    RONALDO SOUZA DA PAZ (197268351, 15/09): 4 folhas no PRORADIS, 2 capturadas, e
+    como a pasta 'tinha arquivo' a guia foi anexada pela metade. ERRO leva o motivo
+    'falha tecnica nossa' -> categoria erro -> retry, e nada e anexado."""
+    res = res or {}
+    if res.get("imagens_incompletas"):
+        det = next((p for p in (res.get("pendencias") or []) if "falha técnica" in p),
+                   "falha técnica: as folhas de imagem não carregaram por completo")
+        return "ERRO", det
+    return ("BAIXADO" if nf > 0 else "SEM_ARQUIVOS"), None
+
+
 def _baixa_um(pg, ctx, by_norm, g, tmp, data):
     """ESTÁGIO 2 (download only): match + baixa laudo+imagens. Devolve item com
     _pac embutido (p/ o estágio de leitura). NÃO lê solicitação aqui."""
@@ -2233,8 +2274,8 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
     res = _processar_paciente(pg, ctx, pac, wl, tmp, _data_exame)
     pasta = os.path.join(tmp, res["pasta"])
     nf = len(os.listdir(pasta)) if os.path.isdir(pasta) else 0
-    status = "BAIXADO" if nf > 0 else "SEM_ARQUIVOS"
-    return {"gto": g["gto"], "nome": pac["nome"], "status": status,
+    status, _erro_dl = _status_download(res, nf)
+    return {"gto": g["gto"], "nome": pac["nome"], "status": status, "erro": _erro_dl,
             "arquivos": nf, "imgs": res.get("imagens", {}).get("qtd", 0),
             "_pac": pac, "_pasta": pasta, "dt_dl": time.monotonic() - t0,
             # accessions que NÃO vieram do analítico (podem ser exame particular).
@@ -3776,8 +3817,18 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 pass          # captura e um bonus; nunca derruba o worker
 
             def _renovar_bearer():
-                """Token vivo deste worker, ou None (ai o comportamento e o de antes)."""
-                return _bearer["v"]
+                """Token vivo deste worker, ou None (ai o comportamento e o de antes).
+
+                Passa por `_bearer_renovado`: se a captura passiva ainda for o MESMO
+                token que acabou de falhar, recarrega a pagina para a SPA reemitir o
+                Authorization e recaptura. Devolver o token morto nao renova nada —
+                era assim que 31 guias caiam com 'Jwt is expired'."""
+                def _forcar():
+                    pg.reload(wait_until="domcontentloaded")
+                    pg.wait_for_timeout(1500)
+
+                return _bearer_renovado(_bearer["v"], token, forcar=_forcar,
+                                        recapturar=lambda: _bearer["v"])
 
             _ok_lista, _err_lista = _consulta_inicial(pg, data)
             if not _ok_lista:
