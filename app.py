@@ -625,9 +625,12 @@ def _retry_scheduler():
     while not _glosa_stop.is_set():
         try:
             import esteira
+            # MESMA reserva (dia, conta) do /faturar/run e do cron: sem ela o retry
+            # anexou em duplicidade junto com um "Faturar dia" (incidente 16/09/2026).
             res = esteira.processar_retries(
                 gemini_key=os.environ.get("GEMINI_API_KEY"), k_attach=3,
-                log=lambda m: app.logger.info("%s", m))
+                log=lambda m: app.logger.info("%s", m),
+                reservar=_esteira_reservar, liberar=_esteira_liberar)
             if res.get("devidos"):
                 app.logger.info("Retry loop: %s devida(s) em %s grupo(s).",
                                 res.get("devidos"), res.get("grupos"))

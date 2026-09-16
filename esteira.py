@@ -4499,7 +4499,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     return resumo
 
 
-def processar_retries(gemini_key=None, k_attach=3, log=None) -> dict:
+def processar_retries(gemini_key=None, k_attach=3, log=None, reservar=None, liberar=None) -> dict:
     """WORKER do loop de retry (Fase 3): pega os TRANSITÓRIOS devidos (proximo_em
     vencido), re-roda a esteira DIRECIONADA (apenas_gtos) por (dia,conta) — barato,
     não re-processa o dia inteiro nem o externo. O hook em salvar_execucao resolve os
@@ -4525,59 +4525,78 @@ def processar_retries(gemini_key=None, k_attach=3, log=None) -> dict:
                   if any(str(g).startswith("__DIA__") for g in gs))
     _log(f"[retry] {len(devidos)} devida(s) em {len(por)} grupo(s)"
          + (f" — {_n_dias} dia(s) inteiro(s) (aborto)" if _n_dias else ""))
+    # RESERVA (dia, conta) — INCIDENTE 16/09/2026: o retry rodou 14/09 Centro/Lauro junto
+    # com um "Faturar dia" e as duas esteiras anexaram nas mesmas guias (ROSSAN,
+    # ADNA, DANIELA ficaram com tudo em DOBRO; o portal nao remove anexo). O
+    # /faturar/run e o cron ja reservavam; o retry nao. Reserva negada -> pula o grupo
+    # SEM gastar tentativa (volta no proximo ciclo). Concedida -> libera no fim, em
+    # qualquer saida (inclusive os returns de apagao e excecao).
+    pulados = 0
     for (dia, conta), gtos in por.items():
-        # DIA INTEIRO (22/08): quando a execucao ABORTOU, nao ha guia nenhuma pra
-        # dirigir — a fila guarda uma sentinela `__DIA__conta__dia`. Nesse caso roda
-        # o dia todo (apenas_gtos=None); mandar a sentinela como GTO faria a esteira
-        # procurar uma guia que nao existe e nao faturar nada. Se o dia todo vai
-        # rodar, as guias dirigidas do mesmo dia vao junto de graca.
-        dia_inteiro = any(str(g).startswith("__DIA__") for g in gtos)
-        for g in gtos:
-            db.bump_retry(g)   # conta a tentativa ANTES (evita loop se a rodada travar)
+        tag = None
+        if reservar is not None:
+            tag = reservar(dia, conta, f"retry-{conta}-{dia}")
+            if tag is None:
+                pulados += 1
+                _log(f"[retry] {dia} {conta}: outra esteira em andamento — pulado, "
+                     f"sem gastar tentativa")
+                continue
         try:
-            senha = db.get_portal_senha(conta)
-            _logs = []
-            r = rodar_esteira(dia, 3, 3, 5, log=lambda m, _l=_logs: _l.append(m),
-                              gemini_key=gemini_key, k_attach=k_attach, dry_run=False,
-                              conta=conta, senha_portal=senha,
-                              apenas_gtos=(None if dia_inteiro else gtos))
-            # APAGAO? Ninguem faturou e TODA falha tem assinatura global (proxy fora,
-            # login nao passa). Nesse caso a culpa nao e de guia nenhuma: devolve a
-            # tentativa de cada uma, para a varredura e manda UMA mensagem.
-            if db.rodada_foi_apagao(r.get("decisoes") or []):
-                for g in gtos:
-                    db.desfazer_bump(g)
-                _mot = next((str(x.get("motivo") or "")
-                             for x in (r.get("decisoes") or [])
-                             if db.eh_falha_global(x.get("motivo"))), "falha global")
-                db.pausar_retry(minutos=db.PAUSA_PADRAO_MIN, motivo=_mot)
-                _log(f"[retry] APAGAO em {dia} {conta}: {len(gtos)} tentativa(s) "
-                     f"devolvida(s), fila pausada {db.PAUSA_PADRAO_MIN} min")
-                try:
-                    import notificador
-                    notificador.avisar_pausa(_mot, len(gtos), db.PAUSA_PADRAO_MIN,
-                                             dia=dia, conta=conta)
-                except Exception as e:
-                    _log(f"[retry] aviso de pausa falhou: {str(e)[:60]}")
-                return {"devidos": len(devidos), "grupos": len(por), "apagao": True}
+            # DIA INTEIRO (22/08): quando a execucao ABORTOU, nao ha guia nenhuma pra
+            # dirigir — a fila guarda uma sentinela `__DIA__conta__dia`. Nesse caso roda
+            # o dia todo (apenas_gtos=None); mandar a sentinela como GTO faria a esteira
+            # procurar uma guia que nao existe e nao faturar nada. Se o dia todo vai
+            # rodar, as guias dirigidas do mesmo dia vao junto de graca.
+            dia_inteiro = any(str(g).startswith("__DIA__") for g in gtos)
+            for g in gtos:
+                db.bump_retry(g)   # conta a tentativa ANTES (evita loop se a rodada travar)
             try:
-                db.salvar_execucao(r, _logs)   # hook resolve os que faturaram
-            except Exception as e:
-                _log(f"[retry] gravar {dia} {conta}: {str(e)[:60]}")
-        except Exception as e:
-            # a propria rodada explodiu com cara de apagao (proxy/login) -> mesmo
-            # tratamento: a guia nao paga por isso.
-            if db.eh_falha_global(e):
-                for g in gtos:
-                    db.desfazer_bump(g)
-                db.pausar_retry(minutos=db.PAUSA_PADRAO_MIN, motivo=str(e)[:300])
-                _log(f"[retry] APAGAO (excecao) em {dia} {conta}: fila pausada")
+                senha = db.get_portal_senha(conta)
+                _logs = []
+                r = rodar_esteira(dia, 3, 3, 5, log=lambda m, _l=_logs: _l.append(m),
+                                  gemini_key=gemini_key, k_attach=k_attach, dry_run=False,
+                                  conta=conta, senha_portal=senha,
+                                  apenas_gtos=(None if dia_inteiro else gtos))
+                # APAGAO? Ninguem faturou e TODA falha tem assinatura global (proxy fora,
+                # login nao passa). Nesse caso a culpa nao e de guia nenhuma: devolve a
+                # tentativa de cada uma, para a varredura e manda UMA mensagem.
+                if db.rodada_foi_apagao(r.get("decisoes") or []):
+                    for g in gtos:
+                        db.desfazer_bump(g)
+                    _mot = next((str(x.get("motivo") or "")
+                                 for x in (r.get("decisoes") or [])
+                                 if db.eh_falha_global(x.get("motivo"))), "falha global")
+                    db.pausar_retry(minutos=db.PAUSA_PADRAO_MIN, motivo=_mot)
+                    _log(f"[retry] APAGAO em {dia} {conta}: {len(gtos)} tentativa(s) "
+                         f"devolvida(s), fila pausada {db.PAUSA_PADRAO_MIN} min")
+                    try:
+                        import notificador
+                        notificador.avisar_pausa(_mot, len(gtos), db.PAUSA_PADRAO_MIN,
+                                                 dia=dia, conta=conta)
+                    except Exception as e:
+                        _log(f"[retry] aviso de pausa falhou: {str(e)[:60]}")
+                    return {"devidos": len(devidos), "grupos": len(por), "apagao": True}
                 try:
-                    import notificador
-                    notificador.avisar_pausa(str(e)[:300], len(gtos),
-                                             db.PAUSA_PADRAO_MIN, dia=dia, conta=conta)
-                except Exception:
-                    pass
-                return {"devidos": len(devidos), "grupos": len(por), "apagao": True}
-            _log(f"[retry] {dia} {conta}: {type(e).__name__}: {str(e)[:70]}")
-    return {"devidos": len(devidos), "grupos": len(por)}
+                    db.salvar_execucao(r, _logs)   # hook resolve os que faturaram
+                except Exception as e:
+                    _log(f"[retry] gravar {dia} {conta}: {str(e)[:60]}")
+            except Exception as e:
+                # a propria rodada explodiu com cara de apagao (proxy/login) -> mesmo
+                # tratamento: a guia nao paga por isso.
+                if db.eh_falha_global(e):
+                    for g in gtos:
+                        db.desfazer_bump(g)
+                    db.pausar_retry(minutos=db.PAUSA_PADRAO_MIN, motivo=str(e)[:300])
+                    _log(f"[retry] APAGAO (excecao) em {dia} {conta}: fila pausada")
+                    try:
+                        import notificador
+                        notificador.avisar_pausa(str(e)[:300], len(gtos),
+                                                 db.PAUSA_PADRAO_MIN, dia=dia, conta=conta)
+                    except Exception:
+                        pass
+                    return {"devidos": len(devidos), "grupos": len(por), "apagao": True}
+                _log(f"[retry] {dia} {conta}: {type(e).__name__}: {str(e)[:70]}")
+        finally:
+            if tag is not None and liberar is not None:
+                liberar(dia, conta, tag)
+    return {"devidos": len(devidos), "grupos": len(por), "pulados": pulados}
