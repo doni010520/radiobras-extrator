@@ -156,6 +156,39 @@ def _cards_por_nascimento(cards, nasc_guia) -> list:
     return [c for c in (cards or []) if _norm_nasc(c.get("nascimento")) == alvo]
 
 
+def _duplicata_mesma_pessoa(cards):
+    """O primeiro card, se TODOS os cards (2+) forem a MESMA pessoa cadastrada mais
+    de uma vez: nome normalizado IDENTICO e nascimento IDENTICO e nao-vazio. Senao None.
+
+    Caso SAMILLE VIANA VALASQUES (197138342, 09/09): 20209353 e 20209354, mesmo nome,
+    mesmo nascimento — o desempate por nascimento empatava e a guia morria como
+    homonimo por 8 rodadas ate vencer. Escolher um card e seguro porque quem chama
+    une os anexos dos gemeos (`_gemeos_de`, caso IRAMAIA).
+
+    Nome diferente com o mesmo nascimento (gemeos de verdade, nome do meio a mais)
+    continua None: ai sao ou podem ser pessoas diferentes."""
+    cards = [c for c in (cards or []) if c]
+    if len(cards) < 2:
+        return None
+    nasc = {_norm_nasc(c.get("nascimento")) for c in cards}
+    nomes = {_nome_norm_simples(c.get("nome")) for c in cards}
+    if len(nasc) != 1 or "" in nasc or len(nomes) != 1 or "" in nomes:
+        return None
+    return cards[0]
+
+
+def _card_por_nascimento(cards, nasc_guia):
+    """Desempate do homonimo pelo nascimento da guia: o card que bate, se for UM so,
+    ou se os que batem forem a mesma pessoa duplicada. Sem nascimento na guia, ou
+    pessoas diferentes empatadas, None — nao inventa desempate."""
+    if not _norm_nasc(nasc_guia):
+        return None
+    casam = _cards_por_nascimento(cards, nasc_guia)
+    if len(casam) == 1:
+        return casam[0]
+    return _duplicata_mesma_pessoa(casam)
+
+
 def _parse_anexos_view(html: str, cod: str) -> list:
     """HTML do view_attachments -> [{id, filename, url}]. Mesma leitura de
     _abrir_anexos: .attachment-item com data-id/data-filename; a url vem do
@@ -316,7 +349,11 @@ def _card_wl_por_nome_nascimento(cards, nome_guia, nascimento):
     casam = [c for c in uniq.values()
              if _norm_nasc(c.get("nascimento")) == nn
              and _nomes_compat(c.get("nome", ""), nome_guia)]
-    return casam[0] if len(casam) == 1 else None
+    if len(casam) == 1:
+        return casam[0]
+    # Empate so e aceito quando e a MESMA pessoa cadastrada duas vezes (caso SAMILLE);
+    # nomes diferentes com o mesmo nascimento continuam ambiguos.
+    return _duplicata_mesma_pessoa(casam)
 
 
 _CONECTIVOS_BUSCA = {"DE", "DA", "DO", "DAS", "DOS", "E", "D"}
@@ -395,10 +432,12 @@ def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
     # se sobrar UM. Sem nascimento, empate ou nenhum: cai no erro de sempre — NAO
     # inventa desempate. Nascimento vem do /v1/gto/detalhada (OdontoPrev).
     if not href and (n_cards or 0) >= 2 and _norm_nasc(nascimento):
-        casam_nasc = _cards_por_nascimento(_cards_da_busca(page), nascimento)
-        if len(casam_nasc) == 1:
-            href = casam_nasc[0].get("href")
-            cod_efetivo = casam_nasc[0].get("cod") or cod
+        # _card_por_nascimento tambem aceita o EMPATE entre cadastros duplicados da
+        # mesma pessoa (caso SAMILLE); os anexos do outro sao unidos em _gemeos_de.
+        _card = _card_por_nascimento(_cards_da_busca(page), nascimento)
+        if _card:
+            href = _card.get("href")
+            cod_efetivo = _card.get("cod") or cod
             cod_s = str(cod_efetivo or "").strip()
 
     # SITE-2 (WL + nascimento): o cod 'WL' nunca casa por codigo. Se a busca (cheia
