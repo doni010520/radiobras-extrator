@@ -74,7 +74,7 @@ def test_parse_dos_cards_da_busca_http():
     html = """<div class="res">
       <div data-pat-id="20017877"><b>Perfil</b> VALDEMIR DOS SANTOS PEREIRA
         <span>Prontuário: 20017877</span> <span>Nascimento: 17/12/1976</span></div>
-      <div data-pat-id="20205689">Perfil VALDEMIR DOS ANJOS PEREIRA
+      <div data-pat-id="20205689"><a class="prontuario">Prontuário</a> VALDEMIR DOS ANJOS PEREIRA
         Prontuário: 20205689 Nascimento: 17/12/1976 Senha</div></div>"""
     cards = ax._cards_busca_http(html)
     assert {c["cod"]: (c["nome"], c["nascimento"]) for c in cards} == {

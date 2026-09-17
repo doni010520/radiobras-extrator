@@ -417,7 +417,10 @@ def _cards_busca_http(html: str) -> list:
         if not cod:
             continue
         tx = re.sub(r"\s+", " ", el.get_text(" ")).strip()
-        nome = re.sub(r"^Perfil\s+", "", re.split(r"\s*Prontu[aá]rio:", tx)[0]).strip()
+        # rotulos dos botoes antes do nome ("Perfil", "Prontuário") saem; o real e
+        # "Prontuário MARIA DA GLORIA ..." — sem isto o 1o token nunca casava
+        nome = re.split(r"\s*Prontu[aá]rio:", tx)[0]
+        nome = re.sub(r"^(?:(?:Perfil|Prontu[aá]rio)\s+)+", "", nome, flags=re.I).strip()
         m = re.search(r"Nascimento:\s*([0-9/]+)", tx)
         out.append({"cod": cod, "nome": nome, "nascimento": m.group(1) if m else ""})
     return out
