@@ -40,6 +40,8 @@ from extrator_odontoprev import (
 )
 from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
 from extrair_anexos_dia import anexos_do_paciente, anexos_por_cpf, resolver_anexos
+from extrair_anexos_dia import (buscar_cards_por_nascimento, _candidatos_por_nascimento,
+                                _escolher_candidato_com_exame)
 from gto_utils import (is_gto_pdf, extrair_observacao, gto_e_desta_guia,
                        _BOILER_49)
 from solicitacao_utils import (gto_exames, canon_exames, gto_dispensa_laudo,
@@ -2167,6 +2169,50 @@ def _status_download(res, nf):
     return ("BAIXADO" if nf > 0 else "SEM_ARQUIVOS"), None
 
 
+def _achar_por_nascimento(pg, g, data, janela, buscar_cards=None, listar_wl=None):
+    """Ultima tentativa antes do SEM_MATCH: paciente cadastrado com OUTRA GRAFIA.
+
+    Busca no PRORADIS os cadastros com o NASCIMENTO da guia, fica com os de nome
+    compativel (_nome_casa_por_nascimento, validada em sombra 16/09) e procura exame
+    de cada um no dia da guia e na janela. So segue se UMA pessoa tiver exame e num
+    UNICO dia. Caso VALDEMIR DOS ANJOS PEREIRA (guia) x DOS SANTOS PEREIRA (cadastro):
+    dois cadastros com o mesmo nascimento, so um com exame.
+
+    Devolve {"status": OK|AMBIGUO|NENHUM, nome, dia, wl, accs}."""
+    buscar_cards = buscar_cards or buscar_cards_por_nascimento
+    listar_wl = listar_wl or listar_worklist_por_pacientes
+    nada = {"status": "NENHUM"}
+    if not g.get("nascimento"):
+        return nada
+    cands = _candidatos_por_nascimento(buscar_cards(pg, g["nascimento"]),
+                                       g["nome"], g["nascimento"])
+    if not cands:
+        return nada
+    dias = [data] + [d for d in (_data_mais(data, o) for o in _offsets_janela(janela or 0)) if d]
+    exames, linhas = {}, {}
+    for nome in dict.fromkeys(c["nome"] for c in cands):   # cadastro duplicado: 1 busca
+        alvo = normaliza_nome(nome)
+        por_dia = {}
+        for d in dias:
+            try:
+                wl = listar_wl(pg, d, [nome])
+            except Exception:
+                continue
+            # SO o nome exato do cadastro: a busca da worklist encurta o nome sozinha
+            casam = [w for w in wl if w.get("accession")
+                     and normaliza_nome(w.get("nome", "")) == alvo]
+            if casam:
+                por_dia[d] = sorted({w["accession"] for w in casam})
+                linhas[(nome, d)] = casam
+        exames[nome] = por_dia
+    escolha = _escolher_candidato_com_exame(exames)
+    if not escolha:
+        return {"status": "AMBIGUO"} if sum(1 for v in exames.values() if v) else nada
+    nome, dia, accs = escolha
+    return {"status": "OK", "nome": nome, "dia": dia, "accs": accs,
+            "wl": linhas[(nome, dia)]}
+
+
 def _baixa_um(pg, ctx, by_norm, g, tmp, data):
     """ESTÁGIO 2 (download only): match + baixa laudo+imagens. Devolve item com
     _pac embutido (p/ o estágio de leitura). NÃO lê solicitação aqui."""
@@ -2263,10 +2309,22 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
                 return {"gto": g["gto"], "nome": g["nome"], "status": "AMBIGUO",
                         "dias_com_exame": _dias_janela,
                         "dt_dl": time.monotonic() - t0}
+        _nome_pac = g["nome"]
+        if not accs:
+            # OUTRA GRAFIA no cadastro: tenta pela data de nascimento antes de desistir
+            _nasc = _achar_por_nascimento(pg, g, data, _JANELA_DIAS)
+            if _nasc["status"] == "AMBIGUO":
+                return {"gto": g["gto"], "nome": g["nome"], "status": "AMBIGUO",
+                        "dt_dl": time.monotonic() - t0}
+            if _nasc["status"] == "OK":
+                wl, accs, _nome_pac = _nasc["wl"], _nasc["accs"], _nasc["nome"]
+                g["nome_cadastro_proradis"] = _nome_pac
+                if _nasc["dia"] != data:
+                    g["data_exame_real"] = _nasc["dia"]
         if not accs:
             return {"gto": g["gto"], "nome": g["nome"], "status": "SEM_MATCH",
                     "janela": _JANELA_DIAS, "dt_dl": time.monotonic() - t0}
-        pac = {"nome": g["nome"], "cod_pac": "WL" + accs[0], "accessions": accs}
+        pac = {"nome": _nome_pac, "cod_pac": "WL" + accs[0], "accessions": accs}
     # NASCIMENTO da guia (OdontoPrev /v1/gto/detalhada) -> desempata homonimo no
     # matching (anexos_do_paciente). Vale nos dois caminhos (analitico e fallback).
     pac["nascimento"] = g.get("nascimento", "")

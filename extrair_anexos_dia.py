@@ -359,6 +359,125 @@ def _card_wl_por_nome_nascimento(cards, nome_guia, nascimento):
 _CONECTIVOS_BUSCA = {"DE", "DA", "DO", "DAS", "DOS", "E", "D"}
 
 
+# ── Busca pela DATA DE NASCIMENTO (paciente com outra grafia no PRORADIS) ────────
+# Casos 13-16/09: VALDEMIR DOS ANJOS x DOS SANTOS PEREIRA, EDNILDES RODRIGUES SOUZA x
+# EDINILDS RODRIGUES SOARES, MARIA DA GLORIA JESUS x DE JESUS MENDES. A busca por nome
+# nunca acha; search_patient_list indexa o nascimento (DD/MM/AAAA). Regra validada em
+# modo sombra (16/09): 141 guias chegaram no MESMO cadastro, zero em outra pessoa.
+
+def _tokens_nome(s) -> list:
+    s = _nome_norm_simples(s)
+    return [t for t in re.split(r"[^A-Z]+", s) if t and t not in _CONECTIVOS_BUSCA]
+
+
+def _lev(a: str, b: str) -> int:
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _mesma_grafia(a: str, b: str) -> bool:
+    """Igual ou erro de digitacao: 1 letra em partes de 5+, 2 letras em partes de 7+."""
+    if a == b:
+        return True
+    m = min(len(a), len(b))
+    d = _lev(a, b)
+    return (m >= 5 and d <= 1) or (m >= 7 and d <= 2)
+
+
+def _nome_casa_por_nascimento(nome_guia, nome_card) -> bool:
+    """Nome parecido NO TODO — so usada junto com nascimento IDENTICO.
+
+    Primeiro nome igual (ou grafia), >= 2 partes casando e no maximo UMA parte
+    divergente de cada lado. Conectivos e acentos ignorados. 'So o primeiro nome'
+    nao basta (regra do dono); prenome diferente e outra pessoa (irmaos/gemeos)."""
+    g, c = _tokens_nome(nome_guia), _tokens_nome(nome_card)
+    if len(g) < 2 or len(c) < 2 or not _mesma_grafia(g[0], c[0]):
+        return False
+    usados, casados = set(), 0
+    for t in g:
+        k = next((i for i, u in enumerate(c) if i not in usados and _mesma_grafia(t, u)), None)
+        if k is not None:
+            usados.add(k)
+            casados += 1
+    return casados >= 2 and (len(g) - casados) <= 1 and (len(c) - len(usados)) <= 1
+
+
+def _cards_busca_http(html: str) -> list:
+    """HTML de search_patient_list -> [{cod, nome, nascimento}]."""
+    out = []
+    for el in BeautifulSoup(html or "", "lxml").select("[data-pat-id]"):
+        cod = (el.get("data-pat-id") or "").strip()
+        if not cod:
+            continue
+        tx = re.sub(r"\s+", " ", el.get_text(" ")).strip()
+        nome = re.sub(r"^Perfil\s+", "", re.split(r"\s*Prontu[aá]rio:", tx)[0]).strip()
+        m = re.search(r"Nascimento:\s*([0-9/]+)", tx)
+        out.append({"cod": cod, "nome": nome, "nascimento": m.group(1) if m else ""})
+    return out
+
+
+def buscar_cards_por_nascimento(page, nascimento) -> list:
+    """Cards do PRORADIS com a data de nascimento (usa a sessao do navegador).
+    Falha de rede degrada p/ [] — a guia cai na pendencia de sempre."""
+    nn = _norm_nasc(nascimento)
+    if not nn:
+        return []
+    try:
+        r = page.request.get(f"{BASE}/patients/search_patient_list/search_patient_list/",
+                             params={"limit": 60, "input": nn}, timeout=30000,
+                             headers={"X-Requested-With": "XMLHttpRequest"})
+        if r.status != 200:
+            return []
+        return _cards_busca_http(r.text())
+    except Exception:
+        return []
+
+
+def _candidatos_por_nascimento(cards, nome_guia, nasc_guia) -> list:
+    """Cards com nascimento IGUAL ao da guia e nome compativel. Guia sem nascimento
+    -> nenhum (sem a chave forte nao ha busca ampla)."""
+    nn = _norm_nasc(nasc_guia)
+    if not nn:
+        return []
+    uniq = {}
+    for c in cards or []:
+        if (_norm_nasc(c.get("nascimento")) == nn
+                and _nome_casa_por_nascimento(nome_guia, c.get("nome", ""))):
+            uniq.setdefault(c.get("cod") or c.get("href"), c)
+    return list(uniq.values())
+
+
+def _candidato_unico(cands):
+    """UM candidato, ou varios cadastros da MESMA pessoa (mesmo nome). Senao None."""
+    cands = [c for c in (cands or []) if c]
+    if len(cands) == 1:
+        return cands[0]
+    if cands and len({" ".join(_tokens_nome(c.get("nome"))) for c in cands}) == 1:
+        return cands[0]
+    return None
+
+
+def _escolher_candidato_com_exame(exames_por_nome: dict):
+    """{nome_cadastro: {dia: [accessions]}} -> (nome, dia, accessions) se UMA so pessoa
+    tem exame e num UNICO dia. Duas pessoas, dois dias ou ninguem -> None (nao chuta)."""
+    com_exame = {n: d for n, d in (exames_por_nome or {}).items() if any(d.values())}
+    if len(com_exame) != 1:
+        return None
+    nome, dias = next(iter(com_exame.items()))
+    dias = {k: v for k, v in dias.items() if v}
+    if len(dias) != 1:
+        return None
+    dia, accs = next(iter(dias.items()))
+    return nome, dia, list(accs)
+
+
 def _termos_de_busca(nome_limpo: str, cod_s: str, tem_nascimento: bool = False) -> list:
     """Termos que a busca do #patient_search vai tentar, do mais especifico ao mais amplo.
 
@@ -390,6 +509,37 @@ def _termos_de_busca(nome_limpo: str, cod_s: str, tem_nascimento: bool = False) 
     return termos
 
 
+def _buscar_na_tela(page, termo, cod) -> dict:
+    """Digita `termo` no #patient_search e devolve _record_href(cod): {href, n}."""
+    page.goto(f"{BASE}/patients", wait_until="networkidle")
+    page.wait_for_timeout(1200)
+    campo = page.query_selector("#patient_search")
+    campo.click(); campo.fill(termo)
+    page.wait_for_timeout(2200)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(2500)
+    return _record_href(page, cod) or {}
+
+
+def _prontuario_por_nascimento(page, nome_guia, nascimento, buscar_cards=None, buscar_tela=None):
+    """(href, cod) do cadastro achado pela data de nascimento, ou None.
+
+    Exige candidato UNICO (ou a mesma pessoa cadastrada 2x). O href sai da tela de
+    busca pelo NOME DO CADASTRO, casado pelo CODIGO do prontuario — nunca 'o primeiro
+    card'."""
+    buscar_cards = buscar_cards or buscar_cards_por_nascimento
+    buscar_tela = buscar_tela or _buscar_na_tela
+    cand = _candidato_unico(_candidatos_por_nascimento(
+        buscar_cards(page, nascimento), nome_guia, nascimento))
+    if not cand or not cand.get("cod"):
+        return None
+    try:
+        href = (buscar_tela(page, cand["nome"], cand["cod"]) or {}).get("href")
+    except Exception:
+        return None
+    return (href, cand["cod"]) if href else None
+
+
 def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
     """Busca o paciente, abre prontuario + anexos, retorna [{id, filename, url}].
 
@@ -412,14 +562,7 @@ def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
     # chamados 'MARIA DE FATIMA LAMOEDO'; os 24 eram de 'MARIA DE'.
     n_cards_cheio = None
     for busca in tentativas:
-        page.goto(f"{BASE}/patients", wait_until="networkidle")
-        page.wait_for_timeout(1200)
-        campo = page.query_selector("#patient_search")
-        campo.click(); campo.fill(busca)
-        page.wait_for_timeout(2200)
-        page.keyboard.press("Enter")
-        page.wait_for_timeout(2500)
-        r = _record_href(page, cod) or {}
+        r = _buscar_na_tela(page, busca, cod)
         href, n_cards = r.get("href"), r.get("n", 0)
         if n_cards_cheio is None:
             n_cards_cheio = n_cards          # a 1a tentativa e sempre o nome cheio
@@ -453,10 +596,18 @@ def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
             cod_efetivo = _cd.get("cod") or cod
             cod_s = str(cod_efetivo or "").strip()
 
+    _n = n_cards_cheio if n_cards_cheio is not None else n_cards
+    # OUTRA GRAFIA NO CADASTRO (casos EDNILDES/MARIA DA GLORIA, 13-16/09): o nome nao
+    # achou NINGUEM. Procura pela data de nascimento com a regra de nome validada.
+    if not href and _n == 0 and _norm_nasc(nascimento):
+        _p = _prontuario_por_nascimento(page, nome_limpo, nascimento)
+        if _p:
+            href, cod_efetivo = _p
+            cod_s = str(cod_efetivo or "").strip()
+
     if not href:
         # O motivo tem que dizer a VERDADE: 0 cards e 2+ cards sao problemas
         # diferentes e mandam a operadora procurar coisas diferentes.
-        _n = n_cards_cheio if n_cards_cheio is not None else n_cards
         if _n == 0:
             raise ProntuarioAmbiguo(
                 f"paciente {nome_limpo!r} não encontrado no cadastro do PRORADIS — "
