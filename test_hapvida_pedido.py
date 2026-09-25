@@ -125,3 +125,34 @@ def test_decisao_anexa_entregavel_e_pedido_e_repassa_motivo(tmp_path):
           "pedido_motivo": "O pedido é antigo.", "pedido_responsavel": "Clínica"}
     d = hd.decidir_guia(guia, False, pac, pr)
     assert not d.faturavel and d.motivo == "O pedido é antigo."
+
+
+def _pdf_guia(p):
+    import fitz
+    d = fitz.open()
+    pg = d.new_page()
+    pg.insert_text((50, 72), "GUIA DE TRATAMENTO ODONTOLOGICO - GTO  Profissional Solicitante RADIOBRAS")
+    pg.insert_text((50, 100), "LEVANTAMENTO RADIOGRAFICO")
+    d.save(p)
+
+
+def test_gto_do_hapvida_no_prontuario_nunca_vira_pedido(tmp_path):
+    """Caso ROBERTA (22/09): o prontuário guarda a GTO com o exame escrito e a
+    RADIOBRAS como solicitante. Ela sai da lista antes do Gemini."""
+    guia = tmp_path / "00_ROBERTA LIMA.pdf"
+    _pdf_guia(str(guia))
+    gem = GemFake([_leitura(0, texto="levantamento radiografico")])
+    p = hpe.escolher_pedido(gem, [str(guia)], NOME, LEV, "22/09/2026", str(tmp_path / "o"))
+    assert not p.ok and gem.chamadas == 0
+
+
+def test_gto_escaneada_lida_como_pedido_e_descartada(tmp_path):
+    p = _rodar(tmp_path, [_leitura(0, exames_lidos=[], texto="GUIA DE TRATAMENTO ODONTOLOGICO levantamento radiografico")], LEV)
+    assert not p.ok
+
+
+def test_pedido_vencido_de_levantamento_diz_que_esta_vencido(tmp_path):
+    """Caso JESSICA (22/09): o único pedido é de 16/05/2025. O motivo é a data."""
+    p = _rodar(tmp_path, [_leitura(0, data_solicitacao="16/05/2025", exames_lidos=["periapical"],
+                                   texto="periapical")], LEV, dia="22/09/2026")
+    assert not p.ok and "vencida" in p.motivo and "16/05/2025" in p.motivo

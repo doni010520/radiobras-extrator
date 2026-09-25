@@ -164,6 +164,9 @@ class FonteProradis:
                                 os.path.join(pasta, "_pedido"))
         res["pedido"] = p.arquivos or None
         res["pedido_data"] = p.data
+        self.log(f"[hapvida/pedido] {res.get('nome')}: "
+                 + (f"{[os.path.basename(a) for a in p.arquivos]} de {p.data or 'data ?'}"
+                    if p.ok else f"sem pedido válido — {p.motivo}"))
         if p.motivo:
             res["pedido_motivo"], res["pedido_responsavel"] = p.motivo, p.responsavel
 

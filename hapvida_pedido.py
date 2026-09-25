@@ -95,6 +95,30 @@ _MOTIVOS = {
 }
 
 
+_GUIA_TXT = re.compile(r"GUIA\s+DE\s+TRATAMENTO\s+ODONTOL|PROFISSIONAL\s+SOLICITANTE|"
+                       r"NUMERO\s+GUIA\s+PRINCIPAL|REGISTRO\s+ANS", re.I)
+
+
+def eh_guia(mime: str, blob: bytes) -> bool:
+    """A GTO do próprio Hapvida arquivada no prontuário NÃO é pedido do dentista:
+    ela traz o exame escrito e 'Profissional Solicitante: RADIOBRAS'. Sai da lista
+    antes do Gemini (PDF tem texto) — o RedeUna também separa a GTO dos candidatos."""
+    if mime != "application/pdf":
+        return False
+    try:
+        import fitz
+        with fitz.open(stream=blob, filetype="pdf") as d:
+            txt = " ".join(d.load_page(i).get_text() for i in range(min(d.page_count, 2)))
+    except Exception:
+        return False
+    return bool(_GUIA_TXT.search(_sem_acento(txt)))
+
+
+def leitura_de_guia(a: dict) -> bool:
+    """Mesma trava para GTO escaneada (imagem): a transcrição denuncia o formulário."""
+    return bool(_GUIA_TXT.search(_sem_acento(str(a.get("texto") or ""))))
+
+
 def _data_da_leitura(a) -> _dt.date | None:
     return _parse_br_date(a.get("data_solicitacao")) or _data_upload(a.get("arquivo_origem"))
 
@@ -132,6 +156,8 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
         except OSError:
             continue
         mime, b2 = preparar_anexo(os.path.basename(p), blob)
+        if mime and eh_guia(mime, b2):
+            continue
         if mime:
             cands.append((os.path.basename(p), mime, b2, None))
         else:
@@ -152,6 +178,9 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
     leituras = (data.get("anexos") if isinstance(data, dict) else data) or []
 
     def _escolher():
+        for x in leituras:                        # GTO escaneada nunca é pedido
+            if isinstance(x, dict) and x.get("tipo") == "solicitacao" and leitura_de_guia(x):
+                x["tipo"] = "outro"
         _marcar_origem(leituras, cands)
         marcar_levantamento(leituras)
         det = {}
@@ -182,16 +211,16 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
     idxs = det.get("idxs") or [idx]
     escolhidas = [x for x in leituras if isinstance(x, dict) and x.get("idx") in idxs]
 
-    if "81000294" in {str(c) for c in codigos} and not any(diz_levantamento(x) for x in escolhidas):
-        return Pedido(motivo=("A guia é de levantamento radiográfico, mas o pedido do dentista pede só "
-                              "periapical. FALTA no pedido: levantamento."), responsavel="Clínica", detalhe=det)
-
     d_ped = _data_da_leitura(a)
     d_exame = _parse_br_date(dia) or hoje or _dt.date.today()
     if d_ped and (d_exame - d_ped).days > max_dias():
         return Pedido(motivo=(f"Pedido do dentista com data vencida: o mais recente é de {d_ped:%d/%m/%Y}, "
                               f"mais de {max_dias()} dias antes do exame. Falta o pedido atual."),
                       responsavel="Clínica", data=f"{d_ped:%d/%m/%Y}", detalhe=det)
+
+    if "81000294" in {str(c) for c in codigos} and not any(diz_levantamento(x) for x in escolhidas):
+        return Pedido(motivo=("A guia é de levantamento radiográfico, mas o pedido do dentista não pede "
+                              "levantamento. FALTA no pedido: levantamento."), responsavel="Clínica", detalhe=det)
 
     os.makedirs(destino, exist_ok=True)
     try:
