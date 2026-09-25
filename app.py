@@ -1759,6 +1759,38 @@ def pendencias_reabrir(pid):
     return redirect(url_for("pendencias_page", status=request.args.get("status", "abertas")))
 
 
+def _confirmar_hapvida(gto, conta, dia):
+    """✔ Confirmei numa pendência Hapvida: re-roda só esta guia pelo fluxo Hapvida
+    (a esteira do OdontoPrev não conhece a conta). Sem HAPVIDA_ANEXAR_REAL=1 é
+    simulação — a confirmação fica gravada e vale quando o envio real ligar."""
+    import hapvida_app
+    import hapvida_fluxo as hf
+    jid = uuid.uuid4().hex[:8]
+    if not _esteira_reservar(dia, conta, jid):
+        return jsonify({"ok": True, "confirmado": True,
+                        "msg": "Confirmado ✔ — já há uma execução em andamento nessa "
+                               "unidade; vale na próxima."})
+
+    def _go():
+        try:
+            logs = []
+            r = hapvida_app.rodar_dia(dia, conta.split(":", 1)[1], dry_run=False,
+                                      log=logs.append, apenas_guias=[gto])
+            db.salvar_execucao(r, logs)
+        except Exception as e:
+            app.logger.error("Confirmar hapvida %s: %s", gto, str(e)[:120])
+        finally:
+            _esteira_liberar(dia, conta, jid)
+
+    threading.Thread(target=_go, daemon=True).start()
+    real = hf.envio_real_liberado(False)
+    return jsonify({"ok": True, "confirmado": True,
+                    "msg": ("Confirmado ✔ — faturando esta guia em segundo plano (atualize em ~2 min)."
+                            if real else
+                            "Confirmado ✔ — gravado. O Hapvida ainda está em simulação: a guia é "
+                            "reprocessada agora e anexa quando o envio real for ligado.")})
+
+
 @app.route("/pendencias/<int:pid>/confirmar", methods=["POST"])
 def pendencias_confirmar(pid):
     """SINAL VERDE HUMANO (feature 13/08): o usuário abriu a pendência (ilegível /
@@ -1775,6 +1807,8 @@ def pendencias_confirmar(pid):
         gto, conta, dia = str(p.gto), p.conta, p.dia
     quem = session.get("username") or session.get("nome") or "?"
     db.confirmar_nome(gto, conta, dia, quem)   # o sinal verde fica gravado
+    if db.eh_hapvida(conta):
+        return _confirmar_hapvida(gto, conta, dia)
     # dispara faturamento REAL só desta guia (background). Se o portal não estiver
     # acessível agora (proxy), a confirmação fica gravada e o próximo processamento
     # fatura. Idempotente: se já anexado, não duplica.

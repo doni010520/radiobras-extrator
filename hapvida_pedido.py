@@ -89,8 +89,12 @@ class Pedido:
 
 _MOTIVOS = {
     "LEITURA_VAZIA": ("Os anexos do prontuário não puderam ser lidos.", "Nós"),
-    "PACIENTE_INCOMPATIVEL": ("Há pedido de exame no prontuário, mas nenhum documento do prontuário está "
-                              "no nome deste paciente (legível). Conferir se o pedido é dele.", "Conferência"),
+    # casos ADRIANA/ADAILZA (23/09): o papel é da paciente, o nome é que veio
+    # rabiscado/abreviado. "nome abreviado" leva à Conferência + botão Confirmei;
+    # "documento de outro paciente" mandaria cobrar a clínica à toa.
+    "PACIENTE_INCOMPATIVEL": ("Há pedido de exame no prontuário, mas o nome lido no pedido está ABREVIADO "
+                              "ou ilegível: o robô não confirma que é deste paciente. Conferir e, se "
+                              "for dele, clicar em Confirmei.", "Conferência"),
     "OUTRO_DENTISTA": ("O pedido encontrado foi assinado por OUTRO dentista.", "Conferência"),
 }
 
@@ -139,8 +143,10 @@ def _para_portal(fn: str, mime: str, blob: bytes, destino: str, i: int) -> str:
 
 
 def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: str,
-                    hoje: _dt.date | None = None) -> Pedido:
-    """arquivos: anexos do prontuário, do MAIS RECENTE para o mais antigo."""
+                    hoje: _dt.date | None = None, nome_confirmado: bool = False) -> Pedido:
+    """arquivos: anexos do prontuário, do MAIS RECENTE para o mais antigo.
+    nome_confirmado: SINAL VERDE HUMANO (✔ Confirmei na pendência) — libera a trava
+    do nome, como no RedeUna. Tipo, cobertura lida, GTO e data continuam valendo."""
     alvo = alvo_pedido(codigos)
     if not alvo:
         return Pedido()                                   # guia não exige pedido
@@ -185,7 +191,7 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
         marcar_levantamento(leituras)
         det = {}
         r = _escolher_solicitacao(leituras, nome, alvo, len(cands), "", det, "",
-                                  prontuario_confirmado=False, nome_confirmado=False)
+                                  prontuario_confirmado=False, nome_confirmado=nome_confirmado)
         return r + (det,)
 
     idx, a, motivo, det = _escolher()
@@ -213,6 +219,10 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
 
     d_ped = _data_da_leitura(a)
     d_exame = _parse_br_date(dia) or hoje or _dt.date.today()
+    if d_ped and d_ped > d_exame + _dt.timedelta(days=1):
+        # data DEPOIS do exame = mal lida (GLEYDE: "setembro" manuscrito lido como
+        # dezembro). Não serve para provar que o pedido é recente: vale o upload.
+        d_ped = _data_upload(a.get("arquivo_origem"))
     if d_ped and (d_exame - d_ped).days > max_dias():
         return Pedido(motivo=(f"Pedido do dentista com data vencida: o mais recente é de {d_ped:%d/%m/%Y}, "
                               f"mais de {max_dias()} dias antes do exame. Falta o pedido atual."),

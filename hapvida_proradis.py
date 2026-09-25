@@ -106,6 +106,7 @@ class FonteProradis:
         self.tmp = tempfile.mkdtemp(prefix="_hap_pr_")
         self._by_norm = {}          # dia -> índice do analítico (1 consulta por dia)
         self._gem = None
+        self._confirmados = None    # gtos com ✔ Confirmei (carregado 1x por rodada)
 
     def __enter__(self):
         email, senha = get_credentials()
@@ -140,7 +141,7 @@ class FonteProradis:
         if (precisa and res.get("encontrado") and not res.get("ambiguo")
                 and not res.get("misto") and res.get("entregaveis")):
             res["pedido_candidatos"] = self._anexos_prontuario(item, nascimento)
-            self._pedido(res, nome, codigos, dia, item["_pasta"])
+            self._pedido(res, nome, codigos, dia, item["_pasta"], gto)
         return res
 
     def _gemini(self):
@@ -152,7 +153,16 @@ class FonteProradis:
             self._gem = genai.Client(api_key=key)
         return self._gem
 
-    def _pedido(self, res: dict, nome: str, codigos, dia: str, pasta: str) -> None:
+    def _confirmado(self, gto: str) -> bool:
+        if self._confirmados is None:
+            try:
+                import db
+                self._confirmados = db.confirmacoes_set()
+            except Exception:
+                self._confirmados = set()
+        return bool(gto) and str(gto) in self._confirmados
+
+    def _pedido(self, res: dict, nome: str, codigos, dia: str, pasta: str, gto: str = "") -> None:
         gem = self._gemini()
         if gem is None:
             res["pedido_motivo"] = "Leitura indisponível: GEMINI_API_KEY não configurada, o pedido do dentista não foi lido."
@@ -161,7 +171,8 @@ class FonteProradis:
         # ERRO do Gemini (crédito/cota/rede) sobe: o fluxo marca 'erro' (falha nossa)
         p = hpe.escolher_pedido(gem, res["pedido_candidatos"], res.get("nome") or nome,
                                 codigos, res.get("data_exame_real") or dia,
-                                os.path.join(pasta, "_pedido"))
+                                os.path.join(pasta, "_pedido"),
+                                nome_confirmado=self._confirmado(gto))
         res["pedido"] = p.arquivos or None
         res["pedido_data"] = p.data
         self.log(f"[hapvida/pedido] {res.get('nome')}: "

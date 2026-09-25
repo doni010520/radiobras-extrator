@@ -107,3 +107,30 @@ def test_faturar_run_desvia_hapvida_e_recusa_unidade_desconhecida(monkeypatch):
 def test_rotulo_da_unidade_hapvida():
     import notificador
     assert notificador._nome_unidade("hapvida:centro") == "Hapvida Odonto — Centro"
+
+
+def test_confirmei_numa_pendencia_hapvida_roda_o_fluxo_hapvida(monkeypatch):
+    app_mod, cli = _cliente(monkeypatch)
+    monkeypatch.setitem(app_mod.app.before_request_funcs, None, [])
+
+    class P:
+        gto, conta, dia = "28547649", "hapvida:centro", "23/09/2026"
+
+    class Sess:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def get(self, model, pid): return P()
+    monkeypatch.setattr(db, "SessionLocal", lambda: Sess())
+    monkeypatch.setattr(db, "confirmar_nome", lambda *a: True)
+    monkeypatch.setattr(db, "salvar_execucao", lambda r, l: 1)
+    chamou = []
+    monkeypatch.setattr(hapvida_app, "rodar_dia", lambda d, u, **kw: chamou.append((d, u, kw["apenas_guias"])) or {})
+    import esteira
+    monkeypatch.setattr(esteira, "rodar_esteira", lambda *a, **k: (_ for _ in ()).throw(AssertionError("esteira!")))
+    monkeypatch.setattr(app_mod.threading, "Thread", lambda target, daemon: type(
+        "T", (), {"start": lambda self: target()})())
+    with cli.session_transaction() as s:
+        s["uid"] = 1
+    r = cli.post("/pendencias/7/confirmar")
+    assert r.status_code == 200 and r.get_json()["confirmado"]
+    assert chamou == [("23/09/2026", "centro", ["28547649"])]

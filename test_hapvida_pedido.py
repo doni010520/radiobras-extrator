@@ -156,3 +156,26 @@ def test_pedido_vencido_de_levantamento_diz_que_esta_vencido(tmp_path):
     p = _rodar(tmp_path, [_leitura(0, data_solicitacao="16/05/2025", exames_lidos=["periapical"],
                                    texto="periapical")], LEV, dia="22/09/2026")
     assert not p.ok and "vencida" in p.motivo and "16/05/2025" in p.motivo
+
+
+def test_nome_abreviado_vai_para_conferencia_e_confirmei_libera(tmp_path):
+    """ADRIANA/ADAILZA (23/09): o papel é da paciente, o nome veio abreviado."""
+    lts = [_leitura(0, paciente_lido="ADR")]
+    p = _rodar(tmp_path, lts)
+    assert not p.ok and "ABREVIADO" in p.motivo and p.responsavel == "Conferência"
+    (tmp_path / "c").mkdir()
+    arqs = _imgs(tmp_path / "c", 1)
+    p = hpe.escolher_pedido(GemFake(lts), arqs, NOME, PAN, "23/09/2026", str(tmp_path / "o2"),
+                            nome_confirmado=True)
+    assert p.ok
+
+
+def test_data_futura_mal_lida_usa_a_data_do_upload(tmp_path):
+    """GLEYDE (23/09): 'setembro' lido como dezembro -> 15/12/2026. Vale o upload (20/09)."""
+    p = _rodar(tmp_path, [_leitura(0, data_solicitacao="15/12/2026")])
+    assert p.ok and p.data == "20/09/2026"
+    # upload antigo + data futura mal lida: não passa como recente
+    arqs = _imgs(tmp_path, 1, "NAME20250101_101010.png")
+    p = hpe.escolher_pedido(GemFake([_leitura(0, data_solicitacao="15/12/2026")]), arqs, NOME, PAN,
+                            "23/09/2026", str(tmp_path / "o3"))
+    assert not p.ok and "vencida" in p.motivo
