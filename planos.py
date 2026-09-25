@@ -22,7 +22,8 @@ PLANOS = [
     # ── Demais planos (automação a construir; aparecem como 'Não configurado') ──
     {"slug": "amil", "nome": "Amil Dental", "ativo": False, "handler": None},
     {"slug": "atemde", "nome": "Atemde", "ativo": False, "handler": None},
-    {"slug": "hapvida_odonto", "nome": "Hapvida Odonto", "ativo": False, "handler": None},
+    {"slug": "hapvida_odonto", "nome": "Hapvida Odonto", "ativo": False,
+     "handler": "hapvida", "portal": "www.hapvida.com.br/pls/podontow"},  # em construção
     {"slug": "hapvida_saude", "nome": "Hapvida Saúde", "ativo": False, "handler": None},
     {"slug": "idental", "nome": "Idental", "ativo": False, "handler": None},
     {"slug": "metlife", "nome": "Metlife", "ativo": False, "handler": None},

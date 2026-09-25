@@ -1024,6 +1024,18 @@ def _faturar_cron_body():
                 pass
         finally:
             _esteira_liberar(dia, conta, _tag)
+    if os.environ.get("HAPVIDA_CRON") == "1":
+        # Hapvida: fluxo próprio, depois do OdontoPrev (não disputa o proxy/Chromium).
+        # Sem HAPVIDA_ANEXAR_REAL=1 é modo sombra: grava simulação, não anexa.
+        try:
+            import hapvida_app
+            _h = hapvida_app.rodada_cron(hoje, reservar=_esteira_reservar,
+                                         liberar=_esteira_liberar, salvar=db.salvar_execucao,
+                                         salvar_falha=db.salvar_execucao_falha,
+                                         logger=app.logger)
+            app.logger.info("Cron hapvida concluído: %s", _h)
+        except Exception as e:
+            app.logger.error("Cron hapvida FALHOU: %s", str(e)[:150])
     db.cron_marcar_faturar(target)
     app.logger.info("Cron faturar concluído: %s execução(ões), %s faturada(s).", ndias, nfat)
     try:
@@ -2037,6 +2049,8 @@ def _plano_nome(conta):
     if not conta:
         return "—"
     p = PLANOS.get(conta)
+    if not p and db.eh_hapvida(conta):
+        return f"Hapvida Odonto — {conta.split(':', 1)[1].title()}"
     return p["label"] if p else conta
 
 
@@ -2184,13 +2198,68 @@ def relatorios_execucao_json(eid: int):
 @app.route("/faturar")
 def faturar_page():
     planos = [{"codigo": c, "label": p["label"]} for c, p in PLANOS.items()]
+    planos += _opcoes_hapvida()
     return render_template("faturar.html", planos=planos, planos_inativos=PLANOS_INATIVOS)
+
+
+def _opcoes_hapvida() -> list:
+    """Unidades Hapvida (HAPVIDA_CONTAS) no seletor. Sem HAPVIDA_ANEXAR_REAL=1 o
+    rótulo avisa que é simulação — o botão continua o mesmo."""
+    try:
+        import hapvida_app
+        import hapvida_fluxo as hf
+        sim = "" if hf.envio_real_liberado(False) else " — simulação"
+        return [{"codigo": hf.conta_hapvida(u), "label": f"Hapvida Odonto — {u.title()}{sim}"}
+                for u in hapvida_app.unidades()]
+    except Exception:
+        return []
 
 
 # Execuções em andamento por (dia, conta) — impede 2 esteiras na MESMA GTO, que
 # sobem 2x14 Chromium e já derrubaram o container (crash-loop).
 _esteira_ativas = {}
 _esteira_ativas_lock = threading.Lock()
+
+
+def _faturar_run_hapvida(data, conta, dry):
+    """Mesmo contrato do /faturar/run (job em _esteira_jobs), então /faturar/status e
+    /faturar/log servem sem mudança. Anexo real ainda exige HAPVIDA_ANEXAR_REAL=1."""
+    import time as _time
+    import hapvida_app
+    unidade = conta.split(":", 1)[1]
+    if unidade not in hapvida_app.unidades():
+        return jsonify({"error": "unidade Hapvida não configurada"}), 400
+    jid = uuid.uuid4().hex[:8]
+    if not _esteira_reservar(data, conta, jid):
+        return jsonify({"error": "Já existe uma execução em andamento para esse "
+                                 "dia e unidade."}), 409
+    job = {"log": [], "done": False, "resumo": None, "error": None, "review_dir": None,
+           "execucao_id": None, "t0": _time.monotonic(), "dia": data, "conta": conta,
+           "dry": dry}
+    _purgar_jobs(_esteira_jobs)
+    _esteira_jobs[jid] = job
+
+    def _go():
+        try:
+            job["resumo"] = hapvida_app.rodar_dia(data, unidade, dry_run=dry,
+                                                  log=job["log"].append)
+            try:
+                job["execucao_id"] = db.salvar_execucao(job["resumo"], job["log"])
+            except Exception as e:
+                job["log"].append(f"(falha ao salvar: {str(e)[:80]})")
+        except Exception as e:
+            job["error"] = str(e)
+            job["log"].append(f"ERRO: {str(e)[:140]}")
+            try:
+                job["execucao_id"] = db.salvar_execucao_falha(data, conta, dry, str(e), job["log"])
+            except Exception as e2:
+                job["log"].append(f"(falha ao registrar o erro: {str(e2)[:80]})")
+        finally:
+            job["done"] = True
+            _esteira_liberar(data, conta, jid)
+
+    threading.Thread(target=_go, daemon=True).start()
+    return jsonify({"job": jid})
 
 
 @app.route("/faturar/run", methods=["POST"])
@@ -2202,10 +2271,12 @@ def faturar_run():
     if not data:
         return jsonify({"error": "informe a data"}), 400
     plano = (request.form.get("plano") or "").strip()
-    if plano and plano not in PLANOS:
-        return jsonify({"error": "plano inválido"}), 400
     # padrão = DRY. Faturamento real exige dry=0 explícito.
     dry = (request.form.get("dry") or "1") != "0"
+    if db.eh_hapvida(plano):
+        return _faturar_run_hapvida(data, plano, dry)
+    if plano and plano not in PLANOS:
+        return jsonify({"error": "plano inválido"}), 400
 
     jid = uuid.uuid4().hex[:8]
     if not _esteira_reservar(data, plano, jid):
@@ -3101,6 +3172,11 @@ def fechar_route():
     if not planos_mod.plano_ativo(plano):
         return jsonify({"error": f"O plano '{planos_mod.nome_plano(plano)}' ainda não "
                                  "está configurado para automação."}), 400
+    # /fechar só sabe rodar o fluxo do OdontoPrev (fechar_dia). Plano com outro handler
+    # (ex.: Hapvida) NUNCA pode cair aqui — rodaria o robô do OdontoPrev para ele.
+    if (planos_mod.get_plano(plano) or {}).get("handler") != "fechar_dia":
+        return jsonify({"error": f"O plano '{planos_mod.nome_plano(plano)}' tem fluxo "
+                                 "próprio e não roda pelo fechamento do OdontoPrev."}), 400
 
     job_id = str(uuid.uuid4())[:8]
     _purgar_jobs(_jobs, _jobs_lock)

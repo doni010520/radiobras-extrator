@@ -81,6 +81,8 @@ def _nome_unidade(conta) -> str:
     try:
         from config import PLANOS
         p = PLANOS.get(str(conta))
+        if not p and str(conta).startswith("hapvida:"):
+            return f"Hapvida Odonto — {str(conta).split(':', 1)[1].title()}"
         return (p or {}).get("label") or str(conta)
     except Exception:
         return str(conta)

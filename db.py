@@ -622,10 +622,17 @@ def _parse_ddmmaaaa(v):
         return None
 
 
-def dias_com_pendencia_aberta(prazo_dias: int = None) -> list:
+def eh_hapvida(conta) -> bool:
+    """Conta do plano Hapvida ('hapvida:<unidade>'). Tem fluxo, cron e retry próprios:
+    nada do OdontoPrev (esteira, desfecho, conferência) pode rodar para ela."""
+    return str(conta or "").startswith("hapvida:")
+
+
+def dias_com_pendencia_aberta(prazo_dias: int = None, hapvida: bool = False) -> list:
     """(conta, dia) distintos que têm pendência aberta. Se prazo_dias, filtra só os
     dias dentro da janela (dia do exame >= hoje - prazo_dias) — fora do prazo não
-    adianta reprocessar."""
+    adianta reprocessar. hapvida=False (padrão) devolve só OdontoPrev — o cron da
+    esteira chamaria rodar_esteira para uma conta Hapvida; True, só Hapvida."""
     from datetime import date, timedelta
     try:
         with SessionLocal() as s:
@@ -638,6 +645,8 @@ def dias_com_pendencia_aberta(prazo_dias: int = None) -> list:
     out = set()
     for conta, dia in rows:
         if not conta or not dia:
+            continue
+        if eh_hapvida(conta) != hapvida:
             continue
         if limite:
             d = _parse_ddmmaaaa(dia)
@@ -832,6 +841,10 @@ def registrar_retry_dia(conta, dia, erro) -> bool:
     """Enfileira o DIA INTEIRO pra nova tentativa. Retorna True se e a PRIMEIRA vez
     (pro aviso nao repetir a cada re-tentativa que aborta de novo)."""
     from datetime import timedelta
+    if eh_hapvida(conta):
+        # o retry do dia re-roda a ESTEIRA (OdontoPrev); o Hapvida reprocessa os dias
+        # recentes no próprio cron. E a chave __DIA__hapvida:... estoura String(30).
+        return False
     _g = _gto_dia(conta, dia)
     with SessionLocal() as s:
         it = (s.query(RetryFila)
@@ -1765,7 +1778,10 @@ def retries_devidos(limite: int = 50) -> list:
     with SessionLocal() as s:
         q = (s.query(RetryFila)
              .filter(RetryFila.resolvido == False,                      # noqa: E712
-                     RetryFila.proximo_em <= _now())
+                     RetryFila.proximo_em <= _now(),
+                     # O worker re-roda a esteira do OdontoPrev. Conta 'hapvida:*'
+                     # não pode entrar aqui — tem fluxo e retry próprios.
+                     ~RetryFila.conta.like("hapvida:%"))
              .order_by(RetryFila.proximo_em.asc()).limit(limite))
         return [{"gto": r.gto, "conta": r.conta, "dia": r.dia,
                  "tentativas": r.tentativas} for r in q.all()]
@@ -2448,13 +2464,14 @@ def gtos_por_plano_periodo(de_iso: str, ate_iso: str) -> dict:
         # pipeline novo (Faturar dia) -> tudo no plano 'odontoprev' (RedeUna)
         _dias_vistos = set()
         for e in _melhores_execucoes_periodo(s, de_iso, ate_iso):
-            a = out.setdefault("odontoprev", {"anexadas": 0, "sem_laudo": 0, "erros": 0,
-                                              "simulacao": 0, "revisao": 0, "total": 0,
-                                              "dias": 0})
+            _slug = "hapvida_odonto" if eh_hapvida(e.conta) else "odontoprev"
+            a = out.setdefault(_slug, {"anexadas": 0, "sem_laudo": 0, "erros": 0,
+                                       "simulacao": 0, "revisao": 0, "total": 0,
+                                       "dias": 0})
             # conta DIAS distintos: agora há uma execução por unidade, e somar cada
             # uma triplicaria o rótulo "N dia(s)".
-            if e.dia not in _dias_vistos:
-                _dias_vistos.add(e.dia)
+            if (_slug, e.dia) not in _dias_vistos:
+                _dias_vistos.add((_slug, e.dia))
                 a["dias"] += 1
             for it in e.itens:
                 a["total"] += 1
@@ -2748,7 +2765,7 @@ def guias_faturadas_por_nos(desde_dia: str = None) -> list:
         vistos, out = set(), []
         for it, ex in q.all():
             g = str(it.gto)
-            if g in vistos:
+            if g in vistos or eh_hapvida(ex.conta):   # desfecho é do portal OdontoPrev
                 continue
             vistos.add(g)
             out.append({"gto": g, "paciente": it.paciente, "conta": ex.conta,

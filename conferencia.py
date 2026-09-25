@@ -62,6 +62,7 @@ def faturadas_desde(momento):
              from execucao_itens i join execucoes x on x.id = i.execucao_id
              where x.criado_em >= :m
                and i.categoria in ('auto','justificativa','ja_anexada')
+               and x.conta not like 'hapvida:%'
              order by i.gto, x.criado_em desc"""
     with db.engine.connect() as c:
         linhas = [dict(r) for r in c.execute(text(sql), {"m": momento}).mappings()]
