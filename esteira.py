@@ -234,6 +234,20 @@ def _get_json_com_retry(sess, url, timeout=25, tentativas=6, _sleep=time.sleep):
     return None, falha
 
 
+def _exames_ja_anexada(sess, gto, _sleep=time.sleep):
+    """Exames canonicos que a guia autoriza, pelos eventos do portal. None = nao foi
+    possivel consultar (diferente de lista vazia). Antes era um GET unico sem retry
+    que engolia o erro e devolvia [] — e [] fazia a guia JA_ANEXADA passar como
+    completa sem conferencia nenhuma."""
+    js, _falha = _get_json_com_retry(
+        sess, f"{_ODO_API}/v1/gto/eventos/ficha?numeroFicha={gto}",
+        timeout=20, tentativas=4, _sleep=_sleep)
+    if js is None:
+        return None
+    return sorted(canon_exames(" ".join(
+        str(e.get("descricao") or "") for e in (js or []) if isinstance(e, dict))))
+
+
 _GERACAO = {"JUNIOR", "JR", "FILHO", "NETO", "SOBRINHO", "SEGUNDO",
             "TERCEIRO", "NETA", "FILHA"}
 
@@ -3571,22 +3585,16 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 # relatorio saia vazia justamente nas FATURADAS — "nenhum" em 27 de 27
                 # no dia 24/07 — e a operadora nao tinha como conferir o que foi
                 # faturado. E um GET a mais numa etapa que ja e so HTTP.
-                _ex_ja = []
-                try:
-                    _rj = sess.get(f"{_ODO_API}/v1/gto/eventos/ficha"
-                                   f"?numeroFicha={g['gto']}", timeout=20)
-                    if _rj.status_code == 200:
-                        _ex_ja = sorted(canon_exames(" ".join(
-                            str(e.get("descricao") or "") for e in (_rj.json() or [])
-                            if isinstance(e, dict))))
-                except Exception:
-                    _ex_ja = []
+                _ex_ja = _exames_ja_anexada(sess, g["gto"])
                 _t(f"[DESC] GTO {g['gto']}: {cnt} anexos, {len(_docs)} documento(s) "
-                   f"alem da GTO -> ja tem documentacao, pula | anexos: {sorted(nomes)}")
+                   f"alem da GTO -> ja tem documentacao, pula | anexos: {sorted(nomes)}"
+                   + (" | NAO consegui consultar o que a guia autoriza"
+                      if _ex_ja is None else ""))
                 with _lock:
                     resultados.append({"gto": g["gto"], "nome": g["nome"],
                                        "status": "JA_ANEXADO",
-                                       "exames_portal": _ex_ja,
+                                       "exames_portal": _ex_ja or [],
+                                       "exames_indisponiveis": _ex_ja is None,
                                        "n_anexos": cnt, "n_docs": len(_docs),
                                        "anexos_no_portal": sorted(nomes)})
                 return
@@ -3603,9 +3611,12 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             # devolve o CATÁLOGO inteiro de procedimentos — usá-lo daria todos os
             # exames para qualquer guia.
             try:
-                re_ = sess.get(f"{_ODO_API}/v1/gto/eventos/ficha?numeroFicha={g['gto']}",
-                               timeout=20)
-                evs = re_.json() if re_.status_code == 200 else []
+                evs, _f_ev = _get_json_com_retry(
+                    sess, f"{_ODO_API}/v1/gto/eventos/ficha?numeroFicha={g['gto']}",
+                    timeout=20, tentativas=4)
+                evs = evs or []
+                if _f_ev:
+                    _t(f"[DESC] GTO {g['gto']}: eventos da ficha indisponiveis ({_f_ev})")
                 g["eventos_portal"] = [str(e.get("descricao") or "") for e in evs
                                        if isinstance(e, dict)]
                 # DIAGNOSTICO (classe F, LUIZ/tomografia 28/07): hoje lemos SO o
@@ -3976,9 +3987,12 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     # periapical e os unicos laudos eram de panoramica e
                     # telerradiografia, de uma documentacao do MESMO dia (acessao
                     # 40336804). Era (a) — mas so deu para saber lendo o log.
-                    _ex_guia = lista_amigavel(_dec_it.get("gto_exames")
-                                              or item.get("exames_gto") or [])
-                    _ex_fora = lista_amigavel(exames_fora or [])
+                    # lista_amigavel([]) devolve a PALAVRA "nenhum", nunca vazio: o
+                    # reserva '(exames ilegíveis)' nunca entrava e a pendencia dizia
+                    # "A guia pede nenhum." (caso MARIANA, 197519554, 18/09).
+                    _ex_guia_l = _dec_it.get("gto_exames") or item.get("exames_gto") or []
+                    _ex_guia = lista_amigavel(_ex_guia_l) if _ex_guia_l else ""
+                    _ex_fora = lista_amigavel(exames_fora) if exames_fora else ""
                     if _dec_it.get("dispensa_laudo"):
                         # guia de MODELO/FOTOGRAFIA: nao falta laudo (ela dispensa) —
                         # falta a FOTO do modelo, que e o entregavel dela. Falar em
@@ -4313,6 +4327,24 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                       "JA_ANEXADO", "NAO_VERIFICADA", "ERRO")]
 
     for r in baixados + _outros_res:
+        if r.get("status") == "JA_ANEXADO" and r.get("exames_indisponiveis"):
+            # Sem saber o que a guia autoriza, `_falta_no_portal` devolvia "" e a
+            # guia saia "faturada OK" sem conferir nada (TATH 196792009 e ADRIANA
+            # 196809496, 03/09: a mesma guia tinha exames na rodada anterior). Mesma
+            # postura do NAO_VERIFICADA: falha nossa, reprocessar.
+            decisoes.append({
+                "gto": r["gto"], "paciente": r["nome"], "categoria": "erro",
+                "anexado": None, "laudo_imgs": [], "solicitacao": None,
+                "anexar_solic": False, "justificativa": None, "gto_exames": [],
+                "candidatos": [], "solic_idx": None,
+                "gemini": {"motivo": (
+                    "NAO FOI CONFERIDA: a guia ja tem documento anexado, mas o sistema "
+                    "nao conseguiu consultar no portal o que ela autoriza, entao nao da "
+                    "para dizer se a documentacao esta completa. Falha técnica nossa, "
+                    "nao da clinica. O QUE FAZER: reprocessar o dia.")},
+                "erro": "eventos da guia indisponiveis no portal",
+            })
+            continue
         if r.get("status") == "JA_ANEXADO":
             _an = r.get("anexos_no_portal") or []
             # n_anexos e a CONTAGEM real da API — len(_an) e um SET de nomes e
