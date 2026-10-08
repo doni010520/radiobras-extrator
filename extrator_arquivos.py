@@ -273,36 +273,53 @@ def _get_relatorio_analitico(page, convenios: list, segmentos: list, data: str):
     Navega para admin_reports, lê tokens por-sessão, faz POST e retorna DataFrame.
     """
     import time as _time
-    page.goto(f"{BASE}/admin_reports", wait_until="networkidle")
-    _time.sleep(2)
 
-    # Selecionar patients_detailed_report via JS (select usa Chosen/hidden)
-    page.evaluate("""(function(){
-        var s=document.querySelector('select[name="r1"]');
-        if(!s) return;
-        s.value='patients_detailed_report';
-        s.dispatchEvent(new Event('change',{bubbles:true}));
-        if(window.$) $(s).trigger('change');
-    })()""")
-    page.wait_for_load_state("networkidle")
-    _time.sleep(4)
+    # FILTRO DE CONVENIO E OBRIGATORIO (execs 1108, 1218, 1495, 1585): quando a
+    # lista de convenios da tela nao carregava, resolve_tokens devolvia [] e o
+    # relatorio era pedido com insurance="" — TODOS os convenios (ate 241 pacientes
+    # no lugar de 12-24). O filtro de exame particular parte do principio de que o
+    # analitico ja vem filtrado. Lista incompleta -> recarrega; persistindo, falha
+    # tecnica: a rodada aborta (retry + aviso) e NADA e pedido sem filtro.
+    ins_toks, seg_map, conv_map = [], {}, {}
+    for _tent in range(3):
+        page.goto(f"{BASE}/admin_reports", wait_until="networkidle")
+        _time.sleep(2)
 
-    # Ler tokens de convênio e segmento
-    conv_map = {}
-    for opt in page.query_selector_all('select[name="insurance"] option'):
-        txt = opt.inner_text().strip()
-        val = opt.get_attribute("value") or ""
-        if txt and val:
-            conv_map[txt] = val
+        # Selecionar patients_detailed_report via JS (select usa Chosen/hidden)
+        page.evaluate("""(function(){
+            var s=document.querySelector('select[name="r1"]');
+            if(!s) return;
+            s.value='patients_detailed_report';
+            s.dispatchEvent(new Event('change',{bubbles:true}));
+            if(window.$) $(s).trigger('change');
+        })()""")
+        page.wait_for_load_state("networkidle")
+        _time.sleep(4)
 
-    seg_map = {}
-    for opt in page.query_selector_all('select[name="segments"] option'):
-        txt = opt.inner_text().strip()
-        val = opt.get_attribute("value") or ""
-        if txt and val:
-            seg_map[txt] = val
+        # Ler tokens de convênio e segmento
+        conv_map = {}
+        for opt in page.query_selector_all('select[name="insurance"] option'):
+            txt = opt.inner_text().strip()
+            val = opt.get_attribute("value") or ""
+            if txt and val:
+                conv_map[txt] = val
 
-    ins_toks = resolve_tokens(convenios, conv_map, "convenio")
+        seg_map = {}
+        for opt in page.query_selector_all('select[name="segments"] option'):
+            txt = opt.inner_text().strip()
+            val = opt.get_attribute("value") or ""
+            if txt and val:
+                seg_map[txt] = val
+
+        ins_toks = resolve_tokens(convenios, conv_map, "convenio")
+        if not convenios or len(ins_toks) == len(convenios):
+            break
+        _time.sleep(5)
+    if convenios and len(ins_toks) != len(convenios):
+        raise RuntimeError(
+            f"falha técnica: a lista de convênios do PRORADIS não carregou por "
+            f"completo ({len(ins_toks)} de {len(convenios)} convênio(s) após 3 "
+            f"tentativas). O relatório do dia NÃO foi pedido sem o filtro de convênio.")
     # SEGMENTO vazio/None = NAO restringir (usa todos). O convenio ja identifica a
     # unidade ("REDE UNNA - CAMACARI", "REDE UNNA - CENTRO", ...), entao filtrar
     # tambem por segmento e redundante — e em Camacari era ATIVAMENTE NOCIVO: os
