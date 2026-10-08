@@ -78,3 +78,87 @@ def test_espaco_duplo_ja_vem_colapsado():
 def test_ordem_do_mais_especifico_para_o_mais_amplo():
     t = _termos_de_busca("ANA PAULA SOUZA COSTA", cod_s="1")
     assert t == ["ANA PAULA SOUZA COSTA", "ANA PAULA SOUZA", "ANA PAULA"]
+
+
+# ── busca pelo NUMERO do prontuario (caso EMILI SANTOS DA SILVA, 197446404, 17/09) ──
+# O cadastro existe (prontuario 20210405 = 'Cod. Pac' do analitico), mas a busca por
+# nome nunca o devolve. Pelo numero, a tela traz o card dela e so ele.
+def _fake_busca(monkeypatch, cards):
+    import extrair_anexos_dia as ead
+    termos = []
+    monkeypatch.setattr(ead, "_buscar_na_tela", lambda page, t, c: termos.append(t) or {})
+    monkeypatch.setattr(ead, "_cards_da_busca", lambda page: cards)
+    return ead, termos
+
+
+def test_codigo_exato_abre_o_prontuario(monkeypatch):
+    ead, termos = _fake_busca(monkeypatch, [{"cod": "20210405", "href": "h-emili",
+                                             "nome": "EMILI SANTOS DA SILVA"}])
+    assert ead._buscar_por_codigo(None, "20210405") == "h-emili"
+    assert termos == ["20210405"]
+
+
+def test_card_unico_com_outro_numero_nao_e_aceito(monkeypatch):
+    """O numero pode casar telefone/CPF de outra pessoa: card unico NAO basta."""
+    ead, _ = _fake_busca(monkeypatch, [{"cod": "20999999", "href": "h-outra",
+                                        "nome": "OUTRA PESSOA"}])
+    assert ead._buscar_por_codigo(None, "20210405") is None
+
+
+def test_numero_que_contem_o_codigo_nao_e_aceito(monkeypatch):
+    ead, _ = _fake_busca(monkeypatch, [{"cod": "202104051", "href": "h-x", "nome": "X"}])
+    assert ead._buscar_por_codigo(None, "20210405") is None
+
+
+def test_codigo_sintetico_ou_vazio_nem_busca(monkeypatch):
+    ead, termos = _fake_busca(monkeypatch, [])
+    assert ead._buscar_por_codigo(None, "WL40352185") is None
+    assert ead._buscar_por_codigo(None, "") is None
+    assert termos == []
+
+
+# ── campo de busca que nao carregou (caso LUIZ HENRIQUE, 197689615, 23/09) ──
+class _PaginaSemCampo:
+    def __init__(self, aparece_na=99):
+        self.n = 0
+        self.aparece_na = aparece_na
+
+    def goto(self, *a, **k):
+        self.n += 1
+
+    def wait_for_timeout(self, ms):
+        pass
+
+    def wait_for_selector(self, *a, **k):
+        if self.n < self.aparece_na:
+            raise TimeoutError("nao apareceu")
+
+    def query_selector(self, sel):
+        return _Campo() if self.n >= self.aparece_na else None
+
+
+class _Campo:
+    def click(self):
+        pass
+
+    def fill(self, t):
+        pass
+
+
+def test_campo_que_nunca_carrega_vira_falha_tecnica_e_nao_nonetype():
+    import pytest
+    import extrair_anexos_dia as ead
+    with pytest.raises(RuntimeError, match="falha técnica"):
+        ead._buscar_na_tela(_PaginaSemCampo(), "FULANO", "1")
+
+
+def test_campo_que_carrega_na_segunda_tentativa_segue(monkeypatch):
+    import extrair_anexos_dia as ead
+    monkeypatch.setattr(ead, "_record_href", lambda page, cod: {"href": "x", "n": 1})
+
+    class _Kb:
+        def press(self, k):
+            pass
+    p = _PaginaSemCampo(aparece_na=2)
+    p.keyboard = _Kb()
+    assert ead._buscar_na_tela(p, "FULANO", "1") == {"href": "x", "n": 1}

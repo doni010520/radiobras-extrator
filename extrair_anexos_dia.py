@@ -512,11 +512,51 @@ def _termos_de_busca(nome_limpo: str, cod_s: str, tem_nascimento: bool = False) 
     return termos
 
 
+def _buscar_por_codigo(page, cod: str):
+    """Href do prontuario buscando pelo NUMERO do prontuario. None se nao achar.
+
+    Caso EMILI SANTOS DA SILVA (197446404, 17/09): o cadastro existe (prontuario
+    20210405, o mesmo 'Cod. Pac' do analitico), mas a busca por nome nunca o devolve
+    ('EMILI SANTOS DA SILVA' acha 0, 'EMILI SANTOS' acha duas OUTRAS Emilis). Quatro
+    rodadas disseram "nao encontrado no cadastro" e a operadora anexou a mao. Pelo
+    numero a tela devolve o card dela, e so ele.
+
+    Trava propria: aceita SO o card cujo 'Prontuario:' e EXATAMENTE `cod`. Nada do
+    aceite de card unico do _record_href: um numero pode casar telefone/CPF de outra
+    pessoa e trazer um card so, o errado."""
+    cod = str(cod or "").strip()
+    if not cod.isdigit():
+        return None
+    _buscar_na_tela(page, cod, cod)
+    for c in _cards_da_busca(page) or []:
+        if str(c.get("cod") or "").strip() == cod and c.get("href"):
+            return c["href"]
+    return None
+
+
 def _buscar_na_tela(page, termo, cod) -> dict:
     """Digita `termo` no #patient_search e devolve _record_href(cod): {href, n}."""
-    page.goto(f"{BASE}/patients", wait_until="networkidle")
-    page.wait_for_timeout(1200)
-    campo = page.query_selector("#patient_search")
+    # Tela lenta (caso LUIZ HENRIQUE, 197689615, 23/09): o campo ainda nao existia,
+    # query_selector devolvia None e a guia morria com "'NoneType' object has no
+    # attribute 'click'". Espera o campo e recarrega; se nao vier, falha tecnica
+    # NOSSA com nome (vai pro retry), nunca um AttributeError sem sentido.
+    campo = None
+    for _tent in range(3):
+        try:
+            page.goto(f"{BASE}/patients", wait_until="networkidle")
+        except Exception:
+            pass
+        try:
+            page.wait_for_selector("#patient_search", timeout=15000)
+        except Exception:
+            pass
+        page.wait_for_timeout(1200)
+        campo = page.query_selector("#patient_search")
+        if campo is not None:
+            break
+    if campo is None:
+        raise RuntimeError("falha técnica: o campo de busca de pacientes do PRORADIS "
+                           "não carregou")
     campo.click(); campo.fill(termo)
     page.wait_for_timeout(2200)
     page.keyboard.press("Enter")
@@ -571,6 +611,15 @@ def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
             n_cards_cheio = n_cards          # a 1a tentativa e sempre o nome cheio
         if href:
             break
+
+    # PELO NUMERO DO PRONTUARIO (caso EMILI, 17/09): o nome nao resolveu, mas o
+    # analitico deu o codigo REAL do paciente. So entra depois da busca por nome, que
+    # continua sendo a que acha prontuario DUPLICADO (gemeos) no caminho normal.
+    if not href and cod_s.isdigit():
+        try:
+            href = _buscar_por_codigo(page, cod_s)
+        except Exception:
+            href = None
 
     # DESEMPATE POR NASCIMENTO (caso FILIPE: dois "Felipe Silva dos Santos") — SO
     # quando a busca por nome ficou AMBIGUA (2+ cards, nenhum resolvido por codigo)
