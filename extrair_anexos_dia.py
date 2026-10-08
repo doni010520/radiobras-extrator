@@ -421,6 +421,21 @@ def _nome_casa_por_nascimento(nome_guia, nome_card) -> bool:
     divergente de cada lado. Conectivos e acentos ignorados. 'So o primeiro nome'
     nao basta (regra do dono); prenome diferente e outra pessoa (irmaos/gemeos)."""
     g, c = _tokens_nome(nome_guia), _tokens_nome(nome_card)
+    if _casa_tokens(g, c):
+        return True
+    # NOME GRUDADO (PAULOCESAR PIRES DOS SANTOS 197331244 x cadastro PAULO CESAR, 15/09):
+    # tenta juntando UM par de partes vizinhas, de um lado ou do outro. As travas sao
+    # as mesmas (1o nome igual, >= 2 partes, 1 divergente), e o nascimento identico
+    # continua exigido por quem chama.
+    for a, b in ((g, c), (c, g)):
+        for i in range(len(b) - 1):
+            junto = b[:i] + [b[i] + b[i + 1]] + b[i + 2:]
+            if (_casa_tokens(a, junto) if b is c else _casa_tokens(junto, a)):
+                return True
+    return False
+
+
+def _casa_tokens(g, c) -> bool:
     if len(g) < 2 or len(c) < 2 or not _mesma_grafia(g[0], c[0]):
         return False
     usados, casados = set(), 0

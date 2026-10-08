@@ -197,3 +197,16 @@ def test_esteira_candidato_sem_exame_na_janela_nao_fatura():
     g = {"nome": "EDNILDES RODRIGUES SOUZA", "nascimento": "1982-11-16"}
     r = _achar_por_nascimento(None, g, "11/08/2026", 2, buscar, listar)
     assert r["status"] == "NENHUM"
+
+
+# ── nome GRUDADO (PAULOCESAR PIRES DOS SANTOS 197331244, 15/09) ─────────────────
+def test_nome_grudado_casa_com_o_cadastro_separado():
+    from extrair_anexos_dia import _nome_casa_por_nascimento as f
+    assert f("PAULOCESAR PIRES DOS SANTOS", "PAULO CESAR PIRES DOS SANTOS")
+    assert f("PAULO CESAR PIRES DOS SANTOS", "PAULOCESAR PIRES DOS SANTOS")
+
+
+def test_juntar_partes_nao_libera_irmao_nem_outro_sobrenome():
+    from extrair_anexos_dia import _nome_casa_por_nascimento as f
+    assert not f("PAULOCESAR PIRES DOS SANTOS", "PAULO ROBERTO PIRES DOS SANTOS")
+    assert not f("PAULOCESAR PIRES", "PAULO CESAR LIMA")
