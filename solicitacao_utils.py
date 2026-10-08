@@ -52,7 +52,12 @@ _CANON = [
     # telerradiografia, que e justamente a ancora que separa completa de
     # controle — e a guia virava "pedido nao cobre". Caso AMANDA QUEIROZ, 30/07.
     # `ricket` como prefixo cobre RICKETTS/RICKETES/RICKETS (analise cefalometrica).
+    # "Radiografia de perfil (da face)" / "Rx perfil" = telerradiografia lateral
+    # (JOAO VICTOR MARTINS SIMAO 197151270 e DAIANE 197130946, 09/09: pedidos
+    # impressos recusados). Exige radiografia/rx ANTES de "perfil" para "foto de
+    # perfil" continuar so fotografia.
     (r"telerr|telerad|tele.?radio|tele\s*(?:de\s*)?perfil"
+     r"|(?:radiograf\w*|\brx\b|raio.?-?x)\s*(?:lateral\s*)?(?:de\s*|do\s*)?perfil"
      r"|cefalom|ricket|\bceph\b", "telerradiografia"),
     # "documenta..." + as ABREVIACOES DO PORTAL OdontoPrev, colhidas do catalogo
     # /v1/gto/eventos em 26/07: "Doc Orto Basica/Compl/Espec./Contro", "DocOrtoComp

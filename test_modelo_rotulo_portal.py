@@ -50,3 +50,16 @@ def test_portal_vazio_ou_desconhecido_nao_dispensa():
     assert _portal_dispensa_laudo([]) is False
     assert _portal_dispensa_laudo(None) is False
     assert _portal_dispensa_laudo(["Procedimento X"]) is False
+
+
+# ── "radiografia de perfil" e telerradiografia (JOAO VICTOR 197151270, DAIANE
+# 197130946, 09/09: pedidos impressos e legiveis recusados) ──────────────────────
+def test_radiografia_de_perfil_e_telerradiografia():
+    assert "telerradiografia" in canon_exames("radiografia de perfil da face")
+    assert "telerradiografia" in canon_exames("Rx perfil")
+    assert "telerradiografia" in canon_exames("Raio-X de perfil")
+
+
+def test_foto_de_perfil_continua_so_fotografia():
+    assert canon_exames("foto de perfil") == {"fotografia"}
+    assert canon_exames("fotografia perfil direito") == {"fotografia"}

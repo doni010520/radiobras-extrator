@@ -2478,6 +2478,11 @@ def _parse_br_date(s):
         d, m, y = int(p[0]), int(p[1]), int(p[2])
         if y < 100:
             y += 2000
+        # Ano impossivel = leitura errada, nao data. "24/09/126" virava date(126,...)
+        # e a janela de pareamento falhava por 1900 anos (JOAO VITOR ROSEIRA DIAS,
+        # 197983509, 01/10). None deixa o fallback pela data de upload decidir.
+        if not (2000 <= y <= _dt.date.today().year + 1):
+            return None
         return _dt.date(y, m, d)
     except Exception:
         return None

@@ -415,6 +415,71 @@ _JS_WL_NOME = """async ([nome, inicio, fim, tipo]) => {
 }"""
 
 
+_JS_WL_ACC = """async ([acc, inicio, fim, tipo]) => {
+    const body = new URLSearchParams({
+        'busca-por': 'accession_no',
+        'filtro[nome]': '',
+        'filtro[pedido]': acc,
+        'filtro[exames]': 'todos',
+        'filtro[tipo_data]': tipo,
+        'optionsRadios': 'entre',
+        'filtro_data_inicio': inicio,
+        'filtro_data_fim': fim,
+    });
+    const _ac = new AbortController();
+    const _to = setTimeout(() => _ac.abort(), 25000);
+    let r;
+    try {
+        r = await fetch('/ris/reports_list/get_list', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: body.toString(),
+            credentials: 'include',
+            signal: _ac.signal
+        });
+    } finally { clearTimeout(_to); }
+    return await r.text();
+}"""
+
+# Janela (dias) da busca pelo numero do pedido. Exame lancado dias depois da guia
+# (LUCIANA: guia 08/09, exame 10/09) ficava fora da busca por nome do dia.
+ACC_JANELA_DIAS = 15
+
+
+def _buscar_na_worklist_por_accession(page, acc: str, data: str,
+                                      janela: int = None) -> dict | None:
+    """Linha da worklist de laudos pelo NUMERO DO PEDIDO (accession), numa janela de
+    dias em torno da guia. None se nao achar ou se a consulta falhar.
+
+    Casos LUCIANA (40349639), PATRICIA (40352362), MATEUS, ROSANGELA e DENISE: o
+    laudo existia, mas a busca por nome (prefixo, so no dia da guia) nao achava a
+    linha e a guia virava "cobrar o laudo do radiologista". O accession vem do
+    analitico filtrado pelo convenio; aqui so se aceita a linha com ele EXATO."""
+    import datetime as _dt
+    acc = str(acc or "").strip()
+    if not re.fullmatch(r"4\d{7}", acc):
+        return None
+    try:
+        d0 = _dt.datetime.strptime(data, "%d/%m/%Y")
+    except Exception:
+        return None
+    j = ACC_JANELA_DIAS if janela is None else janela
+    ini = (d0 - _dt.timedelta(days=j)).strftime("%d/%m/%Y") + " 00:00:00"
+    fim = (d0 + _dt.timedelta(days=j)).strftime("%d/%m/%Y") + " 23:59:59"
+    for tipo in ("study_datetime", "realized"):
+        try:
+            raw = page.evaluate(_JS_WL_ACC, [acc, ini, fim, tipo])
+        except Exception:
+            continue
+        by: dict = {}
+        _parse_worklist_html(raw or "", by)
+        w = by.get(acc)
+        if w and w.get("rows_html"):
+            return {"accession": acc, "nome": w.get("nome", ""),
+                    "rows_html": w["rows_html"]}
+    return None
+
+
 def listar_worklist_por_pacientes(page, data: str, nomes: list) -> list:
     """
     Constroi a worklist do dia consultando por NOME de cada paciente + intervalo do dia.
@@ -1154,6 +1219,14 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
                 resultado["notas"].append(
                     f"accession {acc} localizado via fallback por nome"
                 )
+        if not wl_pac:
+            # Pelo NUMERO DO PEDIDO, numa janela de dias (caso LUCIANA 40349639):
+            # nome com grafia/espaco diferente na linha, ou exame lancado em outro
+            # dia. So a linha com o accession exato.
+            wl_pac = _buscar_na_worklist_por_accession(page, acc, data)
+            if wl_pac:
+                resultado["notas"].append(
+                    f"accession {acc} localizado pelo número do pedido")
         if not wl_pac:
             nao_localizadas.append(acc)
             continue
