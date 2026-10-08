@@ -100,17 +100,40 @@ def _record_href(page, cod: str):
     Agora: sem correspondencia, so aceita quando ha UM UNICO card (nao ha o que
     confundir). Com 2+ cards devolve None -> vira pendencia, nunca paciente errado.
     """
-    return page.evaluate("""(cod) => {
-        const links = [...document.querySelectorAll('a.prontuario')];
-        if (cod) {   // cod vazio: ''.includes() casaria com QUALQUER card
-            for (const a of links) {
-                let node = a, txt = '';
-                for (let i = 0; i < 6 && node; i++) { node = node.parentElement; if (node) txt += ' ' + node.innerText; }
-                if (txt.includes(cod)) return {href: a.href, n: links.length};
-            }
+    cards = page.evaluate(r"""() => [...document.querySelectorAll('a.prontuario')].map(a => {
+        const li = a.closest('[data-pat-id]');
+        let card = null, n = a;
+        for (let i = 0; i < 6 && n; i++) {
+            n = n.parentElement;
+            if (n && /Nascimento/.test(n.innerText)) { card = n; break; }
         }
-        return {href: links.length === 1 ? links[0].href : null, n: links.length};
-    }""", cod)
+        const num = card ? ((card.innerText.match(/Prontu[aá]rio:\s*(\d+)/) || [])[1] || null) : null;
+        return {href: a.href, pat: li ? li.getAttribute('data-pat-id') : null, num};
+    })""")
+    return _escolher_card(cards, cod)
+
+
+def _escolher_card(cards, cod) -> dict:
+    """{href, n}: o cartao cujo NUMERO de prontuario e exatamente `cod`.
+
+    HOMONIMOS (08/10, caso DANIELLE OLIVEIRA SANTOS 20210238): a versao anterior subia
+    6 niveis testando innerText.includes(cod); no 6o nivel o no e a lista com TODOS os
+    cartoes, entao o PRIMEIRO cartao sempre "continha" o codigo e o robo abria o
+    prontuario de outra pessoa (DANIELLE, ANA CRISTINA, SAMARA, SIMONE, ANDREA,
+    ELIANE). Agora compara o numero do PROPRIO cartao (data-pat-id do <li>, ou o
+    'Prontuario:' do menor ancestral com 'Nascimento'), por igualdade.
+
+    Codigo REAL sem cartao correspondente -> None, mesmo com cartao unico: ele e de
+    outra pessoa. O aceite de cartao unico fica so para o codigo sintetico 'WL*' (e
+    codigo vazio), como antes — ali as travas de nascimento/nome seguem a jusante."""
+    cards = [c for c in (cards or []) if c and c.get("href")]
+    cod = str(cod or "").strip()
+    if cod and not cod.startswith("WL"):
+        for c in cards:
+            if str(c.get("pat") or "").strip() == cod or str(c.get("num") or "").strip() == cod:
+                return {"href": c["href"], "n": len(cards)}
+        return {"href": None, "n": len(cards)}
+    return {"href": cards[0]["href"] if len(cards) == 1 else None, "n": len(cards)}
 
 
 def _parse_cards_cpf(html: str) -> list:
