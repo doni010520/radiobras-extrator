@@ -35,6 +35,9 @@ POPUP_WAIT_MS = 10000
 # composer terminarem de chegar (poll de 500ms). Estourou com imagem pendente ->
 # captura INCOMPLETA (ver baixar_imagens / caso RONALDO 15/09).
 IMG_PENDENTES_MAX_MS = 20000
+# Render do MODELO: se a tela de impressao ainda nao pediu nenhuma vista depois do
+# POPUP_WAIT_MS, espera ate este teto antes de concluir que o render nao existe.
+MODELO_SEM_PEDIDO_MS = 15000
 MAX_RETRIES = 2
 FORCE = False
 # Tempo de espera pela abertura do popup reports_doc (event 'page'). O viewer às
@@ -908,33 +911,69 @@ def baixar_entregavel_modelo(page, ctx, study_id: str, out_dir: str,
     import entrega as _ent
     captured: list = []
     pendencias: list = []
+    # CAPTURA COMPLETA OU NADA (08/10, caso NICOLAS RAMOS FANELI 197564266): esperava
+    # 10 s fixos; o que nao chegava ate ali nao existia, e seis rodadas seguidas
+    # viraram "cobrar o laudo do radiologista". Mesma regra do baixar_imagens
+    # (RONALDO, 15/09): conta o que a tela PEDIU contra o que CHEGOU e foi LIDO.
+    pedidas: set = set()
+    finalizadas: set = set()
+    falhas: list = []
+
+    def on_req(r):
+        if "viewer/u/image" in r.url:
+            pedidas.add(r.url)
+
+    def on_fail(r):
+        if "viewer/u/image" in r.url:
+            finalizadas.add(r.url)
+            falhas.append(r.url)
 
     def on_resp(r):
         if "viewer/u/image" not in r.url:
             return
+        finalizadas.add(r.url)
         try:
             body = r.body()
         except Exception:
+            falhas.append(r.url)
             return
         if body[:2] == b"\xff\xd8":
             captured.append(body)
 
+    ctx.on("request", on_req)
+    ctx.on("requestfailed", on_fail)
     ctx.on("response", on_resp)
     p2 = None
+    abriu = False
     try:
         p2 = ctx.new_page()
         p2.goto("about:blank")
         p2.evaluate(_ent.JS_IMPRIMIR, [BASE, str(study_id)])
+        abriu = True
         p2.wait_for_timeout(POPUP_WAIT_MS)
+        # Tela lenta: nenhuma vista pedida ainda -> da mais um tempo antes de
+        # concluir que o render nao existe.
+        _esp = 0
+        while not pedidas and _esp < MODELO_SEM_PEDIDO_MS:
+            p2.wait_for_timeout(500)
+            _esp += 500
+        # Vista pedida sem resposta -> espera ela chegar (teto IMG_PENDENTES_MAX_MS).
+        _esp = 0
+        while (pedidas - finalizadas) and _esp < IMG_PENDENTES_MAX_MS:
+            p2.wait_for_timeout(500)
+            _esp += 500
     except Exception as e:
         pendencias.append(f"print_series falhou (study {str(study_id)[:12]}): {e}")
     finally:
         ctx.remove_listener("response", on_resp)
+        ctx.remove_listener("request", on_req)
+        ctx.remove_listener("requestfailed", on_fail)
         try:
             if p2 is not None:
                 p2.close()
         except Exception:
             pass
+    completa = abriu and not falhas and not (pedidas - finalizadas)
 
     itens = [{"bytes": b, "logo": tem_logo_radiobras(b)} for b in captured]
     escolhidos = _ent.escolher_entregaveis(itens)
@@ -954,7 +993,9 @@ def baixar_entregavel_modelo(page, ctx, study_id: str, out_dir: str,
         arquivos.append(fname)
     return {"qtd": len(arquivos), "arquivos": arquivos, "next_n": n,
             "capturadas": len(captured), "sem_folha_a4": caiu_no_cru,
-            "pendencias": pendencias}
+            "pendencias": pendencias, "completa": completa,
+            "pedidas": len(pedidas), "falhas": len(falhas),
+            "pendentes": len(pedidas - finalizadas)}
 
 
 # ── Fallback: busca por nome sem filtro de data ───────────────────────────────
@@ -1143,6 +1184,15 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
                 _n = _r["next_n"]
                 _arqs.extend(_r["arquivos"])
                 resultado["pendencias"].extend(_r.get("pendencias") or [])
+                if _r.get("completa") is False:
+                    # Render pedido e nao recebido por inteiro: falha NOSSA (vai pro
+                    # retry), nunca "cobrar laudo" — o modelo nao tem laudo.
+                    resultado["imagens_incompletas"] = True
+                    resultado["pendencias"].append(
+                        f"falha técnica: as vistas do MODELO ({_li.get('accession')}) "
+                        f"não carregaram por completo ({_r.get('qtd', 0)} salva(s), "
+                        f"{_r.get('falhas', 0)} falha(s), {_r.get('pendentes', 0)} "
+                        f"sem resposta)")
             except Exception as e:
                 resultado["pendencias"].append(
                     f"falha tecnica ao baixar o entregavel do MODELO "

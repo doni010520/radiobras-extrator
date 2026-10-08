@@ -1657,6 +1657,26 @@ def _laudo_tele_faltando(exames_canon, laudos_no_plano) -> bool:
 _DISPENSAM_LAUDO = {"modelo", "fotografia"}
 
 
+def _portal_dispensa_laudo(eventos_portal) -> bool:
+    """Os EVENTOS DO PORTAL dizem que a guia e SO modelo/fotografia?
+
+    Ate aqui a dispensa de laudo so ligava se a GTO desta guia estivesse em PDF no
+    prontuario do PRORADIS e o texto dela dissesse 'modelo'. Na guia de modelo isso
+    quase nunca acontece, e o portal (fonte autoritativa, pedido por numeroFicha) ja
+    diz o que ela autoriza. Mesma postura conservadora: qualquer exame fora de
+    _DISPENSAM_LAUDO, ou evento que nao se reconhece, mantem a exigencia."""
+    evs = [str(e) for e in (eventos_portal or []) if str(e).strip()]
+    if not evs:
+        return False
+    canon = set()
+    for e in evs:
+        c = canon_exames(e)
+        if not c:
+            return False          # evento desconhecido: na duvida, exige laudo
+        canon |= c
+    return canon <= _DISPENSAM_LAUDO
+
+
 # A GTO pede o procedimento FECHADO ('Doc Orto Compl' -> 'documentacao'); os laudos
 # saem com o nome do COMPONENTE (LAUDO_PANORAMICA, LAUDO_TELERRADIOGRAFIA). Sem
 # expandir, 'documentacao' nunca acharia laudo nenhum e toda doc orto viraria
@@ -2819,7 +2839,10 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
     # Só dispensa laudo se a dispensa veio da GTO DESTA guia. Sem a GTO desta guia
     # no prontuário, NUNCA dispensa (regra do dono: nada dispensa laudo além de
     # modelo/fotografia — e só dá pra saber isso lendo a GTO certa).
-    out["dispensa_laudo"] = bool(_disp_laudo) and _gtos_desta > 0
+    # O PORTAL tambem decide: guia so de modelo/fotografia pelos eventos da ficha
+    # dispensa laudo mesmo sem a GTO em PDF no prontuario (caso NICOLAS, 21/09).
+    out["dispensa_laudo"] = ((bool(_disp_laudo) and _gtos_desta > 0)
+                             or _portal_dispensa_laudo(eventos_portal))
     out["gto_desta_guia"] = _gtos_desta
 
     # REGRA: GTO com justificativa (campo 49) -> solicitação DISPENSADA. Nem toca

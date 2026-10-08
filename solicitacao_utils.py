@@ -34,7 +34,9 @@ _CANON = [
     # "Rad.Pano.C/Trac". Sem ela, `panor` nao casava (falta o "r"), a guia ficava
     # SEM exame de referencia e caia em "nao consegui ler o que a guia autoriza"
     # — falha nossa, nao da clinica. Caso PAULO ROBERTO, GTO 195418785.
-    (r"panor|\bpano\b", "panoramica"),
+    # "Rad.Pan": abreviacao do portal no evento combinado 'Rad.Pan+Mod.Ort'
+    # (panoramica + modelo). Exige o "rad" antes, para "pan" solto nao casar.
+    (r"panor|\bpano\b|\brad\.?\s*pan\b", "panoramica"),
     (r"periap", "periapical"),
     # '\bbw\b': o dentista escreve "Rx BW direito e esquerdo (PM e M)" — caso
     # SOPHIA CARVALHO DO ROSARIO, GTO 195469193 (27/07): sem o BW a leitura
@@ -81,7 +83,10 @@ _CANON = [
     # "Fotos intra e extras bucais" é como o dentista escreve — `fotograf` não pega.
     # \bfotos?\b com fronteira dos dois lados para não casar "fotossensível".
     (r"fotograf|\bfotos?\b", "fotografia"),
-    (r"modelo", "modelo"),
+    # 'Model.Ortodon.' e 'Mod.Ort' sao como o portal OdontoPrev escreve o modelo no
+    # evento da guia. So 'modelo' inteiro deixava a guia de modelo com exame VAZIO
+    # e ela nunca faturava (caso NICOLAS RAMOS FANELI, 197564266, 21/09).
+    (r"modelo|\bmodel\b|\bmod\.?\s*ort", "modelo"),
     (r"carpal|\bmao\b|idade ossea", "carpal"),
     (r"\batm\b", "atm"),
     (r"oclus", "oclusal"),
@@ -403,7 +408,7 @@ def gto_dispensa_laudo(gto_path: str) -> bool:
     except Exception:
         return False
     n = _strip(txt)
-    tem_modelo_foto = bool(re.search(r"\bmodelo|\bfotograf", n))
+    tem_modelo_foto = bool(re.search(r"\bmodelo|\bmodel\b|\bmod\.?\s*ort|\bfotograf", n))
     tem_radiologico = bool(_RADIOLOGICO_RE.search(n))
     return tem_modelo_foto and not tem_radiologico
 
