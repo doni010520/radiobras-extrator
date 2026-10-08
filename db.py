@@ -1439,7 +1439,10 @@ _GLOBAL_RE = __import__("re").compile(
     r"ProxyError|Max retries exceeded|Cannot connect to proxy|"
     r"n[ãa]o foi poss[íi]vel conectar ao OdontoPrev pelo proxy|"
     r"proxy.{0,40}403|403.{0,40}proxy|"
-    r"falha no login|Falha no login",
+    r"falha no login|Falha no login|"
+    # credito do Gemini acabou: nenhuma guia e lida, re-tentar guia a guia so queima
+    # tentativa (21-25/09). Pausa a fila e avisa o dono pedindo a recarga.
+    r"cr[ée]ditos da API de leitura acabaram|prepayment credits|RESOURCE_EXHAUSTED",
     __import__("re").I)
 
 # Menos que isto nao pausa a fila: uma guia sozinha com erro de proxy pode ser

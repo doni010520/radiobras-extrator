@@ -90,14 +90,33 @@ def _nome_unidade(conta) -> str:
 
 # Causa em UMA linha, em portugues. A ordem importa: o primeiro que casa vence.
 _CAUSAS = [
+    # CREDITO PRIMEIRO: o motivo de credito traz "gemini: 402..." no detalhe e a regra
+    # generica de leitura vencia (21-25/09: o aviso dizia "a leitura falhou, não
+    # precisa fazer nada" e 48 guias foram feitas a mao).
+    ("a leitura ficou sem crédito",
+     r"cr[ée]ditos da API|leitura autom[áa]tica ficou indispon|prepayment|RESOURCE_EXHAUSTED"),
     ("o portal não abriu a guia", r"Linha da GTO .* n[ãa]o encontrada"),
     ("o acesso ao portal venceu no meio da rodada", r"Jwt is expired|jwt.{0,6}expir"),
     ("o proxy do OdontoPrev caiu", r"ProxyError|Max retries exceeded"),
     ("o campo de upload não apareceu na guia", r"input\[type=file\].*n[ãa]o encontrado"),
     ("a leitura dos documentos falhou", r"gemini\s*:|falha t[ée]cnica na leitura"),
-    ("a leitura ficou sem crédito", r"cr[ée]ditos da API|leitura autom[áa]tica ficou indispon"),
     ("não deu para contar os anexos da guia", r"n[ãa]o consegui ler quantos anexos"),
 ]
+
+# Causas que o robo NAO resolve sozinho: o aviso tem que dizer o que fazer, nunca
+# "você não precisa fazer nada".
+_ACAO_NECESSARIA = {
+    "a leitura ficou sem crédito": (
+        "recarregar os créditos do Gemini no AI Studio (Billing → Add credits). "
+        "Enquanto isso nenhuma guia é lida. Depois da recarga o robô reprocessa."),
+}
+
+
+def _acao_necessaria(causas) -> str:
+    for c in causas:
+        if c in _ACAO_NECESSARIA:
+            return _ACAO_NECESSARIA[c]
+    return ""
 
 
 def _resumir_causa(motivo) -> str:
@@ -168,9 +187,13 @@ def avisar_falhas_da_rodada(dia: str, conta: str, itens: list, _post=None) -> bo
               "*O que houve:*"]
     for causa, guias in grupos:
         linhas.append(f"• {len(guias)} — {causa}")
-    linhas += ["",
-               "*Você não precisa fazer nada agora:* o robô re-tenta sozinho.",
-               "A operação da RadioBras não vê nenhuma dessas guias."]
+    _acao = _acao_necessaria([c for c, _ in grupos])
+    if _acao:
+        linhas += ["", f"*VOCÊ PRECISA AGIR:* {_acao}"]
+    else:
+        linhas += ["",
+                   "*Você não precisa fazer nada agora:* o robô re-tenta sozinho."]
+    linhas += ["A operação da RadioBras não vê nenhuma dessas guias."]
     # nomes: ajudam a reconhecer, mas sem virar parede de texto
     nomes = [str(i.get("paciente") or i.get("gto") or "?").split(" ")[0].title()
              for i in itens]
@@ -228,13 +251,17 @@ def avisar_pausa(motivo: str, guias: int, minutos: int, dia: str = "", conta: st
               f"*O que houve:* {_resumir_causa(motivo)}"]
     if dia or conta:
         linhas.append(f"*Onde vi:* {_nome_unidade(conta)} · dia {dia or '?'}")
+    _acao = _acao_necessaria([_resumir_causa(motivo)])
     linhas += ["",
                f"*{guias} guia(s)* tiveram a tentativa devolvida — não gastaram "
-               f"o orçamento de retry por causa disso.",
-               f"O robô fica parado por *{minutos} min* e volta sozinho. Se ainda "
-               f"estiver fora, paro de novo e te aviso.",
-               "",
-               "Nada foi anexado e nada se perdeu."]
+               f"o orçamento de retry por causa disso."]
+    if _acao:
+        linhas += [f"*VOCÊ PRECISA AGIR:* {_acao}",
+                   f"Até lá eu tento de novo a cada *{minutos} min* e te aviso."]
+    else:
+        linhas += [f"O robô fica parado por *{minutos} min* e volta sozinho. Se ainda "
+                   f"estiver fora, paro de novo e te aviso."]
+    linhas += ["", "Nada foi anexado e nada se perdeu."]
     url = _link("/tecnico")
     if url:
         linhas += ["", f"Detalhe: {url}"]

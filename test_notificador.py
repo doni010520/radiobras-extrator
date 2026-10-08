@@ -163,3 +163,46 @@ def test_link_aponta_para_a_tela_DELE(monkeypatch):
     t = espia.chamadas[0]["payload"]["text"]
     assert "/tecnico" in t
     assert "/relatorios/pendencias" not in t
+
+
+# ── credito do Gemini acabou (21 a 25/09) ────────────────────────────────────
+# O motivo de credito contem "gemini:" no detalhe, e a regra generica "a leitura dos
+# documentos falhou" vinha ANTES na lista e vencia. O aviso dizia "Você não precisa
+# fazer nada agora: o robô re-tenta sozinho" — falso: sem recarga nada e lido, e 48
+# guias foram feitas a mao antes de alguem perceber.
+_MOT_CREDITO = ("NÃO FATUROU porque a leitura automática ficou indisponível: os "
+                "créditos da API de leitura acabaram. Nenhuma guia é lida enquanto "
+                "isso. Detalhe: gemini: 402 RESOURCE_EXHAUSTED prepayment credits")
+
+
+def test_credito_esgotado_e_reconhecido_mesmo_com_gemini_no_texto():
+    assert notificador._resumir_causa(_MOT_CREDITO) == "a leitura ficou sem crédito"
+
+
+def test_credito_esgotado_pede_acao_e_nao_diz_que_resolve_sozinho(monkeypatch):
+    _configura(monkeypatch)
+    espia = _Espia()
+    notificador.avisar_falhas_da_rodada("21/09/2026", "388336", [
+        {"gto": "1", "paciente": "ROSEMEIRE", "motivo": _MOT_CREDITO},
+        {"gto": "2", "paciente": "NAYLLA", "motivo": _MOT_CREDITO},
+    ], _post=espia)
+    t = espia.chamadas[0]["payload"]["text"]
+    assert "não precisa fazer nada" not in t
+    assert "PRECISA AGIR" in t
+    assert "recarregar" in t.lower()
+
+
+def test_pausa_por_credito_diz_que_nao_volta_sozinho(monkeypatch):
+    _configura(monkeypatch)
+    espia = _Espia()
+    notificador.avisar_pausa(_MOT_CREDITO, 5, 60, dia="21/09/2026", conta="388336",
+                             _post=espia)
+    t = espia.chamadas[0]["payload"]["text"]
+    assert "PRECISA AGIR" in t
+    assert "volta sozinho" not in t
+
+
+def test_credito_esgotado_e_falha_global_para_o_retry():
+    import db
+    assert db.eh_falha_global(_MOT_CREDITO)
+    assert not db.eh_falha_global("pedido do dentista não cobre periapical")
