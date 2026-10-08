@@ -2200,7 +2200,18 @@ def _status_download(res, nf):
         det = next((p for p in (res.get("pendencias") or []) if "falha técnica" in p),
                    "falha técnica: as folhas de imagem não carregaram por completo")
         return "ERRO", det
-    return ("BAIXADO" if nf > 0 else "SEM_ARQUIVOS"), None
+    if nf > 0:
+        return "BAIXADO", None
+    # ZERO ARQUIVO POR FALHA DE CONSULTA nao e "laudo nao emitido" (frente C, 08/10:
+    # lotes inteiros com zero em 1-8 s, execs 1108/1585; a rodada seguinte baixou
+    # tudo). A mensagem mandava cobrar o radiologista. Falha registrada -> ERRO nosso.
+    _f = list(res.get("falhas_consulta") or [])
+    _f += [p for p in (res.get("pendencias") or [])
+           if re.match(r"erro laudos:|erro imagens|laudo .* erro:", str(p))]
+    if _f:
+        return "ERRO", ("falha técnica: a consulta ao PRORADIS falhou e nada foi "
+                        "baixado (" + "; ".join(str(x)[:90] for x in _f[:2]) + ")")
+    return "SEM_ARQUIVOS", None
 
 
 def _achar_por_nascimento(pg, g, data, janela, buscar_cards=None, listar_wl=None):
@@ -2251,6 +2262,7 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
     """ESTÁGIO 2 (download only): match + baixa laudo+imagens. Devolve item com
     _pac embutido (p/ o estágio de leitura). NÃO lê solicitação aqui."""
     t0 = time.monotonic()
+    _falhas_wl = []     # consultas a worklist que FALHARAM (nao "nao achou")
     nn = g["nome_norm"]
     cands = by_norm.get(nn, [])
     if not cands:
@@ -2265,14 +2277,14 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
         return {"gto": g["gto"], "nome": g["nome"], "status": "AMBIGUO", "dt_dl": time.monotonic() - t0}
     if cands:
         pac = cands[0]
-        wl = listar_worklist_por_pacientes(pg, data, [pac["nome"]])
+        wl = listar_worklist_por_pacientes(pg, data, [pac["nome"]], falhas=_falhas_wl)
     else:
         # FALLBACK: paciente fora do analítico. Aqui mora o maior risco do sistema —
         # a busca é por NOME e pode devolver gente diferente. Lógica portada do
         # fechar_dia.py (que já fazia certo): agrupa as linhas por paciente e só
         # segue se sobrar UM. Antes, bastava UMA linha casar (any) para o LOTE
         # INTEIRO de accessions ser aceito — inclusive de outros pacientes.
-        wl = listar_worklist_por_pacientes(pg, data, [g["nome"]])
+        wl = listar_worklist_por_pacientes(pg, data, [g["nome"]], falhas=_falhas_wl)
 
         def _casam_por_paciente(linhas, nn_alvo):
             """{nome_normalizado: [accessions]} apenas das linhas que casam com o
@@ -2301,7 +2313,7 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
         toks = g["nome"].split()
         while not casam and len(toks) > 2:
             toks = toks[:-1]
-            wl = listar_worklist_por_pacientes(pg, data, [" ".join(toks)])
+            wl = listar_worklist_por_pacientes(pg, data, [" ".join(toks)], falhas=_falhas_wl)
             casam = _casam_por_paciente(wl, nn)
         if len(casam) > 1:
             # dois pacientes distintos com nome compatível -> não dá pra saber qual
@@ -2325,7 +2337,7 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
                 if not _d:
                     continue
                 try:
-                    _wl2 = listar_worklist_por_pacientes(pg, _d, [g["nome"]])
+                    _wl2 = listar_worklist_por_pacientes(pg, _d, [g["nome"]], falhas=_falhas_wl)
                 except Exception:
                     continue
                 _c2 = _casam_por_paciente(_wl2, nn)
@@ -2356,6 +2368,13 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
                 if _nasc["dia"] != data:
                     g["data_exame_real"] = _nasc["dia"]
         if not accs:
+            if _falhas_wl:
+                # Nao achou PORQUE a consulta falhou (DIEGO 197270606, 15/09): dizer
+                # "nome escrito diferente" mandaria a operadora atras do cadastro.
+                return {"gto": g["gto"], "nome": g["nome"], "status": "ERRO",
+                        "erro": ("falha técnica: a consulta da worklist do PRORADIS "
+                                 "falhou (" + _falhas_wl[0][:120] + ")"),
+                        "dt_dl": time.monotonic() - t0}
             return {"gto": g["gto"], "nome": g["nome"], "status": "SEM_MATCH",
                     "janela": _JANELA_DIAS, "dt_dl": time.monotonic() - t0}
         pac = {"nome": _nome_pac, "cod_pac": "WL" + accs[0], "accessions": accs}

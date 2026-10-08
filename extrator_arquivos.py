@@ -480,7 +480,7 @@ def _buscar_na_worklist_por_accession(page, acc: str, data: str,
     return None
 
 
-def listar_worklist_por_pacientes(page, data: str, nomes: list) -> list:
+def listar_worklist_por_pacientes(page, data: str, nomes: list, falhas: list = None) -> list:
     """
     Constroi a worklist do dia consultando por NOME de cada paciente + intervalo do dia.
 
@@ -526,6 +526,10 @@ def listar_worklist_por_pacientes(page, data: str, nomes: list) -> list:
                                     pass
                                 continue
                             print(f"   [worklist] falha nome={chave} tipo={tipo}: {e}")
+                            # REGISTRA: lista vazia por falha nao e "paciente nao
+                            # existe" (DIEGO 197270606, 15/09). Quem chama decide.
+                            if falhas is not None:
+                                falhas.append(f"worklist {chave!r} {tipo}: {str(e)[:120]}")
             if achou_linha:
                 break
     return list(by_acc.values())
@@ -1082,7 +1086,8 @@ def baixar_entregavel_modelo(page, ctx, study_id: str, out_dir: str,
 
 # ── Fallback: busca por nome sem filtro de data ───────────────────────────────
 
-def _buscar_na_worklist_por_nome(page, nome: str, acc: str, data: str) -> dict | None:
+def _buscar_na_worklist_por_nome(page, nome: str, acc: str, data: str,
+                                falhas: list = None) -> dict | None:
     """
     Fallback por accession nao localizado: busca o get_list pelo nome completo do
     paciente + intervalo do dia (optionsRadios='entre') e localiza a linha com o
@@ -1099,7 +1104,9 @@ def _buscar_na_worklist_por_nome(page, nome: str, acc: str, data: str) -> dict |
         for tipo in ("study_datetime", "realized"):
             try:
                 raw = page.evaluate(_JS_WL_NOME, [chave, dt_inicio, dt_fim, tipo])
-            except Exception:
+            except Exception as e:
+                if falhas is not None:
+                    falhas.append(f"worklist {chave!r} {tipo}: {str(e)[:120]}")
                 continue
             soup = BeautifulSoup(raw, "lxml")
             for tr in soup.find_all("tr"):
@@ -1214,7 +1221,8 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
         wl_pac = wl_by_acc.get(acc)
         if not wl_pac:
             # Fallback: busca por nome sem filtro de data (mismatch realized vs study_datetime)
-            wl_pac = _buscar_na_worklist_por_nome(page, nome, acc, data)
+            wl_pac = _buscar_na_worklist_por_nome(page, nome, acc, data,
+                                                  falhas=resultado.setdefault("falhas_consulta", []))
             if wl_pac:
                 resultado["notas"].append(
                     f"accession {acc} localizado via fallback por nome"
