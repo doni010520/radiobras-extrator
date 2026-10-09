@@ -86,3 +86,153 @@ def chave_gemini(modelo, conteudo) -> str:
     h = hashlib.sha256(str(modelo).encode())
     _forma(conteudo, h)
     return h.hexdigest()
+
+
+# ── falsos do Playwright: aceitam qualquer chamada e nao fazem IO ─────────────
+class _Nada:
+    """Qualquer metodo desconhecido vira no-op que devolve None."""
+    def __getattr__(self, nome):
+        return lambda *a, **k: None
+
+
+class PaginaFalsa(_Nada):
+    url = "about:blank"
+    keyboard = _Nada()
+
+    def evaluate(self, *a, **k):
+        return None
+
+    def query_selector(self, *a, **k):
+        return None
+
+    def query_selector_all(self, *a, **k):
+        return []
+
+
+class _ReqFalso:
+    url = "https://credenciado.odontoprev.com.br/replay"
+    headers = {"authorization": "Bearer REPLAY"}
+
+
+class ContextoFalso(_Nada):
+    def on(self, evento, fn):
+        if evento == "request":      # entrega o Bearer a quem escuta (descoberta)
+            fn(_ReqFalso())
+
+    def new_page(self):
+        return PaginaFalsa()
+
+    def cookies(self):
+        return []
+
+    def storage_state(self, *a, **k):
+        return {}
+
+
+class NavegadorFalso(_Nada):
+    def new_context(self, *a, **k):
+        return ContextoFalso()
+
+
+class _Chromium:
+    def launch(self, *a, **k):
+        return NavegadorFalso()
+
+
+class PlaywrightFalso:
+    chromium = _Chromium()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def start(self):
+        return self
+
+    def stop(self):
+        pass
+
+
+def trio_falso(*a, **k):
+    return NavegadorFalso(), ContextoFalso(), PaginaFalsa()
+
+
+# ── Gemini ──────────────────────────────────────────────────────────────────
+class _Resp:
+    def __init__(self, text):
+        self.text = text
+
+
+def gemini_cliente(modo, cassete, real_cls):
+    class _Models:
+        def __init__(self, real):
+            self._real = real
+
+        def generate_content(self, model=None, contents=None, config=None, **kw):
+            k = chave_gemini(model, contents)
+            if modo == "tocar":
+                return _Resp(cassete.tocar("gemini", k))
+            r = self._real.generate_content(model=model, contents=contents, config=config, **kw)
+            cassete.gravar("gemini", k, getattr(r, "text", None))
+            return r
+
+    class _Cliente:
+        def __init__(self, *a, **k):
+            real = real_cls(*a, **k).models if modo == "gravar" else None
+            self.models = _Models(real)
+
+    return _Cliente
+
+
+# ── requests.Session ────────────────────────────────────────────────────────
+class _RespHttp:
+    def __init__(self, status, conteudo, headers):
+        self.status_code = status
+        self.content = conteudo
+        self.headers = headers or {}
+        self.text = conteudo.decode("utf-8", errors="replace")
+
+    def json(self):
+        return json.loads(self.text)
+
+
+def _chave_http(metodo, url, kw):
+    extra = {k: kw[k] for k in ("params", "data", "json") if kw.get(k) is not None}
+    return f"{metodo} {url} " + json.dumps(extra, sort_keys=True, default=str)
+
+
+def sessao_classe(modo, cassete, real_cls):
+    class _Sessao:
+        def __init__(self, *a, **k):
+            self._real = real_cls(*a, **k) if modo == "gravar" else None
+            self.headers = self._real.headers if self._real else {}
+            self.cookies = self._real.cookies if self._real else _Nada()
+
+        def _faz(self, metodo, url, **kw):
+            k = _chave_http(metodo, url, kw)
+            if modo == "tocar":
+                v = cassete.tocar("http", k)
+                return _RespHttp(v["status"], cassete.ler_blob(v["blob"]), v["headers"])
+            r = getattr(self._real, metodo.lower())(url, **kw)
+            cassete.gravar("http", k, {"status": r.status_code,
+                                       "blob": cassete.gravar_blob(r.content),
+                                       "headers": dict(r.headers)})
+            return r
+
+        def get(self, url, **kw):
+            return self._faz("GET", url, **kw)
+
+        def post(self, url, **kw):
+            return self._faz("POST", url, **kw)
+
+        def mount(self, *a, **k):
+            if self._real:
+                self._real.mount(*a, **k)
+
+        def close(self):
+            if self._real:
+                self._real.close()
+
+    return _Sessao
