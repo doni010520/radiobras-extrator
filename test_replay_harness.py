@@ -133,3 +133,30 @@ def test_veredito_normaliza_e_indexa_por_gto():
     v = rh.veredito(resumo)
     assert list(v) == ["1", "2"]
     assert v["2"] == {"categoria": "auto", "anexado": "DRY", "arquivos": ["a.jpg", "b.pdf"], "motivo": "ok"}
+
+
+def test_gravador_gemini_mantem_o_cliente_real_vivo(tmp_path):
+    """Se so .models fosse guardado, o cliente real seria coletado e fecharia."""
+    import gc
+    vivos = []
+
+    class _RealModels:
+        def __init__(self, dono):
+            self.dono = dono
+        def generate_content(self, model, contents, config=None):
+            assert not self.dono.fechado, "client has been closed"
+            return type("R", (), {"text": "ok"})()
+
+    class _RealClient:
+        def __init__(self, api_key=None):
+            self.fechado = False
+            self.models = _RealModels(self)
+            vivos.append(self)
+        def __del__(self):
+            self.fechado = True
+
+    vivos.clear()
+    c = rh.Cassete(str(tmp_path / "gv"))
+    cli = rh.gemini_cliente("gravar", c, _RealClient)(api_key="k")
+    vivos.clear(); gc.collect()
+    assert cli.models.generate_content(model="m", contents=["x"]).text == "ok"

@@ -180,8 +180,11 @@ def gemini_cliente(modo, cassete, real_cls):
 
     class _Cliente:
         def __init__(self, *a, **k):
-            real = real_cls(*a, **k).models if modo == "gravar" else None
-            self.models = _Models(real)
+            # Guarda o CLIENTE real, nao so o .models: sem referencia o cliente e
+            # coletado, fecha a conexao e toda chamada vira "Cannot send a request,
+            # as the client has been closed" (gravacao de 09/10).
+            self._real = real_cls(*a, **k) if modo == "gravar" else None
+            self.models = _Models(self._real.models if self._real else None)
 
     return _Cliente
 
