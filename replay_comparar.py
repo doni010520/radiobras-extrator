@@ -14,7 +14,7 @@ def tocar_um(pasta_cassete: str) -> dict:
     c = rh.Cassete(pasta_cassete)
     m = c.meta
     with rh.instalar("tocar", c):
-        r = esteira.rodar_esteira(m["dia"], 1, 1, 5, log=lambda s: None,
+        r = esteira.rodar_esteira(m["dia"], 1, 1, 1, log=lambda s: None,
                                   gemini_key="replay", review_dir=tempfile.mkdtemp(),
                                   k_attach=1, dry_run=True, conta=m["conta"],
                                   senha_portal="replay")

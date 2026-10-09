@@ -15,7 +15,7 @@ def gravar(conta: str, dia: str) -> str:
     c = rh.Cassete(os.path.join(rh.PASTA_PADRAO, nome))
     c.meta.update({"conta": conta, "dia": dia})
     with rh.instalar("gravar", c):
-        r = esteira.rodar_esteira(dia, 1, 1, 5, log=print,
+        r = esteira.rodar_esteira(dia, 1, 1, 1, log=print,
                                   gemini_key=os.environ["GEMINI_API_KEY"],
                                   review_dir=tempfile.mkdtemp(), k_attach=1,
                                   dry_run=True, conta=conta,
