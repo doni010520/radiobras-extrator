@@ -89,3 +89,47 @@ def test_requests_grava_e_toca_bytes_e_status(tmp_path):
     T = rh.sessao_classe("tocar", c, None)
     r = T().get("https://x/v1/gto/imagens?numeroFicha=1", timeout=5)
     assert r.status_code == 200 and r.json() == [{"a": 1}] and r.content == b'[{"a":1}]'
+
+
+import esteira
+
+
+def test_instalar_troca_e_restaura_as_costuras(tmp_path):
+    original = esteira._baixa_um
+    c = rh.Cassete(str(tmp_path / "i"))
+    c.gravar("baixa_um", "123", {"gto": "123", "status": "SEM_MATCH", "arquivos": []})
+    with rh.instalar("tocar", c):
+        assert esteira._baixa_um is not original
+        r = esteira._baixa_um(None, None, {}, {"gto": "123"}, str(tmp_path), "01/10/2026")
+        assert r["status"] == "SEM_MATCH"
+    assert esteira._baixa_um is original
+
+
+def test_baixa_um_recria_a_pasta_com_os_mesmos_bytes(tmp_path):
+    c = rh.Cassete(str(tmp_path / "p"))
+    sha = c.gravar_blob(b"LAUDO")
+    c.gravar("baixa_um", "9", {"gto": "9", "status": "BAIXADO",
+                               "_arquivos": {"LAUDO_PANORAMICA_1_OFICIAL.pdf": sha},
+                               "_pasta": "X"})
+    with rh.instalar("tocar", c):
+        r = esteira._baixa_um(None, None, {}, {"gto": "9"}, str(tmp_path / "tmp"), "01/10/2026")
+    import os
+    assert open(os.path.join(r["_pasta"], "LAUDO_PANORAMICA_1_OFICIAL.pdf"), "rb").read() == b"LAUDO"
+
+
+def test_relogio_congelado_no_instante_da_gravacao(tmp_path):
+    c = rh.Cassete(str(tmp_path / "t"))
+    c.meta["agora"] = "2026-10-09T10:00:00"
+    with rh.instalar("tocar", c):
+        assert esteira.datetime.now().isoformat().startswith("2026-10-09T10:00")
+
+
+def test_veredito_normaliza_e_indexa_por_gto():
+    resumo = {"decisoes": [
+        {"gto": "2", "categoria": "auto", "anexado": "DRY",
+         "arquivos_anexados": ["b.pdf", "a.jpg"], "gemini": {"motivo": "ok"}},
+        {"gto": "1", "categoria": "sem_exame", "anexado": None, "gemini": {"motivo": "x"},
+         "erro": None}]}
+    v = rh.veredito(resumo)
+    assert list(v) == ["1", "2"]
+    assert v["2"] == {"categoria": "auto", "anexado": "DRY", "arquivos": ["a.jpg", "b.pdf"], "motivo": "ok"}

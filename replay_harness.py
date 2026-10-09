@@ -236,3 +236,141 @@ def sessao_classe(modo, cassete, real_cls):
                 self._real.close()
 
     return _Sessao
+
+
+import contextlib
+from datetime import datetime as _dt_real
+
+
+def _df_para_json(df):
+    return df.to_json(orient="split", force_ascii=False)
+
+
+def _json_para_df(s):
+    import io
+    import pandas as pd
+    return pd.read_json(io.StringIO(s), orient="split", dtype=False)
+
+
+_COSTURAS = ("sync_playwright", "login_odonto", "_login_playwright", "abrir_consultar_gtos",
+             "consultar_periodo", "abrir_gto", "listar_gtos", "_get_relatorio_analitico",
+             "_baixa_um", "anexos_do_paciente", "_carregar_confirmados", "datetime",
+             "get_credentials")
+
+
+@contextlib.contextmanager
+def instalar(modo: str, cassete: Cassete):
+    """Troca as costuras de `esteira` por gravadores (modo 'gravar') ou tocadores
+    ('tocar'); restaura ao sair. A lista de costuras e a tabela do plano da Fase 1."""
+    import esteira as E
+    import google.genai as G
+    assert modo in ("gravar", "tocar")
+    orig = {n: getattr(E, n) for n in _COSTURAS}
+    orig_client, orig_sess = G.Client, E.requests.Session
+    tocar = modo == "tocar"
+
+    def _listar_gtos(pg):
+        if tocar:
+            return cassete.tocar("listar_gtos", "listar_gtos")
+        v = orig["listar_gtos"](pg)
+        cassete.gravar("listar_gtos", "listar_gtos", v)
+        return v
+
+    def _analitico(pg, conv, seg, data):
+        if tocar:
+            return _json_para_df(cassete.tocar("analitico", data))
+        df = orig["_get_relatorio_analitico"](pg, conv, seg, data)
+        cassete.gravar("analitico", data, _df_para_json(df))
+        return df
+
+    def _baixa(pg, ctx, by_norm, g, tmp, data):
+        k = str(g.get("gto"))
+        if tocar:
+            v = dict(cassete.tocar("baixa_um", k))
+            arqs = v.pop("_arquivos", None) or {}
+            if "_pasta" in v or arqs:
+                pasta = os.path.join(tmp, f"replay_{k}")
+                os.makedirs(pasta, exist_ok=True)
+                for nome, sha in arqs.items():
+                    with open(os.path.join(pasta, nome), "wb") as f:
+                        f.write(cassete.ler_blob(sha))
+                v["_pasta"] = pasta
+            return v
+        r = orig["_baixa_um"](pg, ctx, by_norm, g, tmp, data)
+        v = {kk: vv for kk, vv in r.items()}
+        pasta = r.get("_pasta")
+        if pasta and os.path.isdir(pasta):
+            v["_arquivos"] = {}
+            for nome in sorted(os.listdir(pasta)):
+                with open(os.path.join(pasta, nome), "rb") as f:
+                    v["_arquivos"][nome] = cassete.gravar_blob(f.read())
+        cassete.gravar("baixa_um", k, json.loads(json.dumps(v, default=str)))
+        return r
+
+    def _anexos(pg, nome, cod, nascimento=None):
+        k = f"{nome}|{cod}|{nascimento}"
+        if tocar:
+            v = cassete.tocar("anexos_do_paciente", k)
+            if isinstance(v, dict) and v.get("_erro"):
+                raise RuntimeError(v["_erro"])
+            return v
+        try:
+            v = orig["anexos_do_paciente"](pg, nome, cod, nascimento)
+        except Exception as e:
+            cassete.gravar("anexos_do_paciente", k, {"_erro": str(e)})
+            raise
+        cassete.gravar("anexos_do_paciente", k, v)
+        return v
+
+    def _confirmados():
+        if tocar:
+            return set(cassete.tocar("confirmados", "confirmados"))
+        v = orig["_carregar_confirmados"]()
+        cassete.gravar("confirmados", "confirmados", sorted(v))
+        return v
+
+    agora = (_dt_real.fromisoformat(cassete.meta["agora"]) if tocar and cassete.meta.get("agora")
+             else _dt_real.now())
+    if not tocar:
+        cassete.meta["agora"] = agora.isoformat()
+
+    class _Relogio(_dt_real):
+        @classmethod
+        def now(cls, tz=None):
+            return agora if tz is None else agora.astimezone(tz)
+
+    novos = {"listar_gtos": _listar_gtos, "_get_relatorio_analitico": _analitico,
+             "_baixa_um": _baixa, "anexos_do_paciente": _anexos,
+             "_carregar_confirmados": _confirmados, "datetime": _Relogio}
+    if tocar:
+        novos.update({"sync_playwright": PlaywrightFalso, "login_odonto": trio_falso,
+                      "_login_playwright": trio_falso,
+                      "abrir_consultar_gtos": lambda *a, **k: None,
+                      "consultar_periodo": lambda *a, **k: None,
+                      "abrir_gto": lambda *a, **k: PaginaFalsa(),
+                      "get_credentials": lambda *a, **k: ("replay", "replay")})
+    try:
+        for n, f in novos.items():
+            setattr(E, n, f)
+        G.Client = gemini_cliente(modo, cassete, orig_client)
+        E.requests.Session = sessao_classe(modo, cassete, orig_sess)
+        yield cassete
+    finally:
+        for n, f in orig.items():
+            setattr(E, n, f)
+        G.Client, E.requests.Session = orig_client, orig_sess
+        if not tocar:
+            cassete.salvar()
+
+
+def veredito(resumo: dict) -> dict:
+    """gto -> o que importa para faturamento, em forma comparavel."""
+    out = {}
+    for d in sorted((resumo or {}).get("decisoes") or [], key=lambda x: str(x.get("gto"))):
+        g = str(d.get("gto"))
+        motivo = ((d.get("gemini") or {}).get("motivo")) or d.get("erro") or ""
+        out[g] = {"categoria": d.get("categoria"), "anexado": d.get("anexado"),
+                  "arquivos": sorted(os.path.basename(str(a))
+                                     for a in (d.get("arquivos_anexados") or [])),
+                  "motivo": str(motivo)}
+    return out
