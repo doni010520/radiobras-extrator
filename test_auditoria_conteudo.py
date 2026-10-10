@@ -90,3 +90,9 @@ def test_pedido_extra_de_outro_dentista_com_o_certo_presente_e_ok():
     outro = dict(_ped(dent="Fabielle Cunha de Oliveira", cro="20480"), idx=4)
     assert veredito("MARIA DA SILVA SOUZA", "panoramica",
                     [GTO, _ped(), outro, _laudo(), IMG])[0] == "OK"
+
+
+def test_laudo_da_panoramica_cobre_periapical():
+    lau = dict(_laudo(), exames=["Radiografia Panorâmica"])
+    assert veredito("MARIA DA SILVA SOUZA", "periapical interproximal",
+                    [GTO, _ped(), lau, IMG])[0] == "OK"

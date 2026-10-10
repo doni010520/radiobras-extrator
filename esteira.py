@@ -2280,11 +2280,11 @@ def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None, convenio_acc=None):
             cex = _exame_do_laudo(lp)
             if _conv and (_acc_do_laudo(lp) or "") in _conv:
                 # veio do analítico do convênio: nunca é "de fora"... MAS pode ser da
-                # guia IRMÃ. TAISE (197330008, 15/09): guia de periapical recebeu o
-                # LAUDO_PANORAMICA da guia de documentação ortodôntica dela do mesmo
-                # dia — os dois accessions são do convênio. Só sai quando o exame é
-                # de OUTRA guia do paciente e não desta (LOARA, rótulo 'ATM' que não
-                # é de guia nenhuma, continua protegido).
+                # guia IRMÃ. LAILA (197912057, 30/09): guia de periapical, com o laudo
+                # do periapical, recebeu também panorâmica e tele da outra guia dela —
+                # os accessions são todos do convênio. Só sai quando o exame é de
+                # OUTRA guia do paciente e não desta (LOARA, rótulo 'ATM' que não é de
+                # guia nenhuma, continua protegido).
                 if cex and not (cex & alvo) and (cex & outras):
                     irma.append(lp)
                 continue
@@ -2292,6 +2292,11 @@ def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None, convenio_acc=None):
             if cex and not (cex & alvo):
                 fora.append(lp)
 
+    # O laudo da PANORAMICA costuma trazer o periapical e o interproximal dentro
+    # (regra do dono, 10/10). Entao o da irma so sai quando esta guia JA TEM laudo
+    # proprio (LAILA 197912057); sem nenhum outro, ele e o laudo desta guia tambem.
+    if irma and not [lp for lp in laudos if lp not in irma and lp not in fora]:
+        irma = []
     if not fora:
         if not irma:
             return cheio, [], []

@@ -2303,21 +2303,16 @@ def test_nome_confirmado_libera_nome_e_cobertura():
     assert idx3 == 0 and m3 is None
 
 
-def test_laudo_do_convenio_da_guia_irma_nao_entra(tmp_path):
-    """TAISE (197330008, 15/09): duas guias no dia — documentação ortodôntica e
-    periapical. A de periapical subiu com o LAUDO_PANORAMICA da outra (os dois
-    accessions vieram do analítico do convênio, e laudo do convênio nunca saía).
-    O laudo da irmã sai; imagem e pedido ficam."""
+def test_guia_sem_laudo_proprio_fica_com_o_da_panoramica_da_irma(tmp_path):
+    """TAISE (197330008, 15/09): periapical sem laudo próprio; a panorâmica da guia
+    irmã traz o periapical dentro (regra do dono, 10/10) — continua indo."""
     pasta = _pasta(tmp_path, ["LAUDO_PANORAMICA_40351320_OFICIAL.pdf", "ENTREGA_1.jpg",
                               "SOLICITACAO_1__pedido.png"])
-    arquivos, excluidos, fora = _filtrar_arquivos_da_gto(
+    arquivos, excluidos, _f = _filtrar_arquivos_da_gto(
         pasta, {"gto_exames_desta": ["periapical"],
                 "gto_exames": ["documentacao", "periapical"]},
         extras_acc=None, convenio_acc=["40351320"])
-    assert sorted(os.path.basename(a) for a in arquivos) == [
-        "ENTREGA_1.jpg", "SOLICITACAO_1__pedido.png"]
-    assert excluidos == ["LAUDO_PANORAMICA_40351320_OFICIAL.pdf"]
-    assert fora == ["panoramica"]
+    assert len(arquivos) == 3 and excluidos == []
 
 
 def test_laudo_da_guia_irma_sai_e_o_desta_fica(tmp_path):

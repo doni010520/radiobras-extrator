@@ -141,6 +141,9 @@ def veredito(paciente, exames_gto, leituras, categoria=None, gto_ref=None):
     cobertos = set()
     for l in laudos:
         cobertos |= set(canon_exames(_ex(l.get("exames"))))
+    if "panoramica" in cobertos:
+        # o laudo da panoramica traz periapical e interproximal dentro (dono, 10/10)
+        cobertos |= {"periapical", "interproximal"}
     if alvo and not laudos:
         motivos_falta.append("nenhum laudo anexado")
     elif alvo:
