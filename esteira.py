@@ -3291,7 +3291,19 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                         "o pedido deste atendimento; se existir, anexar à mão. Se o "
                         "dentista da guia estiver errado, corrigir na guia.")
                 elif _motivo == "PACIENTE_INCOMPATIVEL":
-                    if _ha_leitura_no_nome(leituras, pac["nome"]):
+                    if (_ha_leitura_no_nome(leituras, pac["nome"])
+                            and not any(isinstance(_l, dict)
+                                        and _l.get("tipo") == "solicitacao"
+                                        for _l in leituras)):
+                        # SO DOCUMENTO DE IDENTIDADE, NENHUM PEDIDO (caso NICOLAS
+                        # 198275881, 08/10: certidao de nascimento + GTO). A mensagem
+                        # de baixo mandava procurar um pedido "mal-lido" que nao existe.
+                        _motivo = (
+                            "NÃO FATUROU porque o prontuário não tem nenhum pedido do "
+                            "dentista: há documento de identidade no nome do paciente, "
+                            "mas nenhum anexo é pedido de exame. O QUE FAZER: pedir à "
+                            "clínica o pedido do dentista deste atendimento.")
+                    elif _ha_leitura_no_nome(leituras, pac["nome"]):
                         # CARINA (28/07): HA um RG no nome EXATO do paciente, mas a
                         # solicitacao veio mal-lida/ilegivel ou pede exame diferente do
                         # que a guia autoriza — dizer "nenhum documento no nome" era
@@ -3582,6 +3594,9 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                             continue
                     if _extras_idx:
                         out["solicitacoes_extras"] = len(_extras_idx)
+            # tentativa que deu certo apaga o erro de uma anterior: sobrava
+            # "gemini: Unterminated string" numa guia decidida (NICOLAS, 10/10)
+            out.pop("erro", None)
             break
         except Exception as e:
             out["erro"] = f"gemini: {str(e)[:120]}"
