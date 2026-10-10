@@ -2691,6 +2691,39 @@ def _date_from_name(s):
         return None
 
 
+_GTO_EXECUTANTE = re.compile(r"RADIO(?:GRAFIAS|BRAS)\s+RADIOLOGIA", re.I)
+_GTO_DESCRICAO = re.compile(r"Rad\.?\s*Panor\.?\s*S/?\s*Tra|Lev\.\s*Periapical|Rx\s*Interprox\.", re.I)
+
+
+def _e_copia_de_gto(a: dict) -> bool:
+    """A leitura e de uma COPIA DA GTO (guia da operadora), nao de pedido do dentista.
+
+    O leitor chama a GTO de "solicitacao" — ela tem paciente, "Profissional
+    Solicitante" e exames. Caso JAQUELLINE (197451246, 17/09): a clinica arquivou a
+    guia como JPG, nao havia pedido, e o robo anexou a GTO como pedido. Medido
+    10/10: a leitura repete o EXECUTANTE (RadioBras, nunca autor de pedido) no texto,
+    poe o codigo da conta no lugar do CRO e copia as descricoes TUSS da operadora."""
+    from config import PLANOS
+    txt = str(a.get("texto") or "")
+    cro = re.sub(r"\D", "", str(a.get("cro_lido") or ""))
+    sinais = (bool(_GTO_EXECUTANTE.search(txt)) + bool(_GTO_DESCRICAO.search(txt))
+              + bool(cro and cro in {re.sub(r"\D", "", str(k)) for k in PLANOS}))
+    return sinais >= 2
+
+
+def _rebaixar_copias_de_gto(leituras, out=None) -> int:
+    """Leituras de copia da GTO deixam de ser candidatas a pedido (tipo 'outro')."""
+    n = 0
+    for a in leituras or []:
+        if isinstance(a, dict) and a.get("tipo") == "solicitacao" and _e_copia_de_gto(a):
+            a["tipo"] = "outro"
+            a["copia_gto"] = True
+            n += 1
+    if n and out is not None:
+        out["copias_gto_ignoradas"] = n
+    return n
+
+
 def _ler_lote_com_resgate(gem, cands, contents):
     """Le o lote de anexos e, se ele falhar, cai para a leitura UM A UM.
 
@@ -3167,6 +3200,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 out["leitura_um_a_um"] = True
             leituras = (data.get("anexos") if isinstance(data, dict) else data) or []
             _marcar_origem(leituras, cands)   # carimbo de upload -> fallback de data
+            _rebaixar_copias_de_gto(leituras, out)
 
             # ── O CÓDIGO ESCOLHE a solicitação (o Gemini só LEU/transcreveu) ──────
             # ALVO DA COBERTURA — precedência explícita:
@@ -3702,7 +3736,7 @@ def _carregar_confirmados():
 
 def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_key=None,
                   review_dir=None, k_attach=0, dry_run=True, conta=None, senha_portal=None,
-                  apenas_gtos=None):
+                  apenas_gtos=None, simular_sem_anexos=False, plano_dir=None):
     """Pipeline de até 4 estágios (descoberta -> download -> decisão -> anexação).
     conta = código da conta RedeUna (plano); usa o login + convênios/segmentos dela.
     gemini_key liga a decisão. k_attach>0 liga a ANEXAÇÃO (estágio 4): auto e
@@ -3710,6 +3744,11 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
     dry_run=True só simula a anexação (loga o plano, não sobe nada)."""
     if log is None:
         log = lambda m: print(m, flush=True)
+    # SIMULACAO (10/10): refaz dias passados como se as guias estivessem vazias, para
+    # conferir o que o codigo ATUAL anexaria. So existe em dry-run — com escrita
+    # real duplicaria anexos (incidente 16/09).
+    if simular_sem_anexos and not dry_run:
+        raise ValueError("simular_sem_anexos só é permitido com dry_run=True")
     plano = PLANOS.get(conta or "")
     # Conta informada mas desconhecida = erro de chamada. Antes caía no login PADRÃO
     # em silêncio e faturava na UNIDADE ERRADA. Falha explícito.
@@ -3886,7 +3925,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 return
             _copias, _docs = _anexos_portal_split(imgs)
             g["n_gto_copias"] = len(_copias)
-            if _docs:
+            if _docs and simular_sem_anexos:
+                _t(f"[DESC] GTO {g['gto']}: {cnt} anexos no portal IGNORADOS (simulacao)")
+            elif _docs:
                 # Os exames tambem para a guia PULADA. Sem isso a coluna "Exames" do
                 # relatorio saia vazia justamente nas FATURADAS — "nenhum" em 27 de 27
                 # no dia 24/07 — e a operadora nao tinha como conferir o que foi
@@ -4366,6 +4407,16 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 if dry_run:
                     item["anexado"] = "DRY"
                     _t(f"[ANEX{wid}] [DRY] GTO {item['gto']} ANEXARIA {len(arquivos)}: {nomes}")
+                    if plano_dir:
+                        # simulacao: guarda o que SERIA anexado (a pasta temporaria
+                        # e apagada no fim) para conferir o conteudo depois
+                        _pd = os.path.join(plano_dir, str(item["gto"]))
+                        os.makedirs(_pd, exist_ok=True)
+                        for _a in arquivos:
+                            try:
+                                shutil.copy2(_a, _pd)
+                            except OSError:
+                                pass
                 else:
                     try:
                         # _refrescar: se a lista se perder no meio da rodada (o
@@ -4832,6 +4883,10 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             "anexar_solic": bool(dec.get("plano_solicitacao")),
             "justificativa": dec.get("justificativa"),
             "gto_exames": dec.get("gto_exames", []),
+            "gto_exames_desta": dec.get("gto_exames_desta", []),
+            # campo 17/18 da guia: a simulacao confere o dentista do pedido contra eles
+            "dentista_gto": dec.get("dentista_gto") or "",
+            "gto_texto": str(dec.get("gto_texto") or "")[:3000],
             "candidatos": dec.get("candidatos", []),
             "solic_idx": dec.get("solic_idx"),
             "gemini": {k: d.get(k) for k in ("tipo", "legivel", "paciente_lido",

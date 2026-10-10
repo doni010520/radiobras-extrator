@@ -41,7 +41,7 @@ Você é um LEITOR: transcreva, não decida. Para CADA anexo devolva:
 Se o anexo for a GTO, inclua também:
 - "profissional_solicitante": nome do campo 17 "Nome do Profissional Solicitante"
   (o DENTISTA; NÃO é o beneficiário, o titular nem o responsável)
-- "conselho_numero": número do campo 19 (CRO do solicitante), só dígitos
+- "conselho_numero": número do campo 18 "Número no CRO" (do solicitante), só dígitos
 - "campo_49": texto do campo 49 (Observação/Justificativa), "" se vazio
 Responda APENAS JSON: {"anexos": [ ... ]}"""
 
@@ -86,7 +86,7 @@ def _parente(dent, paciente):
     return bool(sob(dent) & sob(paciente))
 
 
-def veredito(paciente, exames_gto, leituras, categoria=None):
+def veredito(paciente, exames_gto, leituras, categoria=None, gto_ref=None):
     """(status, motivos). status: OK | FALTA | ERRADO | INCERTO.
 
     ERRADO = algo anexado que nao devia (documento de outra pessoa, pedido de outro
@@ -96,11 +96,18 @@ def veredito(paciente, exames_gto, leituras, categoria=None):
     motivos_err, motivos_falta, motivos_inc = [], [], []
     ls = [l for l in (leituras or []) if isinstance(l, dict)]
     gto = next((l for l in ls if l.get("tipo") == "gto"), {})
-    dent_gto = str(gto.get("profissional_solicitante") or "")
-    if _parente(dent_gto, paciente):
-        dent_gto = ""                    # leitura do campo 17 nao confiavel
-    cro_gto = re.sub(r"\D", "", str(gto.get("conselho_numero") or ""))
-    gto_txt = f"{dent_gto} {cro_gto}"
+    if gto_ref is not None:
+        # referencia DA ESTEIRA (texto da guia, campo 17/18 e campo 49): mais firme
+        # que a leitura da imagem da GTO. Usada na simulacao, onde a GTO nao esta
+        # entre os arquivos.
+        dent_gto, gto_txt = str(gto_ref.get("dentista") or ""), str(gto_ref.get("texto") or "")
+        gto = dict(gto, campo_49=gto_ref.get("campo_49") or gto.get("campo_49"))
+    else:
+        dent_gto = str(gto.get("profissional_solicitante") or "")
+        if _parente(dent_gto, paciente):
+            dent_gto = ""                    # leitura do campo 17 nao confiavel
+        cro_gto = re.sub(r"\D", "", str(gto.get("conselho_numero") or ""))
+        gto_txt = f"{dent_gto} {cro_gto}"
 
     for l in ls:
         p = str(l.get("paciente") or "").strip()
