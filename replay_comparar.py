@@ -69,13 +69,12 @@ def diferencas(base: dict, atual: dict) -> list:
 
 
 if __name__ == "__main__":
-    atual = tocar_todos()
-    arq = os.path.join(rh.PASTA_PADRAO, "baseline.json")
     if "--fidelidade" in sys.argv:
         dif = fidelidade()
-        print("
-".join(dif) if dif else "FIEL: a repeticao reproduz a rodada real")
+        print("\n".join(dif) if dif else "FIEL: a repeticao reproduz a rodada real")
         sys.exit(1 if dif else 0)
+    atual = tocar_todos()
+    arq = os.path.join(rh.PASTA_PADRAO, "baseline.json")
     if "--baseline" in sys.argv:
         json.dump(atual, open(arq, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         print(f"linha de base gravada: {sum(len(v) for v in atual.values())} guias "
