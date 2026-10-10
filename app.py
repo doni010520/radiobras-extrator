@@ -34,7 +34,6 @@ from extrator_pacientes_analitico import (
 )
 from extrator_arquivos import processar_dia
 from ciclo_completo import ciclo_dia
-from fechar_dia import fechar_dia
 import db
 import planos as planos_mod
 
@@ -310,69 +309,6 @@ def _run_ciclo_job(job_id: str, data: str, convenios: list, segmentos: list) -> 
     except Exception as exc:
         tb = traceback.format_exc()
         app.logger.error("Erro no ciclo %s:\n%s", job_id, tb)
-        with _jobs_lock:
-            _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
-    finally:
-        for _r in _reservadas:
-            _esteira_liberar(data, _r, job_id)
-
-
-def _run_fechar_job(job_id: str, data: str, dry_run: bool, plano: str = "odontoprev") -> None:
-    """Job do 'Fechar dia' (orquestrador completo fechar_dia.py)."""
-    with _jobs_lock:
-        _jobs[job_id]["status"] = "running"
-
-    def progress(msg: str) -> None:
-        with _jobs_lock:
-            _jobs[job_id].setdefault("log", []).append(str(msg))
-
-    # Registra a execução no histórico (não bloqueia se o banco falhar).
-    run_id = None
-    try:
-        run_id = db.criar_run(data, dry_run, plano=plano)
-    except Exception as e:
-        app.logger.error("Falha ao criar run no banco: %s", e)
-    with _jobs_lock:
-        _jobs[job_id]["run_id"] = run_id
-
-    def _log_texto():
-        with _jobs_lock:
-            return "\n".join(_jobs[job_id].get("log", []))
-
-    # TERCEIRO caminho que anexa (fechar_dia, pipeline antigo). Mesma trava dos
-    # outros dois — em execução REAL não pode coincidir com /faturar/run, o cron
-    # ou /ciclo_dia no mesmo dia.
-    _reservadas = []
-    if not dry_run:
-        for _c in list(PLANOS) + [""]:
-            if _esteira_reservar(data, _c, job_id):
-                _reservadas.append(_c)
-            else:
-                for _r in _reservadas:
-                    _esteira_liberar(data, _r, job_id)
-                msg = ("Já existe um faturamento em andamento para esse dia — "
-                       "aguarde terminar.")
-                with _jobs_lock:
-                    _jobs[job_id].update({"status": "error", "error": msg})
-                return
-    try:
-        relatorio = fechar_dia(data, CONVENIOS, SEGMENTOS,
-                               dry_run=dry_run, progress_cb=progress)
-        if run_id is not None:
-            try:
-                db.finalizar_run_ok(run_id, relatorio, log_texto=_log_texto())
-            except Exception as e:
-                app.logger.error("Falha ao salvar run %s: %s", run_id, e)
-        with _jobs_lock:
-            _jobs[job_id].update({"status": "done", "relatorio": relatorio})
-    except Exception as exc:
-        tb = traceback.format_exc()
-        app.logger.error("Erro no fechar_dia %s:\n%s", job_id, tb)
-        if run_id is not None:
-            try:
-                db.finalizar_run_erro(run_id, str(exc) + "\n\n" + tb, log_texto=_log_texto())
-            except Exception:
-                pass
         with _jobs_lock:
             _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
     finally:
@@ -1454,11 +1390,6 @@ def home():
     """Tela principal — Dashboard (com 'Executar Agora')."""
     return render_template("dashboard.html")
 
-
-@app.route("/fechar-simples")
-def fechar_simples():
-    """Tela enxuta de 'Fechar o dia' (fallback)."""
-    return render_template("fechar.html")
 
 
 @app.route("/gtos")
@@ -3192,55 +3123,6 @@ def api_diag():
     return jsonify(diag)
 
 
-@app.route("/fechar", methods=["POST"])
-def fechar_route():
-    """Inicia o fechamento do dia (download + anexo no OdontoPrev). Assíncrono."""
-    data = request.form.get("data", "").strip()
-    plano = (request.form.get("plano", "") or "odontoprev").strip()
-    # 'simular' = dry-run (não anexa, só mostra o que faria)
-    dry_run = request.form.get("simular", "").lower() in ("1", "true", "on", "yes")
-    if not data:
-        return jsonify({"error": "Informe o dia (DD/MM/AAAA)."}), 400
-    if not re.match(r"^\d{2}/\d{2}/\d{4}$", data):
-        return jsonify({"error": "Data inválida. Use DD/MM/AAAA."}), 400
-    if not planos_mod.plano_ativo(plano):
-        return jsonify({"error": f"O plano '{planos_mod.nome_plano(plano)}' ainda não "
-                                 "está configurado para automação."}), 400
-    # /fechar só sabe rodar o fluxo do OdontoPrev (fechar_dia). Plano com outro handler
-    # (ex.: Hapvida) NUNCA pode cair aqui — rodaria o robô do OdontoPrev para ele.
-    if (planos_mod.get_plano(plano) or {}).get("handler") != "fechar_dia":
-        return jsonify({"error": f"O plano '{planos_mod.nome_plano(plano)}' tem fluxo "
-                                 "próprio e não roda pelo fechamento do OdontoPrev."}), 400
-
-    job_id = str(uuid.uuid4())[:8]
-    _purgar_jobs(_jobs, _jobs_lock)
-    with _jobs_lock:
-        _jobs[job_id] = {"status": "queued", "log": [], "plano": plano}
-    threading.Thread(
-        target=_run_fechar_job, args=(job_id, data, dry_run, plano), daemon=True
-    ).start()
-    return jsonify({"job_id": job_id, "dry_run": dry_run})
-
-
-@app.route("/fechar/status/<job_id>")
-def fechar_status(job_id: str):
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-    if not job:
-        return jsonify({"error": "Job não encontrado."}), 404
-    resp: dict = {"status": job["status"], "log": job.get("log", [])}
-    resp["run_id"] = job.get("run_id")
-    if job["status"] == "error":
-        # NÃO vaza o traceback/erro técnico pro usuário — só uma mensagem amigável
-        # + um código (run_id) p/ a equipe achar os detalhes nos logs (DB/diag).
-        resp["error"] = "Não foi possível concluir o processamento."
-        resp["error_code"] = str(job.get("run_id") or job_id)
-    if job["status"] == "done":
-        rel = job.get("relatorio", {})
-        resp["resumo"] = rel.get("resumo", {})
-        resp["itens"] = rel.get("itens", [])
-        resp["dry_run"] = rel.get("dry_run", False)
-    return jsonify(resp)
 
 
 @app.route("/gerar", methods=["POST"])

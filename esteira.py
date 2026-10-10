@@ -38,7 +38,32 @@ from extrator_odontoprev import (
     consultar_periodo, listar_gtos, abrir_gto, _anexos_nomes, _anexos_count,
     normaliza_nome, upload_arquivos, _odo_requests_proxies, ler_dados_gto,
 )
-from fechar_dia import _prefixo_casa, _ja_anexado_por_nos
+# Vieram de fechar_dia.py (pipeline antigo, removido na Fase 2 em 10/10). A lista de
+# geracao e a DELE, diferente de _GERACAO abaixo (tem SOBRINHA, II, III, IV): mantida
+# para nao mudar comportamento; unificar e decisao da Fase 3 (identidade).
+_GERACAO_PREFIXO = {"JUNIOR", "JR", "FILHO", "FILHA", "NETO", "NETA", "SOBRINHO",
+                    "SOBRINHA", "SEGUNDO", "TERCEIRO", "II", "III", "IV"}
+
+
+def _prefixo_casa(a_norm: str, b_norm: str) -> bool:
+    """True se um nome normalizado é prefixo (na MESMA ordem) do outro — ex.:
+    'MANUELA LOPES DA SILVA' ⊂ 'MANUELA LOPES DA SILVA RAMOS'. Exige o nome curto
+    ter >=2 tokens e ser prefixo estrito do longo (não casa diferença no meio).
+    NÃO casa quando o excedente é marcador de geração (JUNIOR/FILHO/NETO/...)."""
+    ta, tb = (a_norm or "").split(), (b_norm or "").split()
+    longo, curto = (ta, tb) if len(ta) >= len(tb) else (tb, ta)
+    if not (len(curto) >= 2 and len(longo) > len(curto) and longo[:len(curto)] == curto):
+        return False
+    return not (set(longo[len(curto):]) & _GERACAO_PREFIXO)
+
+
+def _ja_anexado_por_nos(nomes) -> bool:
+    """True se a GTO já tem NOSSOS arquivos: pelo menos um LAUDO_* e um ENTREGA_*.
+    Nomes deterministas da automação (prova de autoria) — anexos manuais usam
+    outros nomes e NÃO casam aqui, então não são confundidos com 'já completa'."""
+    tem_laudo = any(str(n).upper().startswith("LAUDO_") for n in nomes)
+    tem_img = any(str(n).upper().startswith("ENTREGA_") for n in nomes)
+    return tem_laudo and tem_img
 from extrair_anexos_dia import anexos_do_paciente, anexos_por_cpf, resolver_anexos
 from extrair_anexos_dia import (buscar_cards_por_nascimento, _candidatos_por_nascimento,
                                 _escolher_candidato_com_exame)

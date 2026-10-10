@@ -2,7 +2,7 @@
 planos.py — Registro dos planos/convênios.
 
 Cada plano tem seu PRÓPRIO portal, login e fluxo de anexo. Hoje só o OdontoPrev
-(REDE UNNA) está automatizado (handler="fechar_dia"). Os demais ficam registrados
+(REDE UNNA) está automatizado (handler="esteira"). Os demais ficam registrados
 e aparecem no dashboard como "Não configurado" até a automação de cada um ser
 construída — aí é só marcar ativo=True e apontar o handler.
 
@@ -16,7 +16,7 @@ PLANOS = [
         "slug": "odontoprev",
         "nome": "REDE UNNA / OdontoPrev",
         "ativo": True,
-        "handler": "fechar_dia",        # automação real existente
+        "handler": "esteira",           # automação real existente (esteira.py, /faturar)
         "portal": "credenciado.odontoprev.com.br",
     },
     # ── Demais planos (automação a construir; aparecem como 'Não configurado') ──
