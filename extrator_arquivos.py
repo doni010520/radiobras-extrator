@@ -5,24 +5,17 @@ Porta a logica de _entrega.py e _laudos_neuza.py — sem valores chumbados.
 """
 
 import hashlib
-import io
-import json
 import os
 import re
-import shutil
 import time
-import zipfile
-from datetime import datetime
 
 import cv2
 import numpy as np
 import requests
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
 
 from extrator_pacientes_analitico import (
     BASE_URL as BASE,
-    get_credentials,
     parse_html_to_df,
     post_relatorio,
     resolve_tokens,
@@ -113,25 +106,6 @@ def _tentativas_nome(nome: str) -> list:
     return [" ".join(toks[:n]) for n in range(len(toks), 1, -1)] or [toks[0]]
 
 
-def parse_groups(html: str) -> dict:
-    """
-    Retorna {study_tail: desc}.
-    Porta direta de _entrega.py: associa cada studyUID ao data-desc mais proximo anterior.
-    """
-    events = []
-    for m in re.finditer(r'data-desc="([^"]+)"', html):
-        events.append((m.start(), "desc", m.group(1)))
-    for m in re.finditer(r"viewer/u\?studyUID=[\d.]+\.(\d+)", html):
-        events.append((m.start(), "study", m.group(1)))
-    events.sort()
-    groups: dict = {}
-    cur = None
-    for _, kind, val in events:
-        if kind == "desc":
-            cur = val
-        elif kind == "study" and cur is not None:
-            groups.setdefault(val, cur)
-    return groups
 
 
 # ── Login / sessao ────────────────────────────────────────────────────────────
@@ -184,17 +158,6 @@ def _login_playwright(pw, email: str, password: str):
     raise last or RuntimeError("Falha no login PRORADIS após 3 tentativas")
 
 
-def _is_logged_out(page) -> bool:
-    """Detecta expiracao de sessao por URL ou HTML de login no corpo."""
-    try:
-        if "login" in page.url or "checklogin" in page.url:
-            return True
-        body = page.content()
-        if 'name="username"' in body or 'name="password"' in body:
-            return True
-    except Exception:
-        pass
-    return False
 
 
 # ── Worklist ──────────────────────────────────────────────────────────────────
@@ -338,54 +301,6 @@ def _get_relatorio_analitico(page, convenios: list, segmentos: list, data: str):
     return df
 
 
-def listar_worklist_dia(page, data: str) -> list:
-    """
-    POST /ris/reports_list/get_list via JS fetch (mantem cookies de sessao).
-    Faz duas queries — study_datetime e realized — e merge os resultados.
-    Isso cobre o caso em que o relatorio analitico usa datetype=realized
-    mas o study_datetime do exame e de outro dia.
-    data: 'DD/MM/YYYY'
-    Retorna: [{accession, nome, rows_html: [str]}, ...]
-    """
-    dt_inicio = f"{data} 00:00:00"
-    dt_fim = f"{data} 23:59:59"
-
-    # Query JS que aceita tipo_data como parametro
-    _JS = """async ([inicio, fim, tipo]) => {
-        const body = new URLSearchParams({
-            'busca-por': 'name',
-            'filtro[nome]': '',
-            'filtro[exames]': 'todos',
-            'filtro[tipo_data]': tipo,
-            'optionsRadios': 'entre',
-            'filtro_data_inicio': inicio,
-            'filtro_data_fim': fim,
-        });
-        const _ac = new AbortController();
-        const _to = setTimeout(() => _ac.abort(), 25000);
-        let r;
-        try {
-            r = await fetch('/ris/reports_list/get_list', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: body.toString(),
-                credentials: 'include',
-                signal: _ac.signal
-            });
-        } finally { clearTimeout(_to); }
-        return await r.text();
-    }"""
-
-    by_acc: dict = {}
-
-    for tipo in ("study_datetime", "realized"):
-        try:
-            raw_html = page.evaluate(_JS, [dt_inicio, dt_fim, tipo])
-            _parse_worklist_html(raw_html, by_acc)
-        except Exception as e:
-            print(f"   [worklist] falha com tipo={tipo}: {e}")
-
-    return list(by_acc.values())
 
 
 # JS: busca get_list por NOME + intervalo do dia (evita teto de resultados amplos)
@@ -1411,261 +1326,3 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
 
 # ── Relatorio texto ───────────────────────────────────────────────────────────
 
-def _gerar_txt(relatorio: dict) -> str:
-    r = relatorio
-    lines = [
-        "RELATORIO DE EXTRACAO — REDE UNNA",
-        (
-            f"Periodo: {r['periodo']['de']} a {r['periodo']['ate']}"
-            f"   |   Gerado: {r['gerado_em']}"
-        ),
-        (
-            f"Pacientes: {r['resumo']['pacientes_total']}"
-            f"   |   OK: {r['resumo']['ok_completo']}"
-            f"   |   Pendentes: {r['resumo']['com_pendencia']}"
-            f"   |   Erros: {r['resumo']['com_erro']}"
-        ),
-        "-" * 60,
-    ]
-    for pac in r["pacientes"]:
-        status = pac["status"]
-        tag = f"[{status:<8}]"
-        cod = pac.get("cod_pac", pac.get("accession", ""))
-        accs = ", ".join(pac.get("accessions", []))
-        ident = f"{cod}" + (f" | exames: {accs}" if accs else "")
-        lines.append(f"{tag} {pac['nome']} ({ident})")
-        qtd = pac["imagens"]["qtd"]
-        laudos_parts = []
-        for lau in pac["laudos"]:
-            tipo = "(ceph)" if "CEPH" in (lau.get("arquivo") or "") else ""
-            laudos_parts.append(f"{lau['exame']}{tipo} {lau['status']}")
-        detalhe = " | ".join([f"imagens={qtd}"] + laudos_parts)
-        lines.append(f"           {detalhe}")
-        for pend in pac.get("pendencias", []):
-            lines.append(f"           !! {pend}")
-        for nota in pac.get("notas", []):
-            lines.append(f"           -- {nota}")
-    return "\n".join(lines) + "\n"
-
-
-# ── Orquestrador principal ────────────────────────────────────────────────────
-
-def processar_dia(
-    data: str,
-    convenios: list,
-    segmentos: list,
-    progress_cb=None,
-) -> tuple:
-    """
-    Extrai imagens e laudos de todos os pacientes REDE UNNA do dia.
-    data: 'DD/MM/YYYY'
-    progress_cb: callable(msg: str) opcional.
-    Retorna: (zip_bytes: bytes, relatorio: dict)
-    """
-
-    def log(msg: str):
-        print(msg)
-        if progress_cb:
-            try:
-                progress_cb(msg)
-            except Exception:
-                pass
-
-    log(f"\n=== processar_dia {data} | {len(convenios)} convenios ===")
-    email, password = get_credentials()
-
-    # Sessao Playwright UNICA para o job inteiro: 1 login (re-login so se cair).
-    pacientes: list = []
-    resultados: list = []
-
-    job_ts = datetime.now().strftime("%Y%m%d%H%M%S")
-    zip_root = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), f"_tmp_{job_ts}"
-    )
-    os.makedirs(zip_root, exist_ok=True)
-
-    try:
-        with sync_playwright() as pw:
-            browser, ctx, page = _login_playwright(pw, email, password)
-            try:
-                # Relatorio analitico REDE UNNA (mesma sessao do login)
-                log("[A] Relatorio analitico REDE UNNA (mesma sessao)...")
-                df = _get_relatorio_analitico(page, convenios, segmentos, data)
-                if df.empty:
-                    raise ValueError(f"Nenhum paciente REDE UNNA em {data}.")
-                cod_col = "Cód. Pac" if "Cód. Pac" in df.columns else df.columns[1]
-                pedido_col = "Pedido" if "Pedido" in df.columns else df.columns[6]
-                nome_col = "Paciente" if "Paciente" in df.columns else df.columns[2]
-                conv_col = (
-                    "Convênio" if "Convênio" in df.columns
-                    else (df.columns[5] if len(df.columns) > 5 else None)
-                )
-
-                def _conv_unidade(texto: str) -> str:
-                    """Normaliza a célula 'Convênio' para o nome da unidade selecionada
-                    (ex.: 'REDE UNNA - CENTRO / PLANO X' -> 'REDE UNNA - CENTRO')."""
-                    t = (texto or "").strip()
-                    up = t.upper()
-                    for c in convenios:
-                        if c.upper() in up:
-                            return c
-                    return t.split(" / ")[0].strip() or "SEM CONVENIO"
-
-                # Agrupar por Cod. Pac (um paciente -> N exames/accessions)
-                by_cod: dict = {}
-                for _, row in df.iterrows():
-                    cod = str(row[cod_col]).strip()
-                    acc = str(row[pedido_col]).strip()
-                    nome = str(row[nome_col]).strip()
-                    conv = _conv_unidade(str(row[conv_col])) if conv_col else ""
-                    if not cod:
-                        cod = acc  # chave de fallback
-                    if cod not in by_cod:
-                        by_cod[cod] = {
-                            "cod_pac": cod, "nome": nome, "accessions": [],
-                            "convenio": conv,
-                        }
-                    if acc and acc not in by_cod[cod]["accessions"]:
-                        by_cod[cod]["accessions"].append(acc)
-                    if len(nome) > len(by_cod[cod]["nome"]):
-                        by_cod[cod]["nome"] = nome
-                    if conv and not by_cod[cod].get("convenio"):
-                        by_cod[cod]["convenio"] = conv
-                pacientes.extend(by_cod.values())
-                pacientes.sort(key=lambda x: x["cod_pac"])
-                log(f"   {len(pacientes)} pacientes unicos (agrupados por Cod. Pac).")
-
-                # Processar em lotes na MESMA sessao (lote = escopo da worklist + log)
-                i = 0
-                while i < len(pacientes):
-                    lote = pacientes[i: i + BATCH_SIZE]
-                    log(f"\n[LOTE {i // BATCH_SIZE + 1}] {i + 1}–{i + len(lote)} / {len(pacientes)}")
-
-                    try:
-                        if _is_logged_out(page):
-                            log("    [re-login]")
-                            try:
-                                browser.close()
-                            except Exception:
-                                pass
-                            browser, ctx, page = _login_playwright(pw, email, password)
-                        worklist = listar_worklist_por_pacientes(
-                            page, data, [p["nome"] for p in lote]
-                        )
-                        log(f"   Worklist: {len(worklist)} accessions")
-                    except Exception as e:
-                        log(f"   Falha worklist: {e}")
-                        for pac in lote:
-                            resultados.append({
-                                "nome": pac["nome"],
-                                "cod_pac": pac["cod_pac"],
-                                "convenio": pac.get("convenio", ""),
-                                "accessions": pac["accessions"],
-                                "pasta": f"{slug(pac['nome'])}_{pac['cod_pac']}",
-                                "status": "ERRO",
-                                "imagens": {"qtd": 0, "arquivos": []},
-                                "laudos": [],
-                                "pendencias": [f"falha worklist: {e}"],
-                                "notas": [],
-                            })
-                        i += BATCH_SIZE
-                        continue
-
-                    for pac in lote:
-                        log(f"  -> {pac['nome']} ({pac['cod_pac']})")
-                        retries = 0
-                        while retries <= MAX_RETRIES:
-                            try:
-                                if _is_logged_out(page):
-                                    log("    [re-login]")
-                                    try:
-                                        browser.close()
-                                    except Exception:
-                                        pass
-                                    browser, ctx, page = _login_playwright(pw, email, password)
-                                    worklist = listar_worklist_por_pacientes(
-                                        page, data, [p["nome"] for p in lote]
-                                    )
-
-                                res = _processar_paciente(page, ctx, pac, worklist, zip_root, data)
-                                resultados.append(res)
-                                log(
-                                    f"    {res['status']} imgs={res['imagens']['qtd']}"
-                                    f" laudos={len(res['laudos'])}"
-                                )
-                                break
-
-                            except Exception as e:
-                                retries += 1
-                                log(f"    tentativa {retries} falhou: {e}")
-                                if retries > MAX_RETRIES:
-                                    resultados.append({
-                                        "nome": pac["nome"],
-                                        "cod_pac": pac["cod_pac"],
-                                        "convenio": pac.get("convenio", ""),
-                                        "accessions": pac["accessions"],
-                                        "pasta": f"{slug(pac['nome'])}_{pac['cod_pac']}",
-                                        "status": "ERRO",
-                                        "imagens": {"qtd": 0, "arquivos": []},
-                                        "laudos": [],
-                                        "pendencias": [
-                                            f"erro apos {MAX_RETRIES} tentativas: {e}"
-                                        ],
-                                        "notas": [],
-                                    })
-                                else:
-                                    time.sleep(3)
-                    i += BATCH_SIZE
-            finally:
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-
-        # C: relatorio
-        ok = sum(1 for r in resultados if r["status"] == "OK")
-        pend = sum(1 for r in resultados if r["status"] == "PENDENTE")
-        erros = sum(1 for r in resultados if r["status"] == "ERRO")
-
-        relatorio = {
-            "gerado_em": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "periodo": {"de": data, "ate": data},
-            "convenios": convenios,
-            "resumo": {
-                "pacientes_total": len(resultados),
-                "ok_completo": ok,
-                "com_pendencia": pend,
-                "com_erro": erros,
-            },
-            "pacientes": resultados,
-        }
-        rel_json = json.dumps(relatorio, ensure_ascii=False, indent=2)
-        rel_txt = _gerar_txt(relatorio)
-
-        # D: ZIP em memoria
-        log("\n[ZIP] Empacotando...")
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("relatorio.json", rel_json.encode("utf-8"))
-            zf.writestr("RELATORIO.txt", rel_txt.encode("utf-8"))
-            for res in resultados:
-                pasta_path = os.path.join(zip_root, res["pasta"])
-                if not os.path.isdir(pasta_path):
-                    continue
-                # Agrupar no ZIP por unidade/convênio: <convenio>/<paciente>/<arquivo>
-                conv_dir = slug(res.get("convenio") or "sem_convenio") or "sem_convenio"
-                for fname in sorted(os.listdir(pasta_path)):
-                    fpath = os.path.join(pasta_path, fname)
-                    if os.path.isfile(fpath):
-                        zf.write(
-                            fpath,
-                            arcname=os.path.join(conv_dir, res["pasta"], fname),
-                        )
-
-        buf.seek(0)
-        zip_bytes = buf.getvalue()
-        log(f"[OK] ZIP montado ({len(zip_bytes):,} bytes)")
-        return zip_bytes, relatorio
-
-    finally:
-        shutil.rmtree(zip_root, ignore_errors=True)

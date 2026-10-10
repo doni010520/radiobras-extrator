@@ -25,15 +25,6 @@ from flask import (Flask, jsonify, render_template, request, send_file,
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from extrator_pacientes_analitico import (
-    discover_tokens_and_cookies,
-    get_credentials,
-    parse_html_to_df,
-    post_relatorio,
-    resolve_tokens,
-)
-from extrator_arquivos import processar_dia
-from ciclo_completo import ciclo_dia
 import db
 import planos as planos_mod
 
@@ -199,7 +190,7 @@ def usuarios_ativo(uid: int):
     return jsonify({"ok": True})
 
 # Escopo REDE UNNA — definido em config.py (evita import circular).
-from config import CONVENIOS, SEGMENTOS, PLANOS, PLANOS_INATIVOS
+from config import PLANOS, PLANOS_INATIVOS
 
 # Inicializa o banco (cria tabelas se não existirem). Falha não derruba o app.
 try:
@@ -249,71 +240,8 @@ def _purgar_jobs(store, lock=None, ttl=_JOB_TTL_S):
 
 
 
-def _run_job(job_id: str, data: str, convenios: list, segmentos: list) -> None:
-    with _jobs_lock:
-        _jobs[job_id]["status"] = "running"
-
-    def progress(msg: str) -> None:
-        with _jobs_lock:
-            _jobs[job_id].setdefault("log", []).append(str(msg))
-
-    try:
-        zip_bytes, relatorio = processar_dia(data, convenios, segmentos, progress_cb=progress)
-        # O ZIP do dia INTEIRO ficava na RAM até o restart do processo (o job store
-        # nunca era limpo). Vai pro disco; o job guarda só o caminho.
-        import tempfile
-        fd, zpath = tempfile.mkstemp(prefix="_zipdia_", suffix=".zip")
-        with os.fdopen(fd, "wb") as f:
-            f.write(zip_bytes)
-        del zip_bytes
-        with _jobs_lock:
-            _jobs[job_id].update(
-                {"status": "done", "zip_path": zpath, "relatorio": relatorio}
-            )
-    except Exception as exc:
-        tb = traceback.format_exc()
-        app.logger.error("Erro no job %s:\n%s", job_id, tb)
-        with _jobs_lock:
-            _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
 
 
-def _run_ciclo_job(job_id: str, data: str, convenios: list, segmentos: list) -> None:
-    with _jobs_lock:
-        _jobs[job_id]["status"] = "running"
-
-    def progress(msg: str) -> None:
-        with _jobs_lock:
-            _jobs[job_id].setdefault("log", []).append(str(msg))
-
-    # /ciclo_dia ANEXA de verdade (ciclo_dia tem dry_run=False por padrão e a rota
-    # não passa o parâmetro). É um SEGUNDO caminho de escrita, então precisa da
-    # mesma trava da esteira — senão roda junto com /faturar/run ou com o cron no
-    # mesmo dia e sobem 2x14 Chromium (o crash-loop conhecido). Reserva o dia
-    # INTEIRO (todas as contas) porque o ciclo varre o dia, não uma unidade.
-    _reservadas = []
-    for _c in list(PLANOS) + [""]:
-        if _esteira_reservar(data, _c, job_id):
-            _reservadas.append(_c)
-        else:
-            for _r in _reservadas:
-                _esteira_liberar(data, _r, job_id)
-            msg = ("Já existe um faturamento em andamento para esse dia — "
-                   "aguarde terminar antes de rodar o ciclo.")
-            with _jobs_lock:
-                _jobs[job_id].update({"status": "error", "error": msg})
-            return
-    try:
-        relatorio = ciclo_dia(data, convenios, segmentos, progress_cb=progress)
-        with _jobs_lock:
-            _jobs[job_id].update({"status": "done", "relatorio": relatorio})
-    except Exception as exc:
-        tb = traceback.format_exc()
-        app.logger.error("Erro no ciclo %s:\n%s", job_id, tb)
-        with _jobs_lock:
-            _jobs[job_id].update({"status": "error", "error": str(exc), "traceback": tb})
-    finally:
-        for _r in _reservadas:
-            _esteira_liberar(data, _r, job_id)
 
 
 def _run_glosa_job(job_id: str, dia: str, contas: list, checar: bool,
@@ -1856,11 +1784,6 @@ def portal_testar():
     return jsonify({"ok": ok, "msg": msg})
 
 
-@app.route("/relatorio")
-def index():
-    """Tela antiga (relatório analítico xlsx + download ZIP)."""
-    return render_template("index.html", convenios=CONVENIOS, segmentos=SEGMENTOS)
-
 
 # ── Relatório de execução (visual + PDF) ───────────────────────────────────────
 # Cada status vira um grupo visual, com rótulo, cor e o "porquê" determinístico.
@@ -2769,7 +2692,6 @@ def relatorios_dia():
 
 def _rel_pend_params():
     """Como _rel_dia_params, mas com data FINAL opcional (intervalo)."""
-    from config import PLANOS
     dia, contas, data_iso, _qs = _rel_dia_params()
     fim_iso = (request.args.get("data_fim") or "").strip()
     dia_fim = ""
@@ -3125,167 +3047,15 @@ def api_diag():
 
 
 
-@app.route("/gerar", methods=["POST"])
-def gerar():
-    date_from = request.form.get("date_from", "").strip()
-    date_to = request.form.get("date_to", "").strip()
-    selected_convenios = request.form.getlist("convenios")
-    selected_segmentos = request.form.getlist("segmentos")
-
-    if not date_from or not date_to:
-        return jsonify({"error": "Informe o período."}), 400
-    if not selected_convenios:
-        return jsonify({"error": "Selecione ao menos um convênio."}), 400
-    if not selected_segmentos:
-        return jsonify({"error": "Selecione ao menos um segmento."}), 400
-
-    try:
-        email, password = get_credentials()
-        convenio_map, segmento_map, cookies = discover_tokens_and_cookies(email, password)
-        insurance_tokens = resolve_tokens(selected_convenios, convenio_map, "convenio")
-        segment_tokens = resolve_tokens(selected_segmentos, segmento_map, "segmento")
-
-        if not insurance_tokens:
-            return jsonify({"error": "Nenhum convênio resolvido. Verifique os nomes."}), 400
-
-        html = post_relatorio(cookies, insurance_tokens, segment_tokens, date_from, date_to)
-        df, valor_total, num_exames = parse_html_to_df(html)
-
-        if df.empty:
-            return jsonify({"warning": "Nenhum exame encontrado para o período."}), 200
-
-        buf = io.BytesIO()
-        df.to_excel(buf, index=False)
-        buf.seek(0)
-        date_tag = date_from.replace("/", "") + "_" + date_to.replace("/", "")
-        return send_file(
-            buf,
-            as_attachment=True,
-            download_name=f"pacientes_analitico_REDEUNNA_{date_tag}.xlsx",
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-    except Exception as exc:
-        tb = traceback.format_exc()
-        app.logger.error("Erro em /gerar:\n%s", tb)
-        return jsonify({"error": str(exc), "traceback": tb}), 500
 
 
-@app.route("/baixar_dia", methods=["POST"])
-def baixar_dia():
-    date_from = request.form.get("date_from", "").strip()
-    date_to = request.form.get("date_to", "").strip()
-    selected_convenios = request.form.getlist("convenios")
-    selected_segmentos = request.form.getlist("segmentos")
-
-    if not date_from or not date_to:
-        return jsonify({"error": "Informe o período."}), 400
-    if not selected_convenios:
-        return jsonify({"error": "Selecione ao menos um convênio."}), 400
-
-    # Usar date_from como data do dia (dia único)
-    job_id = str(uuid.uuid4())[:8]
-    _purgar_jobs(_jobs, _jobs_lock)
-    with _jobs_lock:
-        _jobs[job_id] = {"status": "queued", "log": []}
-
-    thread = threading.Thread(
-        target=_run_job,
-        args=(job_id, date_from, selected_convenios, selected_segmentos),
-        daemon=True,
-    )
-    thread.start()
-    return jsonify({"job_id": job_id})
 
 
-@app.route("/baixar_dia/status/<job_id>")
-def baixar_dia_status(job_id: str):
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-    if not job:
-        return jsonify({"error": "Job não encontrado."}), 404
-
-    resp: dict = {"status": job["status"], "log": job.get("log", [])}
-    if job["status"] == "error":
-        resp["error"] = job.get("error", "")
-    if job["status"] == "done":
-        resp["resumo"] = job.get("relatorio", {}).get("resumo", {})
-    return jsonify(resp)
-
-
-@app.route("/baixar_dia/resultado/<job_id>")
-def baixar_dia_resultado(job_id: str):
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-    if not job:
-        return jsonify({"error": "Job não encontrado."}), 404
-    if job["status"] != "done":
-        return jsonify({"error": "Job ainda não concluído."}), 400
-
-    zpath = job.get("zip_path")
-    if not zpath or not os.path.exists(zpath):
-        return jsonify({"error": "Arquivo expirado — rode a extração de novo."}), 410
-    data_tag = (
-        job.get("relatorio", {}).get("periodo", {}).get("de", "").replace("/", "")
-    )
-    filename = f"arquivos_REDEUNNA_{data_tag}.zip"
-    return send_file(zpath, as_attachment=True, download_name=filename,
-                     mimetype="application/zip")
-
-
-@app.route("/ciclo_dia", methods=["POST"])
-def ciclo_dia_route():
-    # DESATIVADA em 25/07 pela auditoria. Esta rota ANEXAVA DE VERDADE (a chamada
-    # não passava dry_run e o padrão de ciclo_dia() é False), com um clique, para
-    # qualquer usuário logado — e SEM NENHUMA das guardas que o pipeline principal
-    # tem: não lia os exames da GTO, não filtrava exame PARTICULAR (subia a pasta
-    # inteira), não conferia o nº da guia nem o nome do paciente, não exigia
-    # solicitação/justificativa e não gravava nada no banco.
-    # ciclo_completo.py não é alterado desde 12/06 — nenhuma correção chegou nele.
-    # É redundante: /faturar (esteira) e FECHAR DIA fazem o mesmo COM as guardas.
-    return jsonify({
-        "error": "O 'Ciclo Completo' foi desativado por segurança: ele anexava sem "
-                 "as verificações de paciente, laudo e exame particular. Use "
-                 "'Faturar dia' (/faturar), que faz o mesmo com todas as guardas."
-    }), 410
-
-    date_from = request.form.get("date_from", "").strip()
-    selected_convenios = request.form.getlist("convenios") or CONVENIOS
-    selected_segmentos = request.form.getlist("segmentos") or SEGMENTOS
-
-    if not date_from:
-        return jsonify({"error": "Informe o dia."}), 400
-
-    job_id = str(uuid.uuid4())[:8]
-    _purgar_jobs(_jobs, _jobs_lock)
-    with _jobs_lock:
-        _jobs[job_id] = {"status": "queued", "log": []}
-
-    threading.Thread(
-        target=_run_ciclo_job,
-        args=(job_id, date_from, selected_convenios, selected_segmentos),
-        daemon=True,
-    ).start()
-    return jsonify({"job_id": job_id})
-
-
-@app.route("/ciclo_dia/status/<job_id>")
-def ciclo_dia_status(job_id: str):
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-    if not job:
-        return jsonify({"error": "Job não encontrado."}), 404
-    resp: dict = {"status": job["status"], "log": job.get("log", [])}
-    if job["status"] == "error":
-        resp["error"] = job.get("error", "")
-    if job["status"] == "done":
-        resp["relatorio"] = job.get("relatorio", {})
-    return jsonify(resp)
 
 
 # ── Job store da esteira (/faturar) ───────────────────────────────────────────
 # As rotas /admin/esteira/* foram REMOVIDAS em 27/07 (auditoria). Eram a mesma
-# porta dos fundos fechada no /ciclo_dia: GET (acionável por link/prefetch), chave
+# porta dos fundos fechada no antigo /ciclo_dia (removido na Fase 2): GET (acionável por link/prefetch), chave
 # com default `rb-esteira-2026` COMMITADO em repositório público, sem checagem de
 # admin, aceitando dry=0 (anexação REAL) e sem receber `conta` — caía no
 # ODONTOPREV_USER padrão, ou seja, faturava na UNIDADE ERRADA, justamente o que o
