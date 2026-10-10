@@ -39,8 +39,9 @@ Você é um LEITOR: transcreva, não decida. Para CADA anexo devolva:
 - "data": data principal escrita no anexo, "DD/MM/AAAA" ou ""
 - "exames": exames pedidos (pedido), laudados (laudo), autorizados (gto) ou mostrados (imagem)
 Se o anexo for a GTO, inclua também:
-- "profissional_solicitante": nome do campo 17
-- "conselho_numero": número do campo 19 (CRO), só dígitos
+- "profissional_solicitante": nome do campo 17 "Nome do Profissional Solicitante"
+  (o DENTISTA; NÃO é o beneficiário, o titular nem o responsável)
+- "conselho_numero": número do campo 19 (CRO do solicitante), só dígitos
 - "campo_49": texto do campo 49 (Observação/Justificativa), "" se vazio
 Responda APENAS JSON: {"anexos": [ ... ]}"""
 
@@ -52,9 +53,37 @@ def _ex(v):
     return str(v or "")
 
 
+_ABREV = {"JR": "JUNIOR", "JUNIO": "JUNIOR", "STOS": "SANTOS", "STO": "SANTO"}
+
+
+def _toks(n):
+    from esteira import normaliza_nome
+    return [_ABREV.get(t, t) for t in normaliza_nome(n or "").split()]
+
+
 def _compat(a, b):
+    """_nomes_compat da esteira + abreviacao de papel (Jr, Stos, inicial 'G.'),
+    que la e recusa correta mas aqui nao e documento de OUTRA pessoa."""
+    from difflib import SequenceMatcher
     from esteira import _nomes_compat
-    return bool(a and b and _nomes_compat(a, b))
+    if not (a and b):
+        return False
+    if _nomes_compat(a, b):
+        return True
+    ta, tb = _toks(a), _toks(b)
+    if not ta or not tb or SequenceMatcher(None, ta[0], tb[0]).ratio() < 0.8:
+        return False
+    curto, longo = sorted((ta[1:], tb[1:]), key=len)
+    return bool(curto) and all(
+        any(u == t or (len(t) == 1 and u.startswith(t)) for u in longo) for t in curto)
+
+
+def _parente(dent, paciente):
+    """A leitura do campo 17 deu nome com sobrenome do PACIENTE: e o titular ou o
+    proprio paciente lido no lugar errado, nao o dentista."""
+    from esteira import _STOP_NOME
+    sob = lambda n: {t for t in _toks(n)[1:] if t not in _STOP_NOME and len(t) > 2}  # noqa: E731
+    return bool(sob(dent) & sob(paciente))
 
 
 def veredito(paciente, exames_gto, leituras, categoria=None):
@@ -68,6 +97,8 @@ def veredito(paciente, exames_gto, leituras, categoria=None):
     ls = [l for l in (leituras or []) if isinstance(l, dict)]
     gto = next((l for l in ls if l.get("tipo") == "gto"), {})
     dent_gto = str(gto.get("profissional_solicitante") or "")
+    if _parente(dent_gto, paciente):
+        dent_gto = ""                    # leitura do campo 17 nao confiavel
     cro_gto = re.sub(r"\D", "", str(gto.get("conselho_numero") or ""))
     gto_txt = f"{dent_gto} {cro_gto}"
 
@@ -144,11 +175,16 @@ def _ler(gem, blobs):
         contents.append(f"[anexo {i}]")
         contents.append(types.Part.from_bytes(data=b, mime_type=m))
     contents.append(_PROMPT)
-    r = gem.models.generate_content(model=esteira._GEM_MODEL, contents=contents,
-                                    config=esteira._gem_cfg())
-    t = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
-    d = json.loads(t)
-    return (d.get("anexos") if isinstance(d, dict) else d) or []
+    for tent in range(3):                # JSON cortado acontece; nova chamada resolve
+        r = gem.models.generate_content(model=esteira._GEM_MODEL, contents=contents,
+                                        config=esteira._gem_cfg())
+        t = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
+        try:
+            d = json.loads(t)
+            return (d.get("anexos") if isinstance(d, dict) else d) or []
+        except ValueError:
+            if tent == 2:
+                raise
 
 
 def auditar(dias=30, conta=None, saida=".", log=print):
@@ -167,7 +203,9 @@ def auditar(dias=30, conta=None, saida=".", log=print):
     if os.path.exists(arq):
         for ln in open(arq, encoding="utf-8"):
             try:
-                feitas.add(json.loads(ln)["gto"])
+                r0 = json.loads(ln)
+                if r0.get("status") != "NAO_AUDITADA":
+                    feitas.add(r0["gto"])
             except Exception:
                 pass
     pend = [g for g in guias if g["gto"] not in feitas]
@@ -178,8 +216,15 @@ def auditar(dias=30, conta=None, saida=".", log=print):
     with sync_playwright() as pw:
         for ct, lista in sorted(por_conta.items()):
             unid = PLANOS.get(ct, {}).get("label", ct)
-            for ini in range(0, len(lista), 60):          # relogin a cada 60 (JWT)
-                bloco = lista[ini:ini + 60]
+            sessao = {"br": None}
+
+            def _logar(dia):
+                # JWT expira no meio do bloco (~20 min): relogin quando vier 401
+                if sessao["br"]:
+                    try:
+                        sessao["br"].close()
+                    except Exception:
+                        pass
                 bearer = {"v": None}
                 br, ctx, pg = login_odonto(pw, ct, db.get_portal_senha(ct))
                 ctx.on("request", lambda r: bearer.__setitem__("v", r.headers.get("authorization"))
@@ -188,7 +233,7 @@ def auditar(dias=30, conta=None, saida=".", log=print):
                        else None)
                 try:
                     abrir_consultar_gtos(pg)
-                    consultar_periodo(pg, bloco[0]["dia"])
+                    consultar_periodo(pg, dia)
                     pg.wait_for_timeout(2500)
                 except Exception:
                     pass
@@ -196,12 +241,21 @@ def auditar(dias=30, conta=None, saida=".", log=print):
                 sess.headers.update({"Authorization": bearer["v"] or "", "User-Agent": "Mozilla/5.0",
                                      "Origin": "https://credenciado.odontoprev.com.br",
                                      "Referer": "https://credenciado.odontoprev.com.br/"})
+                sessao.update(br=br, sess=sess)
+
+            for ini in range(0, len(lista), 60):          # relogin a cada 60 (JWT)
+                bloco = lista[ini:ini + 60]
+                _logar(bloco[0]["dia"])
                 for g in bloco:
                     reg = {"gto": g["gto"], "paciente": g["paciente"], "dia": g["dia"],
                            "conta": ct, "unidade": unid, "exames_gto": g["eg"]}
                     try:
-                        r = sess.get(f"{esteira._ODO_API}/v1/gto/imagens?numeroFicha={g['gto']}",
-                                     timeout=25)
+                        url = f"{esteira._ODO_API}/v1/gto/imagens?numeroFicha={g['gto']}"
+                        r = sessao["sess"].get(url, timeout=25)
+                        if r.status_code == 401:
+                            _logar(g["dia"])
+                            r = sessao["sess"].get(url, timeout=25)
+                        sess = sessao["sess"]
                         lst = r.json() if r.status_code == 200 else None
                         if not isinstance(lst, list):
                             raise RuntimeError(f"lista de anexos HTTP {r.status_code}")
@@ -229,10 +283,10 @@ def auditar(dias=30, conta=None, saida=".", log=print):
                         f.write(json.dumps(reg, ensure_ascii=False) + "\n")
                     log(f"[{unid}] {g['gto']} {g['paciente'][:28]:28} {reg['status']}"
                         + (f" | {'; '.join(reg['motivos'])[:160]}" if reg["motivos"] else ""))
-                try:
-                    br.close()
-                except Exception:
-                    pass
+            try:
+                sessao["br"].close()
+            except Exception:
+                pass
     return arq
 
 

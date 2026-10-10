@@ -61,3 +61,26 @@ def test_justificativa_dispensa_pedido_se_campo_49_preenchido():
                     "justificativa")[0] == "OK"
     assert veredito("MARIA DA SILVA SOUZA", "panoramica", [GTO, _laudo(), IMG],
                     "justificativa")[0] == "INCERTO"
+
+
+def test_abreviacao_no_papel_nao_e_outra_pessoa():
+    for nome, papel in [("JURANDI DA SILVA BORGES JUNIOR", "Jurandi da Silva Borges Jr"),
+                        ("MICHELLE DOS SANTOS PEREIRA", "Michele dos Stos Pereira"),
+                        ("GIRLANE GONCALVES DE JESUS", "GIRLANE G. JESUS")]:
+        p = _ped(nome=papel)
+        assert veredito(nome, "panoramica", [GTO, p, _laudo(nome), dict(IMG, paciente=nome)])[0] == "OK", papel
+
+
+def test_irmao_continua_outra_pessoa():
+    s, _ = veredito("MARIA DA SILVA SOUZA", "panoramica",
+                    [GTO, _ped(), _laudo("PEDRO DA SILVA SOUZA"), IMG])
+    assert s == "ERRADO"
+
+
+def test_campo17_lido_como_parente_nao_acusa_dentista():
+    g = dict(GTO, profissional_solicitante="ALAN SANTOS PEREIRA", conselho_numero="10416")
+    s, _ = veredito("SAMUEL TRINDADE PEREIRA", "panoramica",
+                    [g, _ped(nome="Samuel Trindade Pereira", dent="Bruna Bomfim S. Dantas",
+                             cro="38836"), _laudo("SAMUEL TRINDADE PEREIRA"),
+                     dict(IMG, paciente="SAMUEL TRINDADE PEREIRA")])
+    assert s == "OK"
