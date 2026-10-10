@@ -41,8 +41,25 @@ def get_credentials_odonto():
 # proxy residencial STICKY (IP fixo durante a sessão) contorna. O PRORADIS é
 # acessado DIRETO (sem proxy) — por isso a var é ODONTO_PROXY_URL, não global.
 # Formato esperado: http://usuario:senha@host:porta
+#
+# RESERVA (10/10): aceita VARIOS, separados por virgula, em ordem de preferencia —
+# ex.: "http://127.0.0.1:1056,http://u:s@proxy-pago:porta". A saida pelo PC da
+# clinica (Tailscale) cai de madrugada e no fim de semana; com ela fora o login nem
+# chega a tela e a rodada inteira morria. O login tenta cada um; o que logou vira o
+# ATIVO e as chamadas HTTP (requests) seguem por ele (mesmo IP da sessao).
+_proxy_ativo = None
+
+
+def _odo_proxy_urls() -> list:
+    return [u.strip() for u in re.split(r"[,\s]+", os.environ.get("ODONTO_PROXY_URL") or "")
+            if u.strip()]
+
+
 def _odo_proxy_url() -> str:
-    return (os.environ.get("ODONTO_PROXY_URL") or "").strip()
+    urls = _odo_proxy_urls()
+    if _proxy_ativo in urls:
+        return _proxy_ativo
+    return urls[0] if urls else ""
 
 
 def _fresh_sessid(username: str) -> str:
@@ -64,10 +81,10 @@ def _fresh_sessid(username: str) -> str:
     return u
 
 
-def _odo_playwright_proxy():
+def _odo_playwright_proxy(url=None):
     """Dict de proxy pro Playwright (chromium.launch). None se não configurado.
     Cada chamada gera um sessid novo (IP BR fresco, sticky durante a sessao)."""
-    url = _odo_proxy_url()
+    url = _odo_proxy_url() if url is None else url
     if not url:
         return None
     p = urlparse(url)
@@ -107,9 +124,30 @@ def normaliza_nome(nome: str) -> str:
 
 # ── Login ──────────────────────────────────────────────────────────────────────
 def login_odonto(pw, user: str, password: str):
-    """Retorna (browser, ctx, page) logado no portal. Lança RuntimeError se falhar."""
+    """Retorna (browser, ctx, page) logado no portal. Lança RuntimeError se falhar.
+
+    Com mais de uma saida em ODONTO_PROXY_URL, a que nao alcanca o portal (ou nao
+    loga nas 3 tentativas) passa a vez para a seguinte. Senha recusada com o portal
+    respondendo tambem passa: o bloqueio de IP se disfarca de 'senha invalida'."""
+    global _proxy_ativo
+    saidas = _odo_proxy_urls() or [""]
+    erro = None
+    for i, url in enumerate(saidas):
+        if i:
+            print(f"[_odonto] saida {i} falhou ({str(erro)[:120]}); tentando a reserva {i+1}/{len(saidas)}",
+                  flush=True)
+        try:
+            r = _login_odonto_via(pw, user, password, url)
+            _proxy_ativo = url or None
+            return r
+        except Exception as e:
+            erro = e
+    raise erro
+
+
+def _login_odonto_via(pw, user: str, password: str, proxy_url: str):
     for tentativa in range(3):
-        _pxy = _odo_playwright_proxy()   # sessid novo por tentativa -> IP BR fresco
+        _pxy = _odo_playwright_proxy(proxy_url)   # sessid novo por tentativa -> IP BR fresco
         if _pxy:
             print(f"[_odonto] login via proxy {_pxy['server']} (tentativa {tentativa+1}/3)", flush=True)
         browser = pw.chromium.launch(
@@ -123,8 +161,15 @@ def login_odonto(pw, user: str, password: str):
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         page = ctx.new_page()
-        page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
-    
+        try:
+            page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
+        except Exception:
+            try:
+                browser.close()
+            except Exception:
+                pass
+            raise
+
         # SPA Vue/Vuetify pode hidratar devagar (sobretudo via proxy residencial).
         # Espera os campos ficarem VISIVEIS + rede ociosa ANTES de preencher; senao o
         # v-model do Vue nao captura o valor e o submit acusa "Campo obrigatorio".
