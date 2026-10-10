@@ -158,6 +158,26 @@ def _login_playwright(pw, email: str, password: str):
     raise last or RuntimeError("Falha no login PRORADIS após 3 tentativas")
 
 
+def ir_para(page, url, tentativas=3, **kw):
+    """page.goto que tolera redirecionamento em curso.
+
+    Logo apos o login o PRORADIS ainda redireciona; o goto seguinte morre com
+    "interrupted by another navigation" e a rodada inteira abortava em "Login/consulta
+    no PRORADIS falhou" (replay 05/10, 10/10). Espera a navegacao em curso assentar e
+    tenta de novo; qualquer outro erro sobe na hora."""
+    for t in range(tentativas):
+        try:
+            return page.goto(url, **kw)
+        except Exception as e:
+            if "interrupted by another navigation" not in str(e) or t == tentativas - 1:
+                raise
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:
+                pass
+            page.wait_for_timeout(1000)
+
+
 # Pergunta barata (70-500 ms) "a sessao esta viva?": /ris/patients exige login;
 # deslogado o PRORADIS redireciona para /login, e com redirect:'manual' isso vira
 # 'opaqueredirect' sem baixar pagina nenhuma (medido 10/10).
@@ -297,7 +317,7 @@ def _get_relatorio_analitico(page, convenios: list, segmentos: list, data: str):
     # tecnica: a rodada aborta (retry + aviso) e NADA e pedido sem filtro.
     ins_toks, seg_map, conv_map = [], {}, {}
     for _tent in range(3):
-        page.goto(f"{BASE}/admin_reports", wait_until="networkidle")
+        ir_para(page, f"{BASE}/admin_reports", wait_until="networkidle")
         _time.sleep(2)
 
         # Selecionar patients_detailed_report via JS (select usa Chosen/hidden)

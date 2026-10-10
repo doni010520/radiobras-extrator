@@ -32,7 +32,7 @@ from extrator_pacientes_analitico import BASE_URL as BASE, get_credentials
 from extrator_arquivos import (
     _login_playwright, _get_relatorio_analitico,
     listar_worklist_por_pacientes, _processar_paciente,
-    sessao_proradis_ok, relogar_proradis,
+    sessao_proradis_ok, relogar_proradis, ir_para,
 )
 from extrator_odontoprev import (
     login_odonto, get_credentials_odonto, abrir_consultar_gtos,
@@ -3888,7 +3888,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             ctx = br.new_context(storage_state=state, locale="pt-BR", timezone_id="America/Sao_Paulo")
             ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
             pg = ctx.new_page()
-            pg.goto(f"{BASE}/admin_reports", wait_until="domcontentloaded", timeout=60000)
+            ir_para(pg, f"{BASE}/admin_reports", wait_until="domcontentloaded", timeout=60000)
             pg.wait_for_timeout(800)
             while True:
                 try:
@@ -3931,7 +3931,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             ctx = br.new_context(storage_state=state, locale="pt-BR", timezone_id="America/Sao_Paulo")
             ctx.set_default_timeout(45000); ctx.set_default_navigation_timeout(60000)
             pg = ctx.new_page()
-            pg.goto(f"{BASE}/admin_reports", wait_until="domcontentloaded", timeout=60000)
+            ir_para(pg, f"{BASE}/admin_reports", wait_until="domcontentloaded", timeout=60000)
             pg.wait_for_timeout(800)
             while True:
                 try:
