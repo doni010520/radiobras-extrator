@@ -79,7 +79,7 @@ def consultar_demo_repasse(page, guia) -> dict:
     out["bruto"] = _num_brl(mb.group(1)) if mb else None
     out["glosado"] = _num_brl(mg.group(1)) if mg else None
     sem_pg = "não há dados" in corpo.lower() or "nao ha dados" in corpo.lower()
-    out["tem_dados"] = bool(out["bruto"] and out["bruto"] > 0)
+    out["tem_dados"] = bool((out["bruto"] or 0) > 0 or (out["glosado"] or 0) > 0)
     out["pago"] = bool(out["tem_dados"] and not sem_pg)
     # data do repasse: procura perto de 'repasse/pagamento/crédito'
     md = re.search(r"(?:repasse|pagamento|cr[eé]dito|compet[eê]ncia)[^\d]{0,30}(\d{2}/\d{2}/\d{4})",
@@ -94,6 +94,145 @@ def consultar_demo_repasse(page, guia) -> dict:
         except Exception:
             pass
         page.wait_for_timeout(1000)
+    return out
+
+
+_GUIA_RE = re.compile(
+    r"Guia:\s*(\d+).*?Valor Liberado:\s*R\$\s*([\d\.,]+)\s*Valor Glosado:\s*R\$\s*([\d\.,]+)"
+    r"\s*(Pagamento [^\n]*)?", re.S | re.I)
+
+# Guias por consulta. O campo aceita varios numeros (chip por Enter) e a tela devolve
+# a relacao por guia. Uma consulta por guia levava 8-10s: 1.400 guias da 388336 =
+# mais de 3h, a atualizacao diaria nunca terminava (nada gravado desde 25/09) e o
+# job pendurado travava o deploy. Em lote sao ~30 consultas.
+DEMO_LOTE = 40
+
+
+def ler_demo_lote(texto: str) -> dict:
+    """Texto da tela do Demonstrativo (relacao de GTOs expandida) ->
+    {"guias": {gto: demo}, "datas_pagamento": [...]}.
+
+    demo = {tem_dados, bruto, glosado, liberado, situacao, pago, data_repasse}. bruto
+    = liberado + glosado (valor original da guia). Glosa integral vem com liberado 0:
+    antes isso virava "sem dados" e a guia glosada aparecia como AGUARDANDO (ELIANE,
+    194474509, R$ 102,22 glosados). pago/data_repasse ficam para quem chama: a tabela
+    de pagamento e do lote inteiro, nao de cada guia."""
+    from glosa_extrator import _num_brl
+    t = texto or ""
+    pag = ""
+    m = re.search(r"Data de Pagamento(.*?)(?:Os valores descritos|Clique na seta|$)", t, re.S | re.I)
+    if m:
+        pag = m.group(1)
+    datas = sorted(set(_DT_RE.findall(pag)))
+    guias = {}
+    for g, lib, glo, sit in _GUIA_RE.findall(t):
+        lib_v, glo_v = _num_brl(lib) or 0.0, _num_brl(glo) or 0.0
+        guias[g] = {"tem_dados": True, "liberado": lib_v, "glosado": glo_v,
+                    "bruto": round(lib_v + glo_v, 2), "situacao": (sit or "").strip(),
+                    "pago": False, "data_repasse": None}
+    return {"guias": guias, "datas_pagamento": datas}
+
+
+def _demo_expandir(page):
+    """Abre os paineis 'Dentista' (relacao de GTOs) que estiverem fechados."""
+    try:
+        page.evaluate("""() => document.querySelectorAll(
+            '.v-expansion-panel-header, .v-expansion-panel-title, button[aria-expanded="false"]'
+        ).forEach(h => { if (h.getAttribute('aria-expanded') !== 'true') h.click(); })""")
+    except Exception:
+        pass
+    page.wait_for_timeout(1500)
+    if "Valor Liberado" not in (page.inner_text("body") or ""):
+        try:
+            page.locator("text=Dentista").last.click()
+            page.wait_for_timeout(1500)
+        except Exception:
+            pass
+
+
+def consultar_demo_lote(page, guias) -> dict:
+    """Consulta varias guias de uma vez. Devolve o mesmo que ler_demo_lote."""
+    if not _demo_form_visivel(page):
+        _demo_voltar_ao_form(page)
+    inp = page.query_selector('input[type="text"]')
+    if not inp:
+        return {"guias": {}, "datas_pagamento": []}
+    inp.evaluate("el=>el.focus()")
+    page.wait_for_timeout(120)
+    for g in guias:
+        page.keyboard.type(str(g), delay=30)
+        page.keyboard.press("Enter")        # cada numero vira um chip
+        page.wait_for_timeout(120)
+    page.mouse.move(1100, 650); page.wait_for_timeout(150)
+    btn = _btn_por_texto(page, "CONSULTAR")
+    if btn:
+        try:
+            btn.click(timeout=6000)
+        except Exception:
+            btn.click(force=True)
+    try:
+        page.wait_for_load_state("networkidle", timeout=20000)
+    except Exception:
+        pass
+    page.wait_for_timeout(3000)
+    _demo_expandir(page)
+    r = ler_demo_lote(page.inner_text("body"))
+    _demo_voltar_ao_form(page)
+    return r
+
+
+def _demo_form_visivel(page) -> bool:
+    """Formulario na tela = botao CONSULTAR presente e sem NOVA BUSCA (tela de
+    resultado). O campo da guia nao serve de sinal: e um input de altura 0 do
+    Vuetify, nunca 'visivel'."""
+    try:
+        return bool(_btn_por_texto(page, "CONSULTAR")) and not _btn_por_texto(page, "NOVA BUSCA")
+    except Exception:
+        return False
+
+
+def _demo_voltar_ao_form(page):
+    """Volta ao formulario para o proximo lote. Com 40 guias expandidas a pagina fica
+    rolada para baixo e o NOVA BUSCA nao volta (o 2o lote saia vazio, medido 10/10):
+    sobe a pagina, clica, e se ainda assim nao voltou reabre o Demonstrativo."""
+    try:
+        page.evaluate("() => window.scrollTo(0, 0)")
+    except Exception:
+        pass
+    page.wait_for_timeout(300)
+    nb = _btn_por_texto(page, "NOVA BUSCA")
+    if nb:
+        try:
+            nb.click(timeout=6000)
+        except Exception:
+            try:
+                nb.click(force=True)
+            except Exception:
+                pass
+        page.wait_for_timeout(1200)
+    if not _demo_form_visivel(page):
+        _abrir_topo(page, "Financeiro"); _clicar_subitem(page, "DEMONSTRATIVO")
+        page.wait_for_timeout(1200)
+        page.mouse.move(1100, 400); page.mouse.click(1100, 400); page.wait_for_timeout(500)
+
+
+def _resolver_pagamento(lote_r, consultar_um) -> dict:
+    """Pagamento por guia a partir do lote. Tabela vazia: ninguem pago ainda. Uma
+    data so: todas as autorizadas do lote foram pagas nela. Mais de uma: so a
+    consulta individual diz qual data e de qual guia."""
+    datas = lote_r["datas_pagamento"]
+    out = {}
+    for g, d in lote_r["guias"].items():
+        d = dict(d)
+        if d["liberado"] > 0 and datas:
+            if len(datas) == 1:
+                d["pago"], d["data_repasse"] = True, datas[0]
+            else:
+                um = consultar_um(g) or {}
+                ds = um.get("datas_pagamento") or []
+                if len(ds) == 1:
+                    d["pago"], d["data_repasse"] = True, ds[0]
+        out[g] = d
     return out
 
 
@@ -142,14 +281,23 @@ def extrair_desfechos_conta(pw, conta, unidade, guias, dia_str, hoje=None, log=p
             _abrir_topo(page, "Financeiro"); _clicar_subitem(page, "DEMONSTRATIVO")
             page.wait_for_timeout(1200)
             page.mouse.move(1100, 400); page.mouse.click(1100, 400); page.wait_for_timeout(500)
-            for i, g in enumerate(guias, 1):
+            for i in range(0, len(guias), DEMO_LOTE):
+                bloco = guias[i:i + DEMO_LOTE]
                 try:
-                    demo = consultar_demo_repasse(page, str(g["gto"]))
-                except Exception:
-                    demo = None
-                itens.append(_mk(g, demo))
-                if i % 10 == 0 or i == len(guias):
-                    log(f"[{unidade}]   demonstrativo {i}/{len(guias)}")
+                    r = consultar_demo_lote(page, [str(g["gto"]) for g in bloco])
+                    if not r["guias"]:      # lote vazio = tela fora do lugar: refaz 1x
+                        _abrir_topo(page, "Financeiro"); _clicar_subitem(page, "DEMONSTRATIVO")
+                        page.wait_for_timeout(1200)
+                        r = consultar_demo_lote(page, [str(g["gto"]) for g in bloco])
+                    demos = _resolver_pagamento(
+                        r, lambda gt: consultar_demo_lote(page, [gt]))
+                except Exception as e:
+                    log(f"[{unidade}]   lote do demonstrativo falhou: {str(e)[:80]}")
+                    demos = {}
+                for g in bloco:
+                    itens.append(_mk(g, demos.get(str(g["gto"]))))
+                log(f"[{unidade}]   demonstrativo {min(i + DEMO_LOTE, len(guias))}/{len(guias)}"
+                    f" ({len(demos)} com dados)")
         finally:
             try:
                 b.close()
