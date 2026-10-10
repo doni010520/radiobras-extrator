@@ -118,3 +118,27 @@ def test_render_nao_gerado_e_vazio_mas_completo(tmp_path, monkeypatch):
     r = _baixar([], tmp_path, monkeypatch)
     assert r["qtd"] == 0
     assert r["completa"] is True
+
+
+# ── a impressao sai de pagina DO PRORADIS, nunca de about:blank (10/10) ────────
+# Medido 4 de 4 vezes num contexto com cookies copiados (como os trabalhadores da
+# esteira): de about:blank o POST e entre-sites, o Chrome nao manda o cookie
+# SameSite=Lax, o PRORADIS responde sem imagem (0 vistas) e grava um cookie
+# DESLOGADO; as guias seguintes do trabalhador viravam SEM_MATCH/SEM_ARQUIVOS. De
+# uma pagina do proprio PRORADIS: 6 vistas e a sessao continua logada.
+def test_impressao_parte_de_pagina_do_proradis(tmp_path, monkeypatch):
+    monkeypatch.setattr(ea, "IMG_PENDENTES_MAX_MS", 50)
+    monkeypatch.setattr(ea, "MODELO_SEM_PEDIDO_MS", 50)
+    visitadas = []
+
+    class _PopRegistra(_Pop):
+        def goto(self, url, *a, **k):
+            visitadas.append(url)
+
+    class _CtxRegistra(_Ctx):
+        def new_page(self):
+            return _PopRegistra(self)
+
+    ea.baixar_entregavel_modelo(None, _CtxRegistra([]), "study", str(tmp_path), set(), 0)
+    assert visitadas and visitadas[0].startswith(ea.BASE), visitadas
+    assert "about:blank" not in visitadas

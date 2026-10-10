@@ -1033,7 +1033,12 @@ def baixar_entregavel_modelo(page, ctx, study_id: str, out_dir: str,
     abriu = False
     try:
         p2 = ctx.new_page()
-        p2.goto("about:blank")
+        # PAGINA DO PROPRIO PRORADIS, nunca about:blank (10/10, medido 4 de 4): de
+        # about:blank o POST e entre-sites, o Chrome nao manda o cookie SameSite=Lax,
+        # o PRORADIS devolve 0 vistas e grava um cookie DESLOGADO — e as guias
+        # seguintes do trabalhador viravam SEM_MATCH/SEM_ARQUIVOS. So funcionava logo
+        # apos o login (excecao do Chrome p/ cookie com menos de 2 min).
+        p2.goto(f"{BASE}/admin_reports", wait_until="domcontentloaded", timeout=60000)
         p2.evaluate(_ent.JS_IMPRIMIR, [BASE, str(study_id)])
         abriu = True
         p2.wait_for_timeout(POPUP_WAIT_MS)
