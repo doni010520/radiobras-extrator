@@ -18,7 +18,28 @@ def tocar_um(pasta_cassete: str) -> dict:
                                   gemini_key="replay", review_dir=tempfile.mkdtemp(),
                                   k_attach=1, dry_run=True, conta=m["conta"],
                                   senha_portal="replay")
+    if c.faltas:
+        # o robo engole excecao (except Exception) e transformaria a falta em
+        # categoria "erro" calada: aqui ela derruba a comparacao.
+        raise rh.ReplayFaltando(f"{os.path.basename(pasta_cassete)}: {len(c.faltas)} "
+                                f"falta(s) na repeticao; 1a: {c.faltas[0][:300]}")
     return rh.veredito(r)
+
+
+def fidelidade(pasta: str = rh.PASTA_PADRAO) -> list:
+    """A repeticao reproduz o veredito da rodada REAL gravada? Sem isso a linha de
+    base poderia ser fiel a si mesma e infiel a producao."""
+    dif = []
+    for nome in sorted(os.listdir(pasta)):
+        p = os.path.join(pasta, nome)
+        if not os.path.isfile(os.path.join(p, "chamadas.json")):
+            continue
+        real = rh.Cassete(p).meta.get("veredito_gravacao")
+        if real is None:
+            dif.append(f"{nome}: cassete sem veredito da gravacao (regravar)")
+            continue
+        dif += diferencas({nome: real}, {nome: tocar_um(p)})
+    return dif
 
 
 def tocar_todos(pasta: str = rh.PASTA_PADRAO) -> dict:
@@ -50,6 +71,11 @@ def diferencas(base: dict, atual: dict) -> list:
 if __name__ == "__main__":
     atual = tocar_todos()
     arq = os.path.join(rh.PASTA_PADRAO, "baseline.json")
+    if "--fidelidade" in sys.argv:
+        dif = fidelidade()
+        print("
+".join(dif) if dif else "FIEL: a repeticao reproduz a rodada real")
+        sys.exit(1 if dif else 0)
     if "--baseline" in sys.argv:
         json.dump(atual, open(arq, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         print(f"linha de base gravada: {sum(len(v) for v in atual.values())} guias "

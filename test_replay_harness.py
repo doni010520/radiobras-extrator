@@ -160,3 +160,77 @@ def test_gravador_gemini_mantem_o_cliente_real_vivo(tmp_path):
     cli = rh.gemini_cliente("gravar", c, _RealClient)(api_key="k")
     vivos.clear(); gc.collect()
     assert cli.models.generate_content(model="m", contents=["x"]).text == "ok"
+
+
+# ── fidelidade (10/10): sequencia, excecoes e faltas visiveis ───────────────────
+def _cliente_real(respostas):
+    """Cliente Gemini falso que responde (ou levanta) na ordem dada."""
+    fila = list(respostas)
+
+    class _M:
+        def generate_content(self, model, contents, config=None):
+            r = fila.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return type("R", (), {"text": r})()
+
+    class _C:
+        def __init__(self, api_key=None):
+            self.models = _M()
+    return _C
+
+
+def test_mesmo_envio_com_respostas_diferentes_toca_na_mesma_ordem(tmp_path):
+    """Caso GIZELE 198092738: o mesmo envio feito 2x recebeu respostas diferentes;
+    guardar so a ultima levava a repeticao por outro caminho."""
+    c = rh.Cassete(str(tmp_path / "s"))
+    G = rh.gemini_cliente("gravar", c, _cliente_real(["primeira", "segunda"]))(api_key="k")
+    assert G.models.generate_content(model="m", contents=["x"]).text == "primeira"
+    assert G.models.generate_content(model="m", contents=["x"]).text == "segunda"
+    T = rh.gemini_cliente("tocar", c, None)(api_key="k")
+    assert T.models.generate_content(model="m", contents=["x"]).text == "primeira"
+    assert T.models.generate_content(model="m", contents=["x"]).text == "segunda"
+    with pytest.raises(rh.ReplayFaltando, match="a mais"):
+        T.models.generate_content(model="m", contents=["x"])
+
+
+def test_excecao_do_gemini_e_gravada_e_repetida(tmp_path):
+    c = rh.Cassete(str(tmp_path / "e"))
+    G = rh.gemini_cliente("gravar", c, _cliente_real([RuntimeError("503 UNAVAILABLE"), "ok"]))(api_key="k")
+    with pytest.raises(RuntimeError):
+        G.models.generate_content(model="m", contents=["x"])
+    assert G.models.generate_content(model="m", contents=["x"]).text == "ok"
+    T = rh.gemini_cliente("tocar", c, None)(api_key="k")
+    with pytest.raises(RuntimeError, match="503"):
+        T.models.generate_content(model="m", contents=["x"])
+    assert T.models.generate_content(model="m", contents=["x"]).text == "ok"
+
+
+def test_falta_fica_registrada_mesmo_se_o_robo_engolir(tmp_path):
+    c = rh.Cassete(str(tmp_path / "f"))
+    T = rh.gemini_cliente("tocar", c, None)(api_key="k")
+    try:
+        T.models.generate_content(model="m", contents=["nunca gravado", b"\x00"])
+    except rh.ReplayFaltando:
+        pass                                 # o robo engole com except Exception
+    assert len(c.faltas) == 1 and "nunca gravado" in c.faltas[0]
+
+
+def test_http_guarda_sequencia_de_retry(tmp_path):
+    c = rh.Cassete(str(tmp_path / "h"))
+    fila = [(500, b"erro"), (200, b"[]")]
+
+    class _R:
+        def __init__(self, st, ct):
+            self.status_code, self.content, self.headers = st, ct, {}
+
+    class _S:
+        def __init__(self):
+            self.headers, self.cookies, self.proxies = {}, None, {}
+        def get(self, url, **kw):
+            return _R(*fila.pop(0))
+
+    G = rh.sessao_classe("gravar", c, _S)()
+    assert G.get("u").status_code == 500 and G.get("u").status_code == 200
+    T = rh.sessao_classe("tocar", c, None)()
+    assert T.get("u").status_code == 500 and T.get("u").status_code == 200

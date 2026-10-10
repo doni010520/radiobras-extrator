@@ -22,6 +22,8 @@ class Cassete:
         self._lock = threading.Lock()
         self._arq = os.path.join(pasta, "chamadas.json")
         self._dados, self.meta = {}, {}
+        self.faltas: list = []          # tudo que a repeticao pediu e nao havia
+        self._idx: dict = {}            # posicao na sequencia de cada chave
         if os.path.exists(self._arq):
             with open(self._arq, encoding="utf-8") as f:
                 j = json.load(f)
@@ -35,7 +37,32 @@ class Cassete:
         try:
             return self._dados[costura][str(chave)]
         except KeyError:
-            raise ReplayFaltando(f"{costura}: chave nao gravada {str(chave)[:160]!r}")
+            msg = f"{costura}: chave nao gravada {str(chave)[:160]!r}"
+            self.faltas.append(msg)
+            raise ReplayFaltando(msg)
+
+    def anexar(self, costura: str, chave: str, valor) -> None:
+        """Grava mais um resultado na SEQUENCIA da chave (a mesma chamada feita de
+        novo pode ter outra resposta: retry, Gemini nao deterministico)."""
+        with self._lock:
+            self._dados.setdefault(costura, {}).setdefault(str(chave), []).append(valor)
+
+    def proximo(self, costura: str, chave: str, detalhe: str = ""):
+        """Proximo resultado da sequencia gravada. Falta ou chamada a mais: registra
+        em self.faltas (o robo engole excecao com except Exception) e levanta."""
+        k = str(chave)
+        with self._lock:
+            seq = self._dados.get(costura, {}).get(k)
+            i = self._idx.get((costura, k), 0)
+            if seq is None:
+                msg = f"{costura}: chave nao gravada {k[:80]!r} {detalhe}"
+            elif i >= len(seq):
+                msg = f"{costura}: chamada a mais ({i + 1}a de {len(seq)}) {k[:80]!r} {detalhe}"
+            else:
+                self._idx[(costura, k)] = i + 1
+                return seq[i]
+            self.faltas.append(msg)
+        raise ReplayFaltando(msg)
 
     def gravar_blob(self, dados: bytes) -> str:
         sha = hashlib.sha256(dados or b"").hexdigest()
@@ -80,6 +107,30 @@ def _forma(x, h):
             if hasattr(x, at):
                 h.update(b"A" + at.encode())
                 _forma(getattr(x, at), h)
+
+
+def descricao_envio(conteudo, _out=None) -> list:
+    """Envio ao Gemini em forma legivel para diagnostico: texto (inicio) e cada
+    arquivo pelo sha curto + tamanho. Mostra QUAL pedaco mudou numa falta."""
+    out = [] if _out is None else _out
+    if conteudo is None:
+        return out
+    if isinstance(conteudo, str):
+        out.append("T:" + conteudo[:60].replace(chr(10), " "))
+    elif isinstance(conteudo, (bytes, bytearray)):
+        out.append(f"B:{hashlib.sha256(bytes(conteudo)).hexdigest()[:10]}:{len(conteudo)}")
+    elif isinstance(conteudo, (list, tuple)):
+        for i in conteudo:
+            descricao_envio(i, out)
+    else:
+        for at in ("text", "inline_data", "data", "parts", "file_data"):
+            v = getattr(conteudo, at, None)
+            if v is not None:
+                descricao_envio(v, out)
+        mt = getattr(conteudo, "mime_type", None)
+        if mt:
+            out.append("M:" + str(mt))
+    return out
 
 
 def chave_gemini(modelo, conteudo) -> str:
@@ -173,9 +224,19 @@ def gemini_cliente(modo, cassete, real_cls):
         def generate_content(self, model=None, contents=None, config=None, **kw):
             k = chave_gemini(model, contents)
             if modo == "tocar":
-                return _Resp(cassete.tocar("gemini", k))
-            r = self._real.generate_content(model=model, contents=contents, config=config, **kw)
-            cassete.gravar("gemini", k, getattr(r, "text", None))
+                v = cassete.proximo("gemini", k,
+                                    "| envio=" + " ".join(descricao_envio(contents))[:300])
+                if "exc" in v:
+                    raise RuntimeError(v["exc"])
+                return _Resp(v["text"])
+            cassete.gravar("gemini_envio", k, descricao_envio(contents))
+            try:
+                r = self._real.generate_content(model=model, contents=contents,
+                                                config=config, **kw)
+            except Exception as e:
+                cassete.anexar("gemini", k, {"exc": f"{type(e).__name__}: {e}"})
+                raise
+            cassete.anexar("gemini", k, {"text": getattr(r, "text", None)})
             return r
 
     class _Cliente:
@@ -212,16 +273,23 @@ def sessao_classe(modo, cassete, real_cls):
             self._real = real_cls(*a, **k) if modo == "gravar" else None
             self.headers = self._real.headers if self._real else {}
             self.cookies = self._real.cookies if self._real else _Nada()
+            self.proxies = getattr(self._real, "proxies", None) if self._real else {}
 
         def _faz(self, metodo, url, **kw):
             k = _chave_http(metodo, url, kw)
             if modo == "tocar":
-                v = cassete.tocar("http", k)
+                v = cassete.proximo("http", k)
+                if "exc" in v:
+                    raise RuntimeError(v["exc"])
                 return _RespHttp(v["status"], cassete.ler_blob(v["blob"]), v["headers"])
-            r = getattr(self._real, metodo.lower())(url, **kw)
-            cassete.gravar("http", k, {"status": r.status_code,
+            try:
+                r = getattr(self._real, metodo.lower())(url, **kw)
+            except Exception as e:
+                cassete.anexar("http", k, {"exc": f"{type(e).__name__}: {e}"})
+                raise
+            cassete.anexar("http", k, {"status": r.status_code,
                                        "blob": cassete.gravar_blob(r.content),
-                                       "headers": dict(r.headers)})
+                                       "headers": dict(r.headers or {})})
             return r
 
         def get(self, url, **kw):
@@ -313,16 +381,16 @@ def instalar(modo: str, cassete: Cassete):
     def _anexos(pg, nome, cod, nascimento=None):
         k = f"{nome}|{cod}|{nascimento}"
         if tocar:
-            v = cassete.tocar("anexos_do_paciente", k)
+            v = cassete.proximo("anexos_do_paciente", k)
             if isinstance(v, dict) and v.get("_erro"):
                 raise RuntimeError(v["_erro"])
             return v
         try:
             v = orig["anexos_do_paciente"](pg, nome, cod, nascimento)
         except Exception as e:
-            cassete.gravar("anexos_do_paciente", k, {"_erro": str(e)})
+            cassete.anexar("anexos_do_paciente", k, {"_erro": str(e)})
             raise
-        cassete.gravar("anexos_do_paciente", k, v)
+        cassete.anexar("anexos_do_paciente", k, v)
         return v
 
     def _confirmados():

@@ -20,6 +20,7 @@ def gravar(conta: str, dia: str) -> str:
                                   review_dir=tempfile.mkdtemp(), k_attach=1,
                                   dry_run=True, conta=conta,
                                   senha_portal=db.get_portal_senha(conta))
+        c.meta["veredito_gravacao"] = rh.veredito(r)   # o que a rodada REAL decidiu
     print(f"[gravado] {nome}: {len(r.get('decisoes') or [])} decisao(oes)")
     return nome
 
