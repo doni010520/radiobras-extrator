@@ -651,6 +651,13 @@ def anexos_do_paciente(page, nome: str, cod: str, nascimento=None) -> list:
             n_cards_cheio = n_cards          # a 1a tentativa e sempre o nome cheio
         if href:
             break
+        # HOMONIMO NO NOME CHEIO (caso VIVIANE SANTOS SILVA 198210237, 07/10): 4 cards
+        # com o nome exato, 2 deles a mesma pessoa (28/01/1996). O laco seguia para
+        # 'VIVIANE SANTOS' (24 outras pessoas, sem as certas) e o desempate por
+        # nascimento rodava sobre ESSA tela -> "4 pacientes com o nome". Encurtar so
+        # serve quando o nome cheio nao acha ninguem; com 2+ desempata aqui.
+        if (n_cards or 0) >= 2:
+            break
 
     # PELO NUMERO DO PRONTUARIO (caso EMILI, 17/09): o nome nao resolveu, mas o
     # analitico deu o codigo REAL do paciente. So entra depois da busca por nome, que

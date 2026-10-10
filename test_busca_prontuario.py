@@ -162,3 +162,37 @@ def test_campo_que_carrega_na_segunda_tentativa_segue(monkeypatch):
     p = _PaginaSemCampo(aparece_na=2)
     p.keyboard = _Kb()
     assert ead._buscar_na_tela(p, "FULANO", "1") == {"href": "x", "n": 1}
+
+
+# ── homonimo no nome cheio: desempata NESSA tela (caso VIVIANE SANTOS SILVA, 07/10) ──
+_VIVIANES = [
+    {"href": "h-a", "nome": "VIVIANE SANTOS SILVA", "nascimento": "28/01/1996", "cod": "20210535"},
+    {"href": "h-b", "nome": "VIVIANE SANTOS SILVA", "nascimento": "28/01/1996", "cod": "20133098"},
+    {"href": "h-c", "nome": "VIVIANE SANTOS SILVA", "nascimento": "22/01/2023", "cod": "20055750"},
+    {"href": "h-d", "nome": "VIVIANE SANTOS SILVA BANDEIRA", "nascimento": "21/06/1984", "cod": "20131279"},
+]
+_OUTRAS = [{"href": "h-x", "nome": "VIVIANE SANTOS DA SILVA", "nascimento": "04/07/1983", "cod": "1"}]
+
+
+def test_homonimo_desempata_no_nome_cheio_e_une_o_cadastro_duplicado(monkeypatch):
+    import extrair_anexos_dia as ead
+    tela = {"cards": []}
+
+    def busca(page, termo, cod):
+        tela["cards"] = _VIVIANES if termo == "VIVIANE SANTOS SILVA" else _OUTRAS
+        return {"href": None, "n": len(tela["cards"])}
+    monkeypatch.setattr(ead, "_buscar_na_tela", busca)
+    monkeypatch.setattr(ead, "_cards_da_busca", lambda page: tela["cards"])
+    monkeypatch.setattr(ead, "_abrir_anexos",
+                        lambda page, href, cod: [{"id": href, "filename": f"{href}.jpg"}])
+    itens = ead.anexos_do_paciente(None, "VIVIANE SANTOS SILVA", "WL40357354", "1996-01-28")
+    assert sorted(i["id"] for i in itens) == ["h-a", "h-b"]
+
+
+def test_homonimo_sem_nascimento_continua_ambiguo(monkeypatch):
+    import pytest
+    import extrair_anexos_dia as ead
+    monkeypatch.setattr(ead, "_buscar_na_tela", lambda p, t, c: {"href": None, "n": 4})
+    monkeypatch.setattr(ead, "_cards_da_busca", lambda page: _VIVIANES)
+    with pytest.raises(ead.ProntuarioAmbiguo):
+        ead.anexos_do_paciente(None, "VIVIANE SANTOS SILVA", "WL40357354", "")
