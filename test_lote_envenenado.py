@@ -118,7 +118,8 @@ def test_lote_bom_nao_aciona_resgate():
     class _M(_Modelos):
         def generate_content(self, model=None, contents=None, config=None):
             self.chamadas_lote += 1
-            return _Resp(json.dumps({"anexos": [{"idx": 0, "tipo": "solicitacao"}]}))
+            return _Resp(json.dumps({"anexos": [{"idx": 0, "tipo": "solicitacao"},
+                                                {"idx": 1, "tipo": "gto"}]}))
     gem = _Gem(RuntimeError("x")); gem.models = _M(RuntimeError("x"))
     data, um_a_um = esteira._ler_lote_com_resgate(gem, _cands(2), _contents(2))
     assert um_a_um is False

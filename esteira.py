@@ -1203,6 +1203,61 @@ def _reler_exames_focado(gem, cands, leituras, nome_gto):
             continue
 
 
+
+# Releitura SO do carimbo (09-10/10). Sem nome esperado no texto: sugerir o nome
+# induz o modelo a "ver" o que se sugere (mesmo cuidado de _RELEITURA_PROMPT).
+_CARIMBO_PROMPT = """Este anexo é um PEDIDO de exames odontológicos. Leia APENAS o CARIMBO
+do dentista que assinou o pedido.
+
+Atenção:
+- O carimbo pode estar torto, apagado ou de CABEÇA PARA BAIXO: gire mentalmente e leia.
+- NÃO confunda o carimbo com o TIMBRE impresso da clínica/consultório (cabeçalho ou
+  rodapé do papel). O carimbo é a marca de tinta perto da assinatura, com o nome do
+  profissional e o número do CRO.
+- Transcreva o que está escrito; se não conseguir ler, devolva vazio. Não deduza.
+
+Responda APENAS JSON (sem markdown):
+{"dentista": "<nome no carimbo, como está escrito; \"\" se ilegível>",
+ "cro": "<número do CRO do carimbo, só dígitos; \"\" se ilegível>"}"""
+
+
+def _reler_carimbo(gem, cands, leituras, dentista_gto, gto_txt):
+    """Antes de recusar por OUTRO_DENTISTA: rele SO o carimbo dos pedidos barrados
+    pelo dentista. Aceita o carimbo relido APENAS se o CRO (>=4 digitos) aparecer
+    exatamente no texto da guia (campos 17-19); senao nada muda. Devolve quantos
+    pedidos passaram a conferir. Frente A (08/10): 6 guias recusadas com o carimbo
+    certo no papel (timbre da clinica confundido com carimbo, carimbo girado 180)."""
+    from google.genai import types
+    n = 0
+    for a in leituras or []:
+        if not isinstance(a, dict) or a.get("tipo") != "solicitacao":
+            continue
+        if not _dentista_contradiz(a, dentista_gto, gto_txt):
+            continue                       # ja confere ou nao contradiz: nada a fazer
+        ai = a.get("idx")
+        if not (isinstance(ai, int) and 0 <= ai < len(cands)):
+            continue
+        try:
+            fn, mime, blob, _sv = cands[ai]
+            r = gem.models.generate_content(
+                model=_GEM_MODEL, config=_gem_cfg(),
+                contents=[types.Part.from_bytes(data=blob, mime_type=mime), _CARIMBO_PROMPT])
+            _contar_tokens(r)
+            t = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
+            j = json.loads(t) or {}
+        except Exception:
+            continue
+        cro = re.sub(r"\D", "", str(j.get("cro") or ""))
+        if len(cro) >= 4 and re.search(r"\b" + cro + r"\b", gto_txt or ""):
+            a["cro_lido_1a"] = a.get("cro_lido")
+            a["dentista_lido_1a"] = a.get("dentista_lido")
+            a["cro_lido"] = cro
+            if j.get("dentista"):
+                a["dentista_lido"] = str(j.get("dentista"))
+            a["carimbo_relido"] = True
+            n += 1
+    return n
+
 _GTO_IMG_PROMPT = """Este anexo PODE ser uma GTO (Guia de Tratamento Odontológico do padrão
 TISS) digitalizada ou fotografada. Você é um LEITOR/transcritor: NÃO decida nada,
 apenas transcreva o que está escrito.
@@ -2607,11 +2662,37 @@ def _ler_lote_com_resgate(gem, cands, contents):
             raise                   # credito/cota/chave: para na hora
         _erro_lote = e              # lote rejeitado (anexo ruim) -> resgate
     if data is not None:
-        return data, False
+        return _completar_lote(gem, cands, data), False
     data = _ler_anexos_um_a_um(gem, cands)
     if not data:
         raise _erro_lote or RuntimeError("lote de leitura ilegivel")
     return data, True
+
+
+def _completar_lote(gem, cands, data):
+    """Lote que respondeu mas sem a leitura de algum anexo: rele SO os que faltaram.
+
+    O pedido do dentista sumia da resposta e a guia saia "sem pedido" com o pedido
+    no prontuario (THALLES 198020117, LEANDRO 197568862, 10/10). Releitura que
+    falha nao derruba o que ja veio: segue sem aquele anexo, como antes."""
+    ls = (data.get("anexos") if isinstance(data, dict) else data)
+    if not isinstance(ls, list):
+        return data
+    lidos = set()
+    for a in ls:
+        try:
+            lidos.add(int(a.get("idx")))
+        except Exception:
+            pass
+    faltam = [i for i in range(len(cands)) if i not in lidos]
+    if not faltam:
+        return data
+    extra = _ler_anexos_um_a_um(gem, [cands[i] for i in faltam])
+    for a in extra:
+        a["idx"] = faltam[a["idx"]]
+        a["relido_fora_do_lote"] = True
+    ls.extend(extra)
+    return data
 
 
 def _ler_anexos_um_a_um(gem, cands):
@@ -3077,6 +3158,18 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                                                     _det, out.get("gto_texto") or "",
                                                     prontuario_confirmado=_pront_ok,
                                                     nome_confirmado=_nome_conf)
+            # OUTRO DENTISTA no resultado FINAL (venha da 1a ou da 2a escolha): rele so o
+            # carimbo e escolhe de novo. So libera com o CRO relido batendo na guia.
+            if idx is None and _motivo == "OUTRO_DENTISTA":
+                _nc = _reler_carimbo(gem, cands, leituras, out.get("dentista_gto") or "",
+                                     out.get("gto_texto") or "")
+                if _nc:
+                    out["carimbo_relido"] = _nc
+                    _det = {}
+                    idx, a, _motivo = _escolher_solicitacao(
+                        leituras, pac["nome"], _alvo_ex, len(cands),
+                        out.get("dentista_gto") or "", _det, out.get("gto_texto") or "",
+                        prontuario_confirmado=_pront_ok, nome_confirmado=_nome_conf)
             candidato_valido = idx is not None
             if candidato_valido:
                 dec = {"indice_solicitacao": idx, "paciente_lido": a.get("paciente_lido"),
