@@ -1227,36 +1227,57 @@ def _reler_carimbo(gem, cands, leituras, dentista_gto, gto_txt):
     exatamente no texto da guia (campos 17-19); senao nada muda. Devolve quantos
     pedidos passaram a conferir. Frente A (08/10): 6 guias recusadas com o carimbo
     certo no papel (timbre da clinica confundido com carimbo, carimbo girado 180)."""
-    from google.genai import types
     n = 0
     for a in leituras or []:
         if not isinstance(a, dict) or a.get("tipo") != "solicitacao":
             continue
         if not _dentista_contradiz(a, dentista_gto, gto_txt):
             continue                       # ja confere ou nao contradiz: nada a fazer
-        ai = a.get("idx")
-        if not (isinstance(ai, int) and 0 <= ai < len(cands)):
-            continue
-        try:
-            fn, mime, blob, _sv = cands[ai]
-            r = gem.models.generate_content(
-                model=_GEM_MODEL, config=_gem_cfg(),
-                contents=[types.Part.from_bytes(data=blob, mime_type=mime), _CARIMBO_PROMPT])
-            _contar_tokens(r)
-            t = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
-            j = json.loads(t) or {}
-        except Exception:
-            continue
-        cro = re.sub(r"\D", "", str(j.get("cro") or ""))
-        if len(cro) >= 4 and re.search(r"\b" + cro + r"\b", gto_txt or ""):
-            a["cro_lido_1a"] = a.get("cro_lido")
-            a["dentista_lido_1a"] = a.get("dentista_lido")
-            a["cro_lido"] = cro
-            if j.get("dentista"):
-                a["dentista_lido"] = str(j.get("dentista"))
-            a["carimbo_relido"] = True
+        if _reler_carimbo_um(gem, cands, a, gto_txt):
             n += 1
     return n
+
+
+def _reler_carimbo_um(gem, cands, a, gto_txt) -> bool:
+    """Rele SO o carimbo do anexo de `a`. True (e `a` atualizado) apenas se o CRO
+    relido (>=4 digitos) aparece exatamente no texto da guia."""
+    from google.genai import types
+    ai = a.get("idx")
+    if gem is None or not (isinstance(ai, int) and 0 <= ai < len(cands)):
+        return False
+    try:
+        fn, mime, blob, _sv = cands[ai]
+        r = gem.models.generate_content(
+            model=_GEM_MODEL, config=_gem_cfg(),
+            contents=[types.Part.from_bytes(data=blob, mime_type=mime), _CARIMBO_PROMPT])
+        _contar_tokens(r)
+        t = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
+        j = json.loads(t) or {}
+    except Exception:
+        return False
+    cro = re.sub(r"\D", "", str(j.get("cro") or ""))
+    if len(cro) >= 4 and re.search(r"\b" + cro + r"\b", gto_txt or ""):
+        a["cro_lido_1a"] = a.get("cro_lido")
+        a["dentista_lido_1a"] = a.get("dentista_lido")
+        a["cro_lido"] = cro
+        if j.get("dentista"):
+            a["dentista_lido"] = str(j.get("dentista"))
+        a["carimbo_relido"] = True
+        return True
+    return False
+
+
+def _dentista_confirmado(gem, cands, a, dentista_gto, gto_txt) -> bool:
+    """O dentista do pedido e o da guia? CRO ou 2+ nomes batendo; senao rele so o
+    carimbo. Exigido para REESCREVER a data de pedido vencido (caso RAFAELA
+    197457562, 10/10: carimbo nao lido, a trava de 'outro dentista' falhou aberta e
+    um pedido de maio de outro dentista saiu com a data reescrita). Sem referencia
+    na guia (campo 17 e texto vazios) nao ha contra o que conferir: nao bloqueia."""
+    if not (dentista_gto or gto_txt):
+        return True
+    if _dentista_confere(a, dentista_gto, gto_txt):
+        return True
+    return _reler_carimbo_um(gem, cands, a, gto_txt)
 
 _GTO_IMG_PROMPT = """Este anexo PODE ser uma GTO (Guia de Tratamento Odontológico do padrão
 TISS) digitalizada ou fotografada. Você é um LEITOR/transcritor: NÃO decida nada,
@@ -3356,6 +3377,22 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 _data_ex = _parse_br_date(data_exame) if data_exame else None
                 precisa_manipular, tipo, _nova_data_carimbo = _resolver_data_carimbo(
                     data_lida, _data_ex, hoje)
+                if (precisa_manipular and tipo == "atualizar"
+                        and not _dentista_confirmado(gem, cands, a,
+                                                     out.get("dentista_gto") or "",
+                                                     out.get("gto_texto") or "")):
+                    dec["anexar"] = False
+                    dec["motivo"] = (
+                        f"NÃO FATUROU porque o pedido encontrado tem data vencida "
+                        f"({data_lida_str}) e o carimbo não confirma o dentista da guia "
+                        f"({out.get('dentista_gto') or '?'}): lido "
+                        f"{(a.get('dentista_lido') or 'ilegível')!r}"
+                        f"{(' CRO ' + str(a.get('cro_lido'))) if a.get('cro_lido') else ''}. "
+                        f"Reescrever a data aí arrisca anexar o pedido de OUTRO atendimento. "
+                        f"O QUE FAZER: conferir no prontuário se é o pedido deste "
+                        f"atendimento (se for, anexar à mão); se não, pedir o atual à clínica.")
+                    candidato_valido = False
+                    precisa_manipular = False
             
                 # Solicitação em PDF: o ajuste de data edita IMAGEM (PIL). Antes um PDF
                 # com data VENCIDA ia direto pra revisão. Agora RENDERIZA a página do

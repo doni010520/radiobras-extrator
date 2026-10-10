@@ -1130,6 +1130,14 @@ _GRUPOS_PENDENCIA = [
     ("sem_pedido", r"nenhum pedido do dentista|n[ãa]o h[áa] nenhum pedido|sem anexo candidato"
      r"|Sem solicita[çc][ãa]o e sem justificativa",
      "Clínica", "Pedir à clínica que anexe o pedido no prontuário."),
+    # PEDIDO ANTIGO SEM DENTISTA CONFIRMADO (10/10, caso RAFAELA 197457562): a data
+    # seria reescrita, mas nem o CRO nem o nome do carimbo confirmam o dentista da guia
+    # (mesmo depois de reler so o carimbo). Reescrever ali e anexar pedido de outro
+    # atendimento. Re-tentar nao muda o papel: conferencia humana.
+    ("dentista_nao_confirmado", r"carimbo n[ãa]o confirma o dentista",
+     "Conferência", "Pedido antigo (data vencida) sem carimbo que confirme o dentista "
+     "da guia. Conferir se é o pedido deste atendimento; se for, anexar à mão; se não, "
+     "pedir o pedido atual à clínica."),
     # Pedido validado mas com data velha que o robô não conseguiu ajustar
     # (caso ESTER, 27/07 — caía em "Outros" sem dono)
     ("data_vencida", r"data vencida",
@@ -1797,6 +1805,7 @@ _TITULO_GRUPO = {
     "sem_imagem": "Laudo pronto, mas sem a folha de imagens",
     "sem_laudo_do_exame": "Falta o laudo de um dos exames da guia",
     "outro_dentista": "Pedido assinado por outro dentista",
+    "dentista_nao_confirmado": "Pedido antigo sem dentista confirmado",
     "esperando_tele": "Esperando o laudo da telerradiografia (traçado)",
     "falta_laudo": "Esperando o laudo do radiologista",
     "pedido_ilegivel": "Pedido do dentista com caligrafia ilegível",
