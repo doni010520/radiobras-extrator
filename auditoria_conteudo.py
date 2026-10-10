@@ -126,9 +126,8 @@ def veredito(paciente, exames_gto, leituras, categoria=None):
     if contra and len(contra) < len(meus):
         contra = []
     for l in contra:
-        if True:
-            motivos_err.append(f"pedido [{l.get('idx')}] assinado por OUTRO dentista: "
-                               f"{l.get('dentista')!r} (guia: {dent_gto!r})")
+        motivos_err.append(f"pedido [{l.get('idx')}] assinado por OUTRO dentista: "
+                           f"{l.get('dentista')!r} (guia: {dent_gto!r})")
 
     alvo = set(canon_exames(_ex(exames_gto)))
     laudos = [l for l in ls if l.get("tipo") == "laudo"]
