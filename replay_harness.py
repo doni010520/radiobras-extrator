@@ -333,6 +333,31 @@ def _json_para_df(s):
     return pd.read_json(io.StringIO(s), orient="split", dtype=False)
 
 
+def _para_json(v, cassete):
+    """Valor gravavel: bytes vao para blob ({"__blob__": sha}), recursivo. Antes o
+    json.dumps(default=str) transformava bytes em texto e a imagem da GTO voltava
+    corrompida na repeticao (caso JAQUELINE 198244328)."""
+    if isinstance(v, (bytes, bytearray)):
+        return {"__blob__": cassete.gravar_blob(bytes(v))}
+    if isinstance(v, dict):
+        return {str(k): _para_json(x, cassete) for k, x in v.items()}
+    if isinstance(v, (list, tuple, set)):
+        return [_para_json(x, cassete) for x in v]
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    return str(v)
+
+
+def _de_json(v, cassete):
+    if isinstance(v, dict):
+        if set(v) == {"__blob__"}:
+            return cassete.ler_blob(v["__blob__"])
+        return {k: _de_json(x, cassete) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_de_json(x, cassete) for x in v]
+    return v
+
+
 _COSTURAS = ("sync_playwright", "login_odonto", "_login_playwright", "abrir_consultar_gtos",
              "consultar_periodo", "abrir_gto", "listar_gtos", "_get_relatorio_analitico",
              "_baixa_um", "anexos_do_paciente", "_carregar_confirmados", "datetime",
@@ -352,9 +377,9 @@ def instalar(modo: str, cassete: Cassete):
 
     def _listar_gtos(pg):
         if tocar:
-            return cassete.tocar("listar_gtos", "listar_gtos")
+            return _de_json(cassete.tocar("listar_gtos", "listar_gtos"), cassete)
         v = orig["listar_gtos"](pg)
-        cassete.gravar("listar_gtos", "listar_gtos", v)
+        cassete.gravar("listar_gtos", "listar_gtos", _para_json(v, cassete))
         return v
 
     def _analitico(pg, conv, seg, data):
@@ -367,7 +392,7 @@ def instalar(modo: str, cassete: Cassete):
     def _baixa(pg, ctx, by_norm, g, tmp, data):
         k = str(g.get("gto"))
         if tocar:
-            v = dict(cassete.tocar("baixa_um", k))
+            v = _de_json(dict(cassete.tocar("baixa_um", k)), cassete)
             arqs = v.pop("_arquivos", None) or {}
             if "_pasta" in v or arqs:
                 pasta = os.path.join(tmp, f"replay_{k}")
@@ -385,13 +410,13 @@ def instalar(modo: str, cassete: Cassete):
             for nome in sorted(os.listdir(pasta)):
                 with open(os.path.join(pasta, nome), "rb") as f:
                     v["_arquivos"][nome] = cassete.gravar_blob(f.read())
-        cassete.gravar("baixa_um", k, json.loads(json.dumps(v, default=str)))
+        cassete.gravar("baixa_um", k, _para_json(v, cassete))
         return r
 
     def _anexos(pg, nome, cod, nascimento=None):
         k = f"{nome}|{cod}|{nascimento}"
         if tocar:
-            v = cassete.proximo("anexos_do_paciente", k)
+            v = _de_json(cassete.proximo("anexos_do_paciente", k), cassete)
             if isinstance(v, dict) and v.get("_erro"):
                 raise RuntimeError(v["_erro"])
             return v
@@ -400,7 +425,7 @@ def instalar(modo: str, cassete: Cassete):
         except Exception as e:
             cassete.anexar("anexos_do_paciente", k, {"_erro": str(e)})
             raise
-        cassete.anexar("anexos_do_paciente", k, v)
+        cassete.anexar("anexos_do_paciente", k, _para_json(v, cassete))
         return v
 
     def _confirmados():

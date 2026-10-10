@@ -234,3 +234,22 @@ def test_http_guarda_sequencia_de_retry(tmp_path):
     assert G.get("u").status_code == 500 and G.get("u").status_code == 200
     T = rh.sessao_classe("tocar", c, None)()
     assert T.get("u").status_code == 500 and T.get("u").status_code == 200
+
+
+def test_bytes_no_resultado_do_download_voltam_identicos(tmp_path):
+    """Caso JAQUELINE 198244328: _baixa_um devolve gto_portal_blob (imagem da GTO em
+    bytes); gravado como texto, voltava corrompido e o campo 49 nao era lido."""
+    import esteira as E
+    c = rh.Cassete(str(tmp_path / "b"))
+    original = E._baixa_um
+    E._baixa_um = lambda pg, ctx, by, g, tmp, data: {"gto": g["gto"], "status": "BAIXADO",
+                                                     "gto_portal_blob": b"\x89PNG\x00\xff"}
+    try:
+        with rh.instalar("gravar", c):
+            E._baixa_um(None, None, {}, {"gto": "7"}, str(tmp_path), "01/10/2026")
+    finally:
+        E._baixa_um = original
+    c2 = rh.Cassete(str(tmp_path / "b"))
+    with rh.instalar("tocar", c2):
+        r = E._baixa_um(None, None, {}, {"gto": "7"}, str(tmp_path), "01/10/2026")
+    assert r["gto_portal_blob"] == b"\x89PNG\x00\xff"
