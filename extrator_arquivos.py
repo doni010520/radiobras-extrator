@@ -158,6 +158,58 @@ def _login_playwright(pw, email: str, password: str):
     raise last or RuntimeError("Falha no login PRORADIS após 3 tentativas")
 
 
+# Pergunta barata (70-500 ms) "a sessao esta viva?": /ris/patients exige login;
+# deslogado o PRORADIS redireciona para /login, e com redirect:'manual' isso vira
+# 'opaqueredirect' sem baixar pagina nenhuma (medido 10/10).
+_JS_SESSAO = r"""async () => {
+    try {
+        const r = await fetch('/ris/patients', {credentials: 'include', redirect: 'manual'});
+        return r.type !== 'opaqueredirect' && r.status === 200;
+    } catch (e) { return null; }
+}"""
+
+
+def sessao_proradis_ok(page):
+    """True logado, False deslogado, None se nao deu para perguntar (nunca presumir
+    deslogado sem prova: relogar a toa custa um login)."""
+    try:
+        v = page.evaluate(_JS_SESSAO)
+    except Exception:
+        return None
+    return v if isinstance(v, bool) else None
+
+
+def relogar_proradis(ctx) -> bool:
+    """Refaz o login DENTRO do contexto do trabalhador (os cookies novos valem para as
+    paginas dele). Mesmos passos do _login_playwright. True se a sessao voltou."""
+    from extrator_pacientes_analitico import get_credentials
+    pg = None
+    try:
+        email, senha = get_credentials()
+        pg = ctx.new_page()
+        pg.goto(f"{BASE}/", wait_until="domcontentloaded", timeout=60000)
+        if "/login" in pg.url or pg.query_selector('input[name="password"]'):
+            pg.fill('input[name="username"]', email)
+            pg.fill('input[name="password"]', senha)
+            try:
+                pg.click('button[type="submit"], input[type="submit"]',
+                         no_wait_after=True, timeout=15000)
+            except Exception:
+                pass
+            for _ in range(120):
+                if "/login" not in pg.url and "checklogin" not in pg.url:
+                    break
+                pg.wait_for_timeout(500)
+            pg.wait_for_timeout(1500)
+        return sessao_proradis_ok(pg) is True
+    except Exception:
+        return False
+    finally:
+        try:
+            if pg is not None:
+                pg.close()
+        except Exception:
+            pass
 
 
 # ── Worklist ──────────────────────────────────────────────────────────────────

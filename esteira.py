@@ -32,6 +32,7 @@ from extrator_pacientes_analitico import BASE_URL as BASE, get_credentials
 from extrator_arquivos import (
     _login_playwright, _get_relatorio_analitico,
     listar_worklist_por_pacientes, _processar_paciente,
+    sessao_proradis_ok, relogar_proradis,
 )
 from extrator_odontoprev import (
     login_odonto, get_credentials_odonto, abrir_consultar_gtos,
@@ -2286,6 +2287,34 @@ def _achar_por_nascimento(pg, g, data, janela, buscar_cards=None, listar_wl=None
             "wl": linhas[(nome, dia)]}
 
 
+# Resultados de download que podem ser so a sessao do PRORADIS morta (a tela de
+# login lida como "nada encontrado").
+_STATUS_SUSPEITO_SESSAO = ("SEM_MATCH", "SEM_ARQUIVOS", "AMBIGUO", "ERRO")
+
+
+def _baixa_com_sessao(pg, ctx, by_norm, g, tmp, data, _ok=None, _relogar=None):
+    """_baixa_um com a sessao do PRORADIS garantida (10/10).
+
+    Deslogado, toda consulta devolve a tela de login e a guia virava SEM_MATCH ("nome
+    escrito diferente") ou SEM_ARQUIVOS ("cobrar o laudo"), sem ser verdade. Antes da
+    guia: sessao morta -> reloga. Depois: resultado suspeito com a sessao morta ->
+    reloga e refaz UMA vez; se o login nao volta, falha tecnica NOSSA (retry).
+    Sessao desconhecida (None) nao dispara nada: so se age com prova."""
+    _ok = _ok or (lambda: sessao_proradis_ok(pg))
+    _relogar = _relogar or (lambda: relogar_proradis(ctx))
+    if _ok() is False:
+        _relogar()
+    r = _baixa_um(pg, ctx, by_norm, g, tmp, data)
+    if r.get("status") in _STATUS_SUSPEITO_SESSAO and _ok() is False:
+        if _relogar():
+            return _baixa_um(pg, ctx, by_norm, g, tmp, data)
+        return {"gto": g.get("gto"), "nome": g.get("nome"), "status": "ERRO",
+                "erro": ("falha técnica: a sessão do PRORADIS caiu no meio da rodada "
+                         "e o novo login não passou"),
+                "dt_dl": r.get("dt_dl")}
+    return r
+
+
 def _baixa_um(pg, ctx, by_norm, g, tmp, data):
     """ESTÁGIO 2 (download only): match + baixa laudo+imagens. Devolve item com
     _pac embutido (p/ o estágio de leitura). NÃO lê solicitação aqui."""
@@ -2708,6 +2737,32 @@ def _motivo_sem_candidatos(n_prontuario, descartados):
             + _suf + ". O QUE FAZER: reprocessar o dia; se persistir, conferir no "
             "prontuário e, havendo pedido, anexar à mão. (Pode ser leitura nossa — "
             "não necessariamente falta da clínica.)")
+
+
+def _decidir_com_sessao(gem, pg, ctx, pac, pasta_dl, _ok=None, _relogar=None, **kw):
+    """_decidir com a sessao do PRORADIS garantida (10/10). O prontuario e aberto pela
+    sessao: deslogado, ele "nao existe" e a guia virava "paciente nao encontrado no
+    cadastro" / "nenhum pedido". Decisao tomada com a sessao morta nao vale: reloga
+    e refaz UMA vez; sem login, falha tecnica NOSSA."""
+    _ok = _ok or (lambda: sessao_proradis_ok(pg))
+    _relogar = _relogar or (lambda: relogar_proradis(ctx))
+    if _ok() is False:
+        _relogar()
+    dec = _decidir(gem, pg, ctx, pac, pasta_dl, **kw)
+    if _ok() is False:
+        # a pasta com os anexos do prontuario desta tentativa e documento medico:
+        # apagar antes de descartar a decisao (o leitor so apaga a da que volta)
+        _ad = dec.pop("_att_dir", None)
+        if _ad:
+            shutil.rmtree(_ad, ignore_errors=True)
+        if _relogar():
+            return _decidir(gem, pg, ctx, pac, pasta_dl, **kw)
+        return {"erro": ("falha técnica: a sessão do PRORADIS caiu durante a leitura "
+                         "e o novo login não passou"),
+                "decisao": None, "anexos": 0, "gto_exames": [],
+                "plano_laudo_imgs": dec.get("plano_laudo_imgs", []),
+                "plano_solicitacao": None}
+    return dec
 
 
 def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
@@ -3752,7 +3807,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                 with _lock:
                     ativos_dl["n"] += 1; ativos_dl["pico"] = max(ativos_dl["pico"], ativos_dl["n"])
                 try:
-                    r = _baixa_um(pg, ctx, by_norm, g, tmp, data)
+                    r = _baixa_com_sessao(pg, ctx, by_norm, g, tmp, data)
                 except Exception as e:
                     r = {"gto": g["gto"], "nome": g["nome"], "status": "ERRO", "erro": str(e)[:120]}
                 with _lock:
@@ -3797,7 +3852,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     em = _mem_mb()
                 t0 = time.monotonic()
                 try:
-                    dec = _decidir(gem, pg, ctx, item["_pac"], item.get("_pasta"),
+                    dec = _decidir_com_sessao(gem, pg, ctx, item["_pac"], item.get("_pasta"),
                                    review_dir=review_dir, gto=item["gto"],
                                    eventos_portal=item.get("eventos_portal"),
                                    gto_blob=item.get("gto_portal_blob"),
