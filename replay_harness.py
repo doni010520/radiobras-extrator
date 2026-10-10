@@ -23,17 +23,24 @@ class Cassete:
         self._arq = os.path.join(pasta, "chamadas.json")
         self._dados, self.meta = {}, {}
         self.faltas: list = []          # tudo que a repeticao pediu e nao havia
+        self.trilha: list = []          # ordem das chamadas externas (diagnostico)
+        self.trilha_gravada: list = []
         self._idx: dict = {}            # posicao na sequencia de cada chave
         if os.path.exists(self._arq):
             with open(self._arq, encoding="utf-8") as f:
                 j = json.load(f)
             self._dados, self.meta = j.get("chamadas", {}), j.get("meta", {})
+            self.trilha_gravada = j.get("trilha", [])
 
     def gravar(self, costura: str, chave: str, valor) -> None:
         with self._lock:
             self._dados.setdefault(costura, {})[str(chave)] = valor
+            if not costura.endswith("_envio"):
+                self.trilha.append(f"{costura}:{str(chave)[:70]}")
 
     def tocar(self, costura: str, chave: str):
+        with self._lock:
+            self.trilha.append(f"{costura}:{str(chave)[:70]}")
         try:
             return self._dados[costura][str(chave)]
         except KeyError:
@@ -46,12 +53,14 @@ class Cassete:
         novo pode ter outra resposta: retry, Gemini nao deterministico)."""
         with self._lock:
             self._dados.setdefault(costura, {}).setdefault(str(chave), []).append(valor)
+            self.trilha.append(f"{costura}:{str(chave)[:70]}")
 
     def proximo(self, costura: str, chave: str, detalhe: str = ""):
         """Proximo resultado da sequencia gravada. Falta ou chamada a mais: registra
         em self.faltas (o robo engole excecao com except Exception) e levanta."""
         k = str(chave)
         with self._lock:
+            self.trilha.append(f"{costura}:{k[:70]}")
             seq = self._dados.get(costura, {}).get(k)
             i = self._idx.get((costura, k), 0)
             if seq is None:
@@ -81,7 +90,8 @@ class Cassete:
     def salvar(self) -> None:
         os.makedirs(self.pasta, exist_ok=True)
         with self._lock, open(self._arq, "w", encoding="utf-8") as f:
-            json.dump({"meta": self.meta, "chamadas": self._dados}, f,
+            json.dump({"meta": self.meta, "chamadas": self._dados,
+                       "trilha": self.trilha}, f,
                       ensure_ascii=False, indent=1, default=str)
 
 
