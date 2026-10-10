@@ -119,9 +119,14 @@ def veredito(paciente, exames_gto, leituras, categoria=None):
     elif not meus:
         if not any(str(l.get("paciente") or "").strip() for l in pedidos):
             motivos_inc.append("pedido com nome do paciente ilegível")
-    for l in meus:
-        a = {"dentista_lido": l.get("dentista"), "cro_lido": l.get("cro")}
-        if dent_gto and _dentista_contradiz(a, dent_gto, gto_txt):
+    contra = [l for l in meus if dent_gto and _dentista_contradiz(
+        {"dentista_lido": l.get("dentista"), "cro_lido": l.get("cro")}, dent_gto, gto_txt)]
+    # outro pedido do paciente com o dentista CERTO tambem anexado: o extra nao
+    # derruba a guia (LEILA 197392905: Roseana + Fabielle)
+    if contra and len(contra) < len(meus):
+        contra = []
+    for l in contra:
+        if True:
             motivos_err.append(f"pedido [{l.get('idx')}] assinado por OUTRO dentista: "
                                f"{l.get('dentista')!r} (guia: {dent_gto!r})")
 

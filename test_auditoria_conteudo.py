@@ -84,3 +84,9 @@ def test_campo17_lido_como_parente_nao_acusa_dentista():
                              cro="38836"), _laudo("SAMUEL TRINDADE PEREIRA"),
                      dict(IMG, paciente="SAMUEL TRINDADE PEREIRA")])
     assert s == "OK"
+
+
+def test_pedido_extra_de_outro_dentista_com_o_certo_presente_e_ok():
+    outro = dict(_ped(dent="Fabielle Cunha de Oliveira", cro="20480"), idx=4)
+    assert veredito("MARIA DA SILVA SOUZA", "panoramica",
+                    [GTO, _ped(), outro, _laudo(), IMG])[0] == "OK"
