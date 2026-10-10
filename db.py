@@ -9,7 +9,6 @@ Tabelas:
   runs      — uma linha por execução de "Fechar o dia" (resumo + métricas).
   run_itens — uma linha por GTO daquela execução (p/ funil e fila de revisão).
 """
-import json
 import os
 import re
 from datetime import datetime, timezone, date, timedelta
@@ -2153,78 +2152,12 @@ def _ensure_columns():
             pass
 
 
-def criar_run(dia: str, dry_run: bool, plano: str = "odontoprev") -> int:
-    """Cria a linha da execução (status=running) e retorna o id."""
-    with SessionLocal() as s:
-        r = Run(dia=dia, dry_run=dry_run, status="running", plano=plano)
-        s.add(r)
-        s.commit()
-        return r.id
 
 
-def finalizar_run_ok(run_id: int, relatorio: dict, log_texto: str = None) -> None:
-    """Grava resumo + itens de uma execução concluída."""
-    resumo = relatorio.get("resumo", {}) or {}
-    itens = relatorio.get("itens", []) or []
-    with SessionLocal() as s:
-        r = s.get(Run, run_id)
-        if not r:
-            return
-        r.status = "done"
-        r.finished_at = _now()
-        if log_texto is not None:
-            r.log = log_texto[-20000:]
-        r.dry_run = bool(relatorio.get("dry_run", r.dry_run))
-        for k in ("alvos", "enviados", "prontos", "erros", "sem_match",
-                  "sem_laudo", "sem_imagens", "revisao_humana", "solic_anexada"):
-            setattr(r, k, int(resumo.get(k, 0) or 0))
-        for it in itens:
-            up = it.get("upload") or {}
-            s.add(RunItem(
-                run_id=run_id,
-                gto=str(it.get("gto", "")),
-                paciente=it.get("nome_gto") or it.get("nome") or "",
-                status=it.get("status", ""),
-                justificativa=it.get("justificativa", ""),
-                enviados=len(up.get("enviados", []) or []),
-                ja_anexados=len(up.get("ja_anexados", []) or []),
-                solicitacao=(it.get("solicitacao") or "")[:200],
-                revisao_humana=it.get("revisao_humana", "") or "",
-                detalhe=it.get("detalhe", "") or "",
-            ))
-        s.commit()
 
 
-def finalizar_run_erro(run_id: int, msg: str, log_texto: str = None) -> None:
-    with SessionLocal() as s:
-        r = s.get(Run, run_id)
-        if not r:
-            return
-        r.status = "error"
-        r.finished_at = _now()
-        r.erro_msg = (msg or "")[:2000]
-        if log_texto is not None:
-            r.log = log_texto[-20000:]
-        s.commit()
 
 
-def limpar_runs_travadas(horas: float = None) -> int:
-    """Marca como 'error' execuções presas em 'running'. Sem `horas`: TODAS (uso no
-    startup — o processo que as iniciou já morreu, são zumbis). Com `horas`: só as
-    que estão em running há mais que isso (pega travamentos sem reinício)."""
-    from datetime import timedelta
-    with SessionLocal() as s:
-        q = s.query(Run).filter(Run.status == "running")
-        if horas is not None:
-            q = q.filter(Run.started_at < _now() - timedelta(hours=horas))
-        rs = q.all()
-        for r in rs:
-            r.status = "error"
-            r.finished_at = _now()
-            r.erro_msg = ((r.erro_msg or "") +
-                          "\n[limpeza automática] execução interrompida (não finalizou).").strip()
-        s.commit()
-        return len(rs)
 
 
 def runs_recentes(limite: int = 15) -> list:
@@ -2239,14 +2172,6 @@ def runs_recentes(limite: int = 15) -> list:
         return out
 
 
-def run_log(run_id: int) -> dict:
-    """Log completo + erro de uma execução específica."""
-    with SessionLocal() as s:
-        r = s.get(Run, run_id)
-        if not r:
-            return {}
-        return {"id": r.id, "dia": r.dia, "status": r.status,
-                "erro_msg": r.erro_msg, "log": r.log}
 
 
 # ── Consultas para o dashboard ────────────────────────────────────────────────
@@ -2263,114 +2188,18 @@ def _run_to_dict(r: Run) -> dict:
     }
 
 
-def ultimas_runs(limite: int = 10) -> list:
-    with SessionLocal() as s:
-        rs = (s.query(Run).filter(Run.status == "done")
-              .order_by(Run.finished_at.desc()).limit(limite).all())
-        return [_run_to_dict(r) for r in rs]
 
 
-def status_por_plano() -> dict:
-    """Para cada plano (slug), a última execução concluída — p/ a lista de planos.
-    Retorna {slug: run_dict_resumido}."""
-    with SessionLocal() as s:
-        rs = (s.query(Run).filter(Run.status == "done")
-              .order_by(Run.finished_at.desc()).limit(200).all())
-        out = {}
-        for r in rs:
-            if r.plano not in out:
-                out[r.plano] = _run_to_dict(r)
-        return out
 
 
-def run_mais_recente(dia: str = None, plano: str = None):
-    """Última execução concluída (de um dia/plano específico, se informado)."""
-    with SessionLocal() as s:
-        q = s.query(Run).filter(Run.status == "done")
-        if dia:
-            q = q.filter(Run.dia == dia)
-        if plano:
-            q = q.filter(Run.plano == plano)
-        r = q.order_by(Run.finished_at.desc()).first()
-        if not r:
-            return None
-        d = _run_to_dict(r)
-        d["itens"] = [{
-            "gto": it.gto, "paciente": it.paciente, "status": it.status,
-            "justificativa": it.justificativa, "enviados": it.enviados,
-            "ja_anexados": it.ja_anexados, "solicitacao": it.solicitacao,
-            "revisao_humana": it.revisao_humana, "detalhe": it.detalhe,
-        } for it in r.itens]
-        return d
 
 
-def run_detalhe(run_id: int):
-    """Uma execução específica (por id) + todos os itens — para o relatório."""
-    with SessionLocal() as s:
-        r = s.get(Run, run_id)
-        if not r:
-            return None
-        d = _run_to_dict(r)
-        d["dia"] = r.dia
-        d["plano"] = r.plano
-        d["log"] = r.log
-        d["itens"] = [{
-            "gto": it.gto, "paciente": it.paciente, "status": it.status,
-            "justificativa": it.justificativa, "enviados": it.enviados,
-            "ja_anexados": it.ja_anexados, "solicitacao": it.solicitacao,
-            "revisao_humana": it.revisao_humana, "detalhe": it.detalhe,
-        } for it in r.itens]
-        return d
 
 
-def fila_revisao(limite: int = 30) -> list:
-    """Itens em revisão humana das execuções mais recentes (não-dry-run)."""
-    with SessionLocal() as s:
-        ultima = (s.query(Run).filter(Run.status == "done", Run.dry_run == False)  # noqa: E712
-                  .order_by(Run.finished_at.desc()).first())
-        if not ultima:
-            return []
-        its = [it for it in ultima.itens
-               if (it.revisao_humana or "").strip() or it.status in ("SEM_MATCH", "AMBIGUO")]
-        out = []
-        for it in its[:limite]:
-            out.append({
-                "gto": it.gto, "paciente": it.paciente, "status": it.status,
-                "motivo": it.revisao_humana or (
-                    "Sem correspondência no PRORADIS" if it.status == "SEM_MATCH"
-                    else "Nome ambíguo" if it.status == "AMBIGUO" else it.detalhe),
-                "dia": ultima.dia,
-            })
-        return out
 
 
-def serie_semana() -> list:
-    """Total de 'enviados' por dia processado, nas últimas execuções (até 7 dias)."""
-    with SessionLocal() as s:
-        # agrupa pela coluna 'dia' (string DD/MM/AAAA), pegando a melhor run de cada dia
-        rs = (s.query(Run).filter(Run.status == "done", Run.dry_run == False)  # noqa: E712
-              .order_by(Run.finished_at.desc()).limit(60).all())
-        por_dia = {}
-        for r in rs:
-            if r.dia not in por_dia:  # primeira (mais recente) por dia
-                por_dia[r.dia] = r.enviados
-        # ordena por data real
-        def _key(d):
-            try:
-                dd, mm, yy = d.split("/")
-                return (int(yy), int(mm), int(dd))
-            except Exception:
-                return (0, 0, 0)
-        dias = sorted(por_dia.keys(), key=_key)[-7:]
-        return [{"dia": d, "enviados": por_dia[d]} for d in dias]
 
 
-def totais_gerais() -> dict:
-    with SessionLocal() as s:
-        tot_env = s.query(func.coalesce(func.sum(Run.enviados), 0)).filter(
-            Run.status == "done", Run.dry_run == False).scalar()  # noqa: E712
-        n_runs = s.query(func.count(Run.id)).filter(Run.status == "done").scalar()
-        return {"total_enviados": int(tot_env or 0), "total_execucoes": int(n_runs or 0)}
 
 
 # ── Agregações por PERÍODO e por PLANO (gráfico empilhado + detalhe) ───────────

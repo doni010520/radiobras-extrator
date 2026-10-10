@@ -196,13 +196,6 @@ from config import PLANOS, PLANOS_INATIVOS
 try:
     db.init_db()
     app.logger.info("Banco inicializado (%s).", db.DATABASE_URL.split("@")[-1])
-    # Toda execução em 'running' no startup é zumbi (o processo que a iniciou
-    # morreu) — marca como erro. SÓ sob gunicorn (produção): evita que um
-    # `import app` local (teste) marque execuções reais do servidor.
-    if "gunicorn" in sys.modules:
-        _z = db.limpar_runs_travadas()
-        if _z:
-            app.logger.info("Limpas %d execução(ões) travada(s) no startup.", _z)
 except Exception as _e:
     app.logger.error("Falha ao inicializar banco: %s", _e)
 
@@ -397,11 +390,6 @@ def _glosa_scheduler():
         hora = 6
     while not _glosa_stop.is_set():
         try:
-            # guarda periódico: execução presa em running há +3h = travada
-            try:
-                db.limpar_runs_travadas(horas=3)
-            except Exception:
-                pass
             agora = datetime.now(_TZ) if _TZ else datetime.now()
             if (agora.hour >= hora and not _glosa_atualizou_hoje()
                     and _glosa_ultima_tentativa != agora.date()):
@@ -1320,11 +1308,6 @@ def home():
 
 
 
-@app.route("/gtos")
-def gtos_page():
-    """Detalhe de GTOs / funil de um dia (mockup 2)."""
-    return render_template("gtos.html")
-
 
 # ── Pendências (worklist por urgência) ─────────────────────────────────────────
 # Substitui a antiga "Revisão humana": mesma fila, mas agrupada por bucket de SLA
@@ -1849,44 +1832,6 @@ def _agrupar_run(run: dict) -> list:
     return grupos
 
 
-@app.route("/relatorio/run/<int:run_id>")
-def relatorio_run(run_id: int):
-    """Relatório visual de uma execução (o que foi feito, o que não, e por quê)."""
-    run = db.run_detalhe(run_id)
-    if not run:
-        return ("Execução não encontrada.", 404)
-    _fmt_run_datas(run)
-    embed = request.args.get("embed") in ("1", "true", "yes")
-    return render_template("relatorio_run.html", run=run,
-                           grupos=_agrupar_run(run), pdf=False, embed=embed)
-
-
-@app.route("/relatorio/run/<int:run_id>.pdf")
-def relatorio_run_pdf(run_id: int):
-    """Mesmo relatório, renderizado em PDF pelo Chromium (Playwright). Download 1-clique."""
-    run = db.run_detalhe(run_id)
-    if not run:
-        return ("Execução não encontrada.", 404)
-    _fmt_run_datas(run)
-    html = render_template("relatorio_run.html", run=run,
-                           grupos=_agrupar_run(run), pdf=True)
-    from playwright.sync_api import sync_playwright
-    try:
-        with sync_playwright() as pw:
-            br = pw.chromium.launch(
-                headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            pg = br.new_page()
-            pg.set_content(html, wait_until="networkidle")
-            pdf_bytes = pg.pdf(format="A4", print_background=True,
-                               margin={"top": "12mm", "bottom": "12mm",
-                                       "left": "10mm", "right": "10mm"})
-            br.close()
-    except Exception as exc:
-        app.logger.error("Falha ao gerar PDF da run %s: %s", run_id, exc)
-        return (f"Falha ao gerar PDF: {exc}", 500)
-    nome = f"relatorio_{(run.get('dia') or '').replace('/', '-')}_run{run_id}.pdf"
-    return send_file(io.BytesIO(pdf_bytes), mimetype="application/pdf",
-                     as_attachment=True, download_name=nome)
 
 
 # ── Árvore de decisão (documento vivo: do botão ao fim, fiel ao código) ────────
@@ -2316,49 +2261,6 @@ def faturar_log(jid: str):
 
 # ── APIs do Dashboard ─────────────────────────────────────────────────────────
 
-@app.route("/api/dashboard")
-def api_dashboard():
-    """Dados agregados p/ o dashboard: última execução, semana, fila, totais."""
-    try:
-        with _jobs_lock:
-            processando = sum(1 for j in _jobs.values()
-                              if j.get("status") in ("running", "queued"))
-            rodando_plano = {j.get("plano") for j in _jobs.values()
-                             if j.get("status") in ("running", "queued")}
-        ultima = db.run_mais_recente()
-        # monta a lista de planos do registro + status (última execução de cada)
-        por_plano = db.status_por_plano()
-        lista_planos = []
-        for p in planos_mod.listar_planos():
-            lista_planos.append({
-                "slug": p["slug"], "nome": p["nome"], "ativo": p.get("ativo", False),
-                "rodando": p["slug"] in rodando_plano,
-                "ultima": por_plano.get(p["slug"]),
-            })
-        return jsonify({
-            "ultima": ultima,
-            "planos": lista_planos,
-            "recentes": db.ultimas_runs(8),
-            "semana": db.serie_semana(),
-            "revisao": db.fila_revisao(30),
-            "totais": db.totais_gerais(),
-            "processando": processando,
-        })
-    except Exception as exc:
-        app.logger.error("Erro em /api/dashboard: %s", exc)
-        return jsonify({"error": str(exc)}), 500
-
-
-@app.route("/api/gtos")
-def api_gtos():
-    """Funil + lista de GTOs de um dia (DD/MM/AAAA) ou da execução mais recente."""
-    dia = request.args.get("dia", "").strip() or None
-    try:
-        run = db.run_mais_recente(dia)
-        return jsonify({"run": run})
-    except Exception as exc:
-        app.logger.error("Erro em /api/gtos: %s", exc)
-        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/planos-periodo")
