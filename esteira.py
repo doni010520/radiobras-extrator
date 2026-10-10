@@ -2248,7 +2248,7 @@ def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None, convenio_acc=None):
     todos = sorted(os.listdir(pasta)) if pasta and os.path.isdir(pasta) else []
     cheio = [os.path.join(pasta, f) for f in todos]
     laudos = [p for p in cheio if os.path.basename(p).upper().startswith("LAUDO_")]
-    fora = []
+    fora, irma = [], []
 
     # 1) procedência: accession que não veio do analítico do convênio
     if extras_acc:
@@ -2273,16 +2273,33 @@ def _filtrar_arquivos_da_gto(pasta, dec, extras_acc=None, convenio_acc=None):
         # LAUDO_PANORAMICA numa guia que diz 'documentacao' era descartado como
         # "exame particular" e a guia subia sem laudo.
         alvo = componentes_da_documentacao(alvo)
+        # Exames das OUTRAS guias do paciente no dia (gto_exames e a uniao).
+        outras = componentes_da_documentacao(
+            set((dec or {}).get("gto_exames") or [])) - alvo
         for lp in laudos:
-            if _conv and (_acc_do_laudo(lp) or "") in _conv:
-                continue          # veio do analítico do convênio: nunca é "de fora"
             cex = _exame_do_laudo(lp)
+            if _conv and (_acc_do_laudo(lp) or "") in _conv:
+                # veio do analítico do convênio: nunca é "de fora"... MAS pode ser da
+                # guia IRMÃ. TAISE (197330008, 15/09): guia de periapical recebeu o
+                # LAUDO_PANORAMICA da guia de documentação ortodôntica dela do mesmo
+                # dia — os dois accessions são do convênio. Só sai quando o exame é
+                # de OUTRA guia do paciente e não desta (LOARA, rótulo 'ATM' que não
+                # é de guia nenhuma, continua protegido).
+                if cex and not (cex & alvo) and (cex & outras):
+                    irma.append(lp)
+                continue
             # exclui SÓ se o exame foi identificado E está fora da guia
             if cex and not (cex & alvo):
                 fora.append(lp)
 
     if not fora:
-        return cheio, [], []
+        if not irma:
+            return cheio, [], []
+        # Só o laudo da irmã sai: imagem e solicitação ficam (não é exame particular)
+        return ([p for p in cheio if p not in irma],
+                sorted(os.path.basename(x) for x in irma),
+                sorted({e for lp in irma for e in _exame_do_laudo(lp)}))
+    fora += irma
 
     # MISTO: laudos do convênio + solicitação escolhida. Fora: laudos de outro
     # exame e as imagens (não atribuíveis).

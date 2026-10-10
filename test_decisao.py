@@ -2301,3 +2301,46 @@ def test_nome_confirmado_libera_nome_e_cobertura():
     idx3, _a3, m3 = _escolher_solicitacao(ileg, "ANA LIMA COSTA", {"panoramica"}, 1,
                                           nome_confirmado=True)
     assert idx3 == 0 and m3 is None
+
+
+def test_laudo_do_convenio_da_guia_irma_nao_entra(tmp_path):
+    """TAISE (197330008, 15/09): duas guias no dia — documentação ortodôntica e
+    periapical. A de periapical subiu com o LAUDO_PANORAMICA da outra (os dois
+    accessions vieram do analítico do convênio, e laudo do convênio nunca saía).
+    O laudo da irmã sai; imagem e pedido ficam."""
+    pasta = _pasta(tmp_path, ["LAUDO_PANORAMICA_40351320_OFICIAL.pdf", "ENTREGA_1.jpg",
+                              "SOLICITACAO_1__pedido.png"])
+    arquivos, excluidos, fora = _filtrar_arquivos_da_gto(
+        pasta, {"gto_exames_desta": ["periapical"],
+                "gto_exames": ["documentacao", "periapical"]},
+        extras_acc=None, convenio_acc=["40351320"])
+    assert sorted(os.path.basename(a) for a in arquivos) == [
+        "ENTREGA_1.jpg", "SOLICITACAO_1__pedido.png"]
+    assert excluidos == ["LAUDO_PANORAMICA_40351320_OFICIAL.pdf"]
+    assert fora == ["panoramica"]
+
+
+def test_laudo_da_guia_irma_sai_e_o_desta_fica(tmp_path):
+    """LAILA (197912057, 30/09): periapical recebeu os laudos certo + panorâmica +
+    tele da outra guia."""
+    pasta = _pasta(tmp_path, ["LAUDO_PANORAMICA_1_OFICIAL.pdf",
+                              "LAUDO_PERIAPICAL BOCA COMPLETA_2_OFICIAL.pdf",
+                              "LAUDO_TELERRADIOGRAFIA COM TRACADO_3_CEPH.pdf",
+                              "ENTREGA_1.jpg"])
+    arquivos, excluidos, _f = _filtrar_arquivos_da_gto(
+        pasta, {"gto_exames_desta": ["periapical"],
+                "gto_exames": ["documentacao", "periapical"]},
+        extras_acc=None, convenio_acc=["1", "2", "3"])
+    assert sorted(os.path.basename(a) for a in arquivos) == [
+        "ENTREGA_1.jpg", "LAUDO_PERIAPICAL BOCA COMPLETA_2_OFICIAL.pdf"]
+    assert len(excluidos) == 2
+
+
+def test_guia_de_documentacao_mantem_os_laudos_dos_componentes(tmp_path):
+    pasta = _pasta(tmp_path, ["LAUDO_PANORAMICA_1_OFICIAL.pdf",
+                              "LAUDO_PERIAPICAL BOCA COMPLETA_2_OFICIAL.pdf", "ENTREGA_1.jpg"])
+    arquivos, excluidos, _f = _filtrar_arquivos_da_gto(
+        pasta, {"gto_exames_desta": ["documentacao"],
+                "gto_exames": ["documentacao", "periapical"]},
+        extras_acc=None, convenio_acc=["1", "2"])
+    assert "LAUDO_PANORAMICA_1_OFICIAL.pdf" in [os.path.basename(a) for a in arquivos]
