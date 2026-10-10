@@ -1957,6 +1957,28 @@ def _nome_apenas_abreviado(leituras, nome_guia) -> bool:
     return False
 
 
+def _outra_pessoa_documentada(leituras, nome_guia) -> str:
+    """Nome de OUTRA pessoa que aparece num pedido E num documento de identidade do
+    prontuario (RG/CNH/CTPS), sem bater com a guia. "" se nao houver.
+
+    Dois anexos independentes concordando num nome diferente do da guia = e outra
+    pessoa, nao leitura ruim do prenome."""
+    docs = [l.get("paciente_lido") or "" for l in (leituras or [])
+            if isinstance(l, dict) and l.get("tipo") == "documento"]
+    for l in (leituras or []):
+        if not isinstance(l, dict) or l.get("tipo") != "solicitacao":
+            continue
+        lido = (l.get("paciente_lido") or "").strip()
+        if not lido or _nomes_compat(lido, nome_guia):
+            continue
+        if len(normaliza_nome(lido).split()) < 2:
+            continue
+        for d in docs:
+            if d and _nomes_compat(lido, d) and not _nomes_compat(d, nome_guia):
+                return " ".join(lido.split())
+    return ""
+
+
 def _prenome_provavelmente_mal_lido(leituras, nome_guia) -> bool:
     """Algum nome lido nos anexos bate com o da guia em TODOS os sobrenomes,
     diferindo so no prenome? Ver db.so_o_prenome_difere para o porque."""
@@ -3294,6 +3316,21 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                             "for deste paciente, confirmar aqui na tela para liberar "
                             "o faturamento. Só cobrar da clínica DEPOIS de confirmar "
                             "que o papel é de outra pessoa.")
+                    elif _outra_pessoa_documentada(leituras, pac["nome"]):
+                        # O prontuario tem DOCUMENTO DE IDENTIDADE com o mesmo nome
+                        # lido no pedido: e outra pessoa, nao leitura ruim (10/10:
+                        # BRUNO x PAMELA, CAMILA x CARLA, LARA x LUANA, LENILTON x
+                        # HAMILTON — irmaos com os mesmos sobrenomes). A mensagem
+                        # antiga dizia "provavelmente E deste paciente".
+                        _outro = _outra_pessoa_documentada(leituras, pac["nome"])
+                        _motivo = (
+                            f"NÃO FATUROU porque o pedido encontrado é de OUTRA PESSOA: "
+                            f"está no nome de {_outro!r}, e o prontuário tem um documento "
+                            f"de identidade com esse mesmo nome — não é erro de leitura. "
+                            f"Nenhum documento do prontuário está no nome deste paciente. "
+                            f"O QUE FAZER: pedir à clínica o pedido do dentista no nome "
+                            f"de {pac['nome']} (e conferir se os documentos de {_outro!r} "
+                            f"foram arquivados no prontuário errado).")
                     elif _prenome_provavelmente_mal_lido(leituras, pac["nome"]):
                         # Todos os SOBRENOMES batem e so o PRENOME difere: e leitura
                         # do prenome que falhou, nao documento de terceiro. Casos
