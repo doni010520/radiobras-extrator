@@ -205,7 +205,12 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
 
     if idx is None:
         if motivo == "NAO_COBRE":
-            falta = ", ".join(sorted(det.get("falta") or alvo))
+            falta_set = set(det.get("falta") or alvo)
+            if "81000294" in {str(c) for c in codigos} and "periapical" in falta_set:
+                # o levantamento entra na cobertura como periapical; a pendência fala
+                # a língua da guia (SIMONE 09/10 saía "FALTA: periapical")
+                falta_set = (falta_set - {"periapical"}) | {"levantamento"}
+            falta = ", ".join(sorted(falta_set))
             lidos = ", ".join(det.get("lidos") or []) or "nada legível"
             return Pedido(motivo=(f"O pedido mais recente do dentista não cobre tudo que a guia autoriza: "
                                   f"pede {lidos}. FALTA no pedido: {falta}."), responsavel="Clínica", detalhe=det)
@@ -221,10 +226,17 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
 
     d_ped = _data_da_leitura(a)
     d_exame = _parse_br_date(dia) or hoje or _dt.date.today()
+    d_up = _data_upload(a.get("arquivo_origem"))
     if d_ped and d_ped > d_exame + _dt.timedelta(days=1):
         # data DEPOIS do exame = mal lida (GLEYDE: "setembro" manuscrito lido como
         # dezembro). Não serve para provar que o pedido é recente: vale o upload.
-        d_ped = _data_upload(a.get("arquivo_origem"))
+        d_ped = d_up
+    elif (d_ped and d_up and d_ped.year < d_exame.year - 5
+            and (d_exame - d_up).days <= max_dias()):
+        # ano absurdo com upload recente = leitura errada (PALOMA 09/10: "09/10/26"
+        # à mão saiu 26/10/2009). Pedido antigo de verdade (ALICE, 2023/2025) fica
+        # dentro dos 5 anos e continua vencido.
+        d_ped = d_up
     if d_ped and (d_exame - d_ped).days > max_dias():
         return Pedido(motivo=(f"Pedido do dentista com data vencida: o mais recente é de {d_ped:%d/%m/%Y}, "
                               f"mais de {max_dias()} dias antes do exame. Falta o pedido atual."),

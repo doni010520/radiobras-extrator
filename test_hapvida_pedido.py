@@ -179,3 +179,26 @@ def test_data_futura_mal_lida_usa_a_data_do_upload(tmp_path):
     p = hpe.escolher_pedido(GemFake([_leitura(0, data_solicitacao="15/12/2026")]), arqs, NOME, PAN,
                             "23/09/2026", str(tmp_path / "o3"))
     assert not p.ok and "vencida" in p.motivo
+
+
+def test_ano_absurdo_com_upload_recente_vale_o_upload(tmp_path):
+    """PALOMA (09/10): '09/10/26' à mão saiu 26/10/2009; o upload é de 09/10/2026."""
+    arqs = _imgs(tmp_path, 1, "NAME20261009_120010.jpg")
+    p = hpe.escolher_pedido(GemFake([_leitura(0, data_solicitacao="26/10/2009")]), arqs, NOME, PAN,
+                            "09/10/2026", str(tmp_path / "o"))
+    assert p.ok and p.data == "09/10/2026"
+
+
+def test_pedido_antigo_de_verdade_continua_vencido(tmp_path):
+    """ALICE (09/10): pedido de 2025 (lido 2023), upload de 25/09/2025."""
+    arqs = _imgs(tmp_path, 1, "NAME20250925_154121.jpg")
+    p = hpe.escolher_pedido(GemFake([_leitura(0, data_solicitacao="25/09/2023")]), arqs, NOME, PAN,
+                            "09/10/2026", str(tmp_path / "o"))
+    assert not p.ok and "vencida" in p.motivo
+
+
+def test_levantamento_que_falta_aparece_como_levantamento(tmp_path):
+    """SIMONE (09/10): guia pan + levantamento, pedido lido só com panorâmica."""
+    p = _rodar(tmp_path, [_leitura(0, exames_lidos=["panoramica"], texto="panoramica em topo")],
+               ["81000405", "81000294"])
+    assert not p.ok and "FALTA no pedido: levantamento" in p.motivo and "periapical" not in p.motivo
