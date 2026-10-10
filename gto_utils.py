@@ -8,6 +8,7 @@ import re
 import unicodedata
 
 import fitz  # PyMuPDF
+from fitz_seguro import com_fitz
 
 
 def _norm(s: str) -> str:
@@ -30,6 +31,7 @@ def is_gto_text(txt: str) -> bool:
     return any(m in n for m in _GTO_MARKERS)
 
 
+@com_fitz
 def is_gto_pdf(path: str) -> bool:
     try:
         doc = fitz.open(path)
@@ -44,6 +46,7 @@ def is_gto_pdf(path: str) -> bool:
 _LABEL_RE = re.compile(r"^\d{1,2}\s*-\s*$|^\d{1,2}-?$")
 
 
+@com_fitz
 def _words_display(page):
     """Palavras com bbox no espaço de EXIBIÇÃO (aplica rotação da página)."""
     m = page.rotation_matrix
@@ -61,6 +64,7 @@ _BOILER_49 = re.compile(
     re.I)
 
 
+@com_fitz
 def gto_e_desta_guia(path: str, gto: str) -> bool:
     """True se o PDF da GTO é o da guia `gto` que está sendo faturada.
     O número aparece nos campos '2 - Nº Guia no Prestador' e '7 - Nº da Guia
@@ -105,6 +109,7 @@ def _justif_por_texto(full: str):
     return None
 
 
+@com_fitz
 def extrair_observacao(path: str) -> dict:
     """
     Retorna {is_gto, status: 'PREENCHIDO'|'VAZIO'|'SEM_GTO', conteudo, n_tokens}.

@@ -16,6 +16,7 @@ import fitz
 from ocr_utils import ocr_arquivo, EXAMES_LEX, PEDIDO_LEX, _strip, _DICT
 from gto_utils import is_gto_text
 from extrator_arquivos import tem_logo_radiobras
+from fitz_seguro import com_fitz
 
 # nº mínimo de termos de exame (OCR) para considerar o CORPO digitado.
 MIN_EXAMES_DIGITADA = 2
@@ -340,6 +341,7 @@ def _tem(texto: str, marks: list) -> bool:
 
 # ── GTO: campo 17 (dentista solicitante) e exames autorizados ─────────────────
 
+@com_fitz
 def _words_display(page):
     m = page.rotation_matrix
     out = []
@@ -349,6 +351,7 @@ def _words_display(page):
     return out
 
 
+@com_fitz
 def gto_solicitante(gto_path: str) -> str:
     """Nome do '17 - Nome do Profissional Solicitante' (caixa abaixo do rótulo 17,
     à esquerda, antes do campo 21/22)."""
@@ -370,6 +373,7 @@ def gto_solicitante(gto_path: str) -> str:
     return re.sub(r"\s+", " ", " ".join(nome)).strip()
 
 
+@com_fitz
 def gto_texto(gto_path: str) -> str:
     """Texto corrido da 1a pagina da GTO. Usado para conferir o CRO do dentista
     que assina a solicitacao contra o profissional solicitante da guia (campos
@@ -383,6 +387,7 @@ def gto_texto(gto_path: str) -> str:
         return ""
 
 
+@com_fitz
 def gto_exames(gto_path: str) -> set:
     """Exames autorizados/realizados na GTO (a partir das descrições de procedimento)."""
     doc = fitz.open(gto_path)
@@ -401,6 +406,7 @@ _RADIOLOGICO_RE = re.compile(
     r"oclus|seios? da face|sialograf|mastoid|perfil|hand.?wrist")
 
 
+@com_fitz
 def gto_dispensa_laudo(gto_path: str) -> bool:
     """True SÓ se a GTO é EXCLUSIVAMENTE modelo de gesso / fotografia — ou seja, tem
     esses termos E NENHUM indicador de exame radiológico. CONSERVADOR: qualquer sinal
@@ -420,16 +426,26 @@ def gto_dispensa_laudo(gto_path: str) -> bool:
 
 # ── Classificação de anexos ───────────────────────────────────────────────────
 
+@com_fitz
+def _texto_de_pdf(body: bytes) -> str:
+    """Texto de todas as paginas de um PDF (sob a trava do PyMuPDF)."""
+    doc = fitz.open(stream=body, filetype="pdf")
+    try:
+        return "".join(p.get_text() for p in doc)
+    finally:
+        doc.close()
+
+
 def tipo_anexo(path: str) -> dict:
-    """Classifica um anexo. Para imagens não-laudo, roda OCR (necessário)."""
+    """Classifica um anexo. Para imagens não-laudo, roda OCR (necessário).
+    Sem @com_fitz de proposito: so o texto do PDF usa o PyMuPDF (_texto_de_pdf); o
+    OCR da imagem leva segundos e nao deve segurar a trava das outras threads."""
     ext = os.path.splitext(path)[1].lower()
     body = open(path, "rb").read()
     info = {"arquivo": os.path.basename(path), "tipo": "OUTRO"}
 
     if body[:4] == b"%PDF":
-        doc = fitz.open(stream=body, filetype="pdf")
-        txt = "".join(p.get_text() for p in doc)
-        doc.close()
+        txt = _texto_de_pdf(body)
         if is_gto_text(txt):
             info["tipo"] = "GTO"
         elif _tem(txt, _NF_MARK):
@@ -606,6 +622,7 @@ def analises_no_texto(texto) -> set:
     return _analises_em(texto)
 
 
+@com_fitz
 def texto_do_laudo_pdf(path) -> str:
     """Texto do PDF do laudo. String VAZIA quando nao deu pra ler — quem chama
     precisa distinguir "li e nao tem a analise" de "nao consegui ler", porque as duas
@@ -619,6 +636,7 @@ def texto_do_laudo_pdf(path) -> str:
         return ""
 
 
+@com_fitz
 def analises_no_laudo_pdf(path) -> set:
     """Idem, lendo o PDF do laudo. Falha quieto: PDF ilegivel devolve conjunto vazio,
     e quem chama NAO pode ler isso como 'falta a analise' (viraria pendencia falsa

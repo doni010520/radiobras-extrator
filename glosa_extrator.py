@@ -21,6 +21,7 @@ import time
 import fitz  # PyMuPDF
 
 from extrator_odontoprev import login_odonto, get_credentials_odonto
+from fitz_seguro import com_fitz
 
 # Unidades (mesma senha p/ as 3 contas).
 CONTAS = [("388336", "Centro, Lauro, Periperi e Itaigara"),
@@ -46,6 +47,7 @@ _RE_GLOSA = re.compile(r"\b(\d{4})\s*-\s*(.+?)\s+(?=" + _ANCORA_FIM + r"|$)")
 GLOSAS_NAO_RECURSAVEIS = {"1733"}
 
 
+@com_fitz
 def _carregar_linhas(pdf_path):
     doc = fitz.open(pdf_path)
     linhas = []

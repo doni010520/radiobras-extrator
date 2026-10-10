@@ -13,12 +13,14 @@ import re
 import fitz
 
 from solicitacao_utils import canon_exames, _strip
+from fitz_seguro import com_fitz
 
 # Início do CORPO do laudo (a partir daqui vêm achados/recomendações -> ignorar,
 # senão "recomendamos radiografia periapical" contaria como exame coberto).
 _BODY_RE = re.compile(r"análise:|analise:|impress[aã]o\s+diagn|denti[cç][aã]o|dente\(s\)|^\s*-")
 
 
+@com_fitz
 def exames_cobertos(laudo_pdf_path: str) -> set:
     """Exames canônicos DECLARADOS no cabeçalho do laudo (título + linha
     'Radiografias Analisadas:'), antes do corpo. Evita recomendações."""

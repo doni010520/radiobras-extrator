@@ -75,6 +75,7 @@ from solicitacao_utils import (gto_exames, canon_exames, gto_dispensa_laudo,
                                lista_amigavel)
 import json
 import re
+from fitz_seguro import com_fitz
 
 try:
     import psutil
@@ -1024,6 +1025,7 @@ Responda APENAS JSON (sem markdown):
 Se realmente não houver data escrita, retorne box_data: null."""
 
 
+@com_fitz
 def _pdf_para_imagem(blob):
     """Renderiza a 1ª página de um PDF para PNG, para o ajuste de data (que edita
     IMAGEM com o PIL) também funcionar em solicitação-PDF. Devolve (png_bytes,
@@ -1537,6 +1539,7 @@ def _eh_pagina_de_erro(blob) -> bool:
     return b"a php error was encountered" in bytes(blob[:2000]).lower()
 
 
+@com_fitz
 def _render_com_fitz(blob):
     """PNG da 1a pagina, via MuPDF — ou None. ULTIMO recurso de leitura.
 

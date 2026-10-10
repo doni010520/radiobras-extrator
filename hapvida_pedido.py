@@ -33,6 +33,7 @@ from esteira import (_escolher_solicitacao, _ler_lote_com_resgate, _marcar_orige
                      _parse_br_date, _data_upload, _pdf_para_imagem, _reler_exames_focado,
                      _reler_nao_classificados, _texto_pedido, _DECISAO_PROMPT, _gem_estado,
                      preparar_anexo)
+from fitz_seguro import com_fitz
 
 MAX_CANDIDATOS = 15
 _LEVANTAMENTO = re.compile(r"LEVANTAMENT|SERIOGRAF|BOCA\s+TODA|TODOS\s+OS\s+DENTES|"
@@ -103,6 +104,7 @@ _GUIA_TXT = re.compile(r"GUIA\s+DE\s+TRATAMENTO\s+ODONTOL|PROFISSIONAL\s+SOLICIT
                        r"NUMERO\s+GUIA\s+PRINCIPAL|REGISTRO\s+ANS", re.I)
 
 
+@com_fitz
 def eh_guia(mime: str, blob: bytes) -> bool:
     """A GTO do próprio Hapvida arquivada no prontuário NÃO é pedido do dentista:
     ela traz o exame escrito e 'Profissional Solicitante: RADIOBRAS'. Sai da lista

@@ -24,6 +24,7 @@ from playwright.sync_api import sync_playwright
 from extrator_pacientes_analitico import BASE_URL as BASE, get_credentials
 from extrator_arquivos import _login_playwright, _get_relatorio_analitico, slug
 from config import CONVENIOS, SEGMENTOS
+from fitz_seguro import com_fitz
 
 DATA = "03/06/2026"
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -49,6 +50,7 @@ def _barcodes(img) -> list:
     return [s for s in (info or []) if s]
 
 
+@com_fitz
 def sondar(nome_arq: str, body: bytes) -> dict:
     ext = os.path.splitext(nome_arq)[1].lower().lstrip(".")
     info = {"arquivo": nome_arq, "ext": ext, "bytes": len(body), "kind": "?"}
