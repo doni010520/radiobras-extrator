@@ -1811,7 +1811,12 @@ _DOC_COMPONENTES = {"panoramica", "telerradiografia"}
 # centenas de pendencias falsas — o erro do gate de imagem por accession, ligado e
 # revertido em 12/08. Para periapical/interproximal a cobertura so pode ser
 # conferida na IMAGEM, nao na existencia de laudo.
-_LAUDO_ESPERADO = {"panoramica", "telerradiografia", "tomografia"}
+#
+# ATM entra em 11/10: o laudo de ATM SEMPRE sai (6 de 6 guias desde jul/26), mas
+# sai depois. Fora daqui, o robo faturava com o laudo NAO_PRONTO e nunca voltava:
+# SILENE (195130833), JAQUELINE BISPO (195747450), TAILANE (197733007) e MAIRA
+# (198256873) ficaram sem o laudo de ATM, que hoje esta Impresso no PRORADIS.
+_LAUDO_ESPERADO = {"panoramica", "telerradiografia", "tomografia", "atm"}
 
 
 def _exames_sem_laudo(exames_canon, arquivos_no_plano, apenas_esperados=False) -> set:
