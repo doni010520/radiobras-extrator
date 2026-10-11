@@ -2086,7 +2086,8 @@ def _falta_no_portal(exames_canon, nomes_no_portal) -> str:
     for n in uteis:
         u = n.upper()
         if "LAUDO" in u or "CEPH" in u:
-            tem_laudo |= canon_exames(n)
+            # "_" grudado esconde siglas curtas (LAUDO_ATM_<acc>), MAIRA 11/10
+            tem_laudo |= canon_exames(n.replace("_", " "))
     exigidos = set()
     for e in exames:
         exigidos |= (_DOC_COMPONENTES if e in ("documentacao", "documentacao_completa")

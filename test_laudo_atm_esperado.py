@@ -18,3 +18,20 @@ def test_guia_com_atm_e_laudo_de_atm_fatura():
 
 def test_guia_ja_anexada_sem_laudo_de_atm_e_reaberta():
     assert _falta_no_portal(["atm", "documentacao"], PLANO_MAIRA) == "laudo"
+
+
+def test_laudo_de_atm_do_robo_e_reconhecido_no_portal():
+    """LAUDO_ATM_<acc>: o '_' grudado escondia o ATM e a guia completa virava
+    'falta laudo' (11/10)."""
+    assert _falta_no_portal(["atm", "documentacao"],
+                            PLANO_MAIRA + ["LAUDO_ATM_40357631_OFICIAL.pdf"]) == ""
+
+
+def test_completar_sobe_o_laudo_de_atm_que_falta():
+    from conferencia import arquivos_que_faltam
+    assert arquivos_que_faltam(["atm", "documentacao"], PLANO_MAIRA,
+                               ["LAUDO_ATM_40357631_OFICIAL.pdf", "ENTREGA_b.jpg"]) == [
+        "LAUDO_ATM_40357631_OFICIAL.pdf"]
+    assert arquivos_que_faltam(["atm", "documentacao"],
+                               PLANO_MAIRA + ["LAUDO_ATM_40357631_OFICIAL.pdf"],
+                               ["LAUDO_ATM_40357631_OFICIAL.pdf"]) == []

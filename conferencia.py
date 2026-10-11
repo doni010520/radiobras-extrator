@@ -156,7 +156,9 @@ def _exames_com_laudo(nomes):
     for n in nomes or []:
         u = str(n).upper()
         if "LAUDO" in u or "CEPH" in u:
-            tem |= canon_exames(str(n))
+            # "_" grudado no exame esconde siglas curtas: LAUDO_ATM_<acc> nao era
+            # lido como ATM (11/10, MAIRA 198256873)
+            tem |= canon_exames(str(n).replace("_", " "))
     return tem
 
 
@@ -195,7 +197,7 @@ def arquivos_que_faltam(exames_canon, no_portal, disponiveis) -> list:
             continue
         if "LAUDO" not in u and "CEPH" not in u:
             continue                      # nao da para saber que exame e -> nao sobe
-        ex = canon_exames(str(f))
+        ex = canon_exames(str(f).replace("_", " "))   # LAUDO_ATM_<acc> (11/10)
         if ex & falta_laudo:
             out.append(f)
     return out
