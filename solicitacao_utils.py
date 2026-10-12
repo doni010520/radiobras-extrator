@@ -77,6 +77,12 @@ _CANON = [
     # "DOCUMENTACAO ORTODONTICA COMPLETA" — era reprovado (24/07 Centro).
     (r"\bdoc\.?\s*orto\s*compl|\bdocortocomp"
      r"|documenta\w*(\s+\w+){0,2}\s+complet", "documentacao_completa"),
+    # CONTROLE (11/10): foto + panoramica, SEM tele. O lado do laudo colapsava em
+    # 'documentacao' e cobrava o tracado que nunca existe: JACI 197119716 (09/09) e
+    # CAMILA 197061105 (05/09) presas em "falta tele". Dados de 100 dias: 6 de 6
+    # documentacoes de controle sem telerradiografia no PRORADIS.
+    (r"\bdoc\.?\s*orto\s*contr|\bdocortocontr"
+     r"|documenta\w*(\s+\w+){0,3}\s+controle", "documentacao_controle"),
     (r"seios?\s*da\s*face", "seios_da_face"),
     # \btc\b com fronteira DOS DOIS LADOS: sem ela, "etc" virava "tomografia" e a
     # solicitacao passava a "cobrir" um exame que ninguem pediu.
@@ -291,8 +297,13 @@ def nome_amigavel(canon: str) -> str:
 
 
 def lista_amigavel(exames) -> str:
-    vis = [nome_amigavel(e) for e in sorted(exames or [])
+    exames = set(exames or [])
+    vis = [nome_amigavel(e) for e in sorted(exames)
            if not str(e).startswith("documentacao_")]
+    if "documentacao_controle" in exames and "documentacao_completa" not in exames:
+        # o subtipo precisa sobreviver ao texto: a conferencia re-le o texto da guia
+        vis = ["documentação ortodôntica de controle" if v == nome_amigavel("documentacao")
+               else v for v in vis]
     if not vis:
         return "nenhum"
     if len(vis) == 1:
@@ -330,7 +341,7 @@ def expande_documentacao(ex: set) -> set:
     if _DOC_ORTO_ANCORAS <= ex and (ex & _DOC_ORTO_TERCEIRO):
         out |= {"documentacao", "documentacao_completa"}
     if _DOC_CONTROLE <= ex:              # fotografia + panorâmica
-        out |= {"documentacao"}
+        out |= {"documentacao", "documentacao_controle"}
     return out
 
 

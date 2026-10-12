@@ -1759,7 +1759,8 @@ def _laudo_tele_faltando(exames_canon, laudos_no_plano) -> bool:
     Tem tele = algum LAUDO_* cujo exame canonico e telerradiografia (cobre o CEPH,
     cujo nome e LAUDO_TELERRADIOGRAFIA_<acc>_CEPH). Falha SEGURA: na duvida exige."""
     ex = set(exames_canon or ())
-    autoriza_tele = ("telerradiografia" in ex) or ("documentacao" in ex)
+    autoriza_tele = ("telerradiografia" in ex) or (
+        "documentacao" in ex and "telerradiografia" in _componentes_doc(ex))
     if not autoriza_tele:
         return False
     for f in (laudos_no_plano or []):
@@ -1804,6 +1805,15 @@ def _portal_dispensa_laudo(eventos_portal) -> bool:
 _DOC_COMPONENTES = {"panoramica", "telerradiografia"}
 
 
+def _componentes_doc(exames) -> set:
+    """Laudos que uma guia de documentacao exige. CONTROLE = foto + panoramica, sem
+    tele (regra do dono 28-30/07; 6 de 6 no PRORADIS em 100 dias, 11/10)."""
+    ex = set(exames or ())
+    if "documentacao_controle" in ex and "documentacao_completa" not in ex:
+        return {"panoramica"}
+    return set(_DOC_COMPONENTES)
+
+
 # Exames em que o laudo e a NORMA — falta dele e anomalia que vale sinalizar.
 # Medido em 28/08 sobre as 853 guias que o robo anexou desde 22/07: panoramica sai
 # sem laudo em 9% dos casos e telerradiografia em 11%, contra 64% do periapical e
@@ -1828,7 +1838,7 @@ def _exames_sem_laudo(exames_canon, arquivos_no_plano, apenas_esperados=False) -
     exigidos = set()
     for e in (exames_canon or ()):
         if e in ("documentacao", "documentacao_completa"):
-            exigidos |= _DOC_COMPONENTES
+            exigidos |= _componentes_doc(exames_canon)
         else:
             exigidos.add(e)
     tem = set()
@@ -2094,7 +2104,7 @@ def _falta_no_portal(exames_canon, nomes_no_portal) -> str:
             tem_laudo |= canon_exames(n.replace("_", " "))
     exigidos = set()
     for e in exames:
-        exigidos |= (_DOC_COMPONENTES if e in ("documentacao", "documentacao_completa")
+        exigidos |= (_componentes_doc(exames) if e in ("documentacao", "documentacao_completa")
                      else {e})
     falta = {e for e in exigidos
              if e in _LAUDO_ESPERADO and e not in tem_laudo}

@@ -178,10 +178,10 @@ def arquivos_que_faltam(exames_canon, no_portal, disponiveis) -> list:
 
     Imagem: so entra quando a guia nao tem NENHUMA. A folha de entrega e composta —
     sem saber o que ha dentro dela, acrescentar outra e arriscar duplicar."""
-    from esteira import _DOC_COMPONENTES, _LAUDO_ESPERADO
+    from esteira import _componentes_doc, _LAUDO_ESPERADO
     exigidos = set()
     for e in (exames_canon or ()):
-        exigidos |= (_DOC_COMPONENTES
+        exigidos |= (_componentes_doc(exames_canon)
                      if e in ("documentacao", "documentacao_completa") else {e})
     ja = _exames_com_laudo(no_portal)
     falta_laudo = {e for e in exigidos if e in _LAUDO_ESPERADO and e not in ja}
