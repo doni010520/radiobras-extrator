@@ -479,6 +479,7 @@ def _retry_scheduler():
             import esteira
             # MESMA reserva (dia, conta) do /faturar/run e do cron: sem ela o retry
             # anexou em duplicidade junto com um "Faturar dia" (incidente 16/09/2026).
+            _ini_r = datetime.now(_TZ) if _TZ else datetime.now()
             res = esteira.processar_retries(
                 gemini_key=os.environ.get("GEMINI_API_KEY"), k_attach=3,
                 log=lambda m: app.logger.info("%s", m),
@@ -486,6 +487,8 @@ def _retry_scheduler():
             if res.get("devidos"):
                 app.logger.info("Retry loop: %s devida(s) em %s grupo(s).",
                                 res.get("devidos"), res.get("grupos"))
+                # o que o retry faturou tambem e conferido no portal (dono 11/10)
+                _conferir_pos_rodada(_ini_r)
         except Exception as e:
             app.logger.error("Retry scheduler: %s", e)
         # ~1 min entre ciclos: a 2a tentativa é IMEDIATA (backoff 0), então o poll
@@ -1965,6 +1968,10 @@ def relatorios_execucao_xlsx(eid: int):
     import pandas as pd
 
     def _anexado(it):
+        if it.get("categoria") == "ja_anexada":
+            # o robo NAO anexou nada: a guia ja tinha documentos de outra pessoa
+            # (regra do dono 11/10: nao parecer que o robo fez pela metade)
+            return "NADA pelo robô — a guia já tinha documentos anexados por outra pessoa (conferida: completa)"
         base = "laudo + imagens"
         return base + (f" + solicitação ({it['solicitacao']})" if it.get("solicitacao") else "")
     df_f = pd.DataFrame([{"GTO": i["gto"], "Paciente": i["paciente"],
@@ -2108,7 +2115,12 @@ def faturar_run():
     dry = (request.form.get("dry") or "1") != "0"
     if db.eh_hapvida(plano):
         return _faturar_run_hapvida(data, plano, dry)
-    if plano and plano not in PLANOS:
+    # UNIDADE OBRIGATORIA (regra do dono, 11/10). Sem ela caia no login/convenios
+    # padrao antigos (filtro de segmento ja desligado nas contas) e a reserva '_'
+    # nao colidia com o cron da mesma conta.
+    if not plano:
+        return jsonify({"error": "escolha a unidade"}), 400
+    if plano not in PLANOS:
         return jsonify({"error": "plano inválido"}), 400
 
     jid = uuid.uuid4().hex[:8]
@@ -2129,6 +2141,7 @@ def faturar_run():
     senha_portal = db.get_portal_senha(plano or None)
 
     def _go():
+        _ini = datetime.now(_TZ) if _TZ else datetime.now()
         try:
             from esteira import rodar_esteira
             job["resumo"] = rodar_esteira(data, 6, 3, 5, lambda m: job["log"].append(m),
@@ -2150,6 +2163,14 @@ def faturar_run():
             # execução, para sempre.
             if job["resumo"]:
                 job["resumo"].pop("resultados", None)
+            # Faturamento manual tambem e conferido no portal e completado como o
+            # do cron (regra do dono 11/10). So leitura + completar; nunca derruba.
+            if not dry:
+                try:
+                    job["log"].append("Conferindo no portal o que foi faturado…")
+                    _conferir_pos_rodada(_ini)
+                except Exception as e:
+                    job["log"].append(f"(conferência pós-rodada falhou: {str(e)[:80]})")
         except Exception as e:
             job["error"] = str(e)
             job["log"].append(f"ERRO: {str(e)[:140]}")

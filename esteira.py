@@ -2038,13 +2038,17 @@ def _motivo_ja_anexada(falta, n_anexos, n_docs, anexos, exames_portal=None) -> s
     para a guia COMPLETA quanto para a incompleta. Foi assim que a LILIA (196485745)
     apareceu como faturada tres dias seguidos sem o laudo da panoramica."""
     if falta == "imagem":
-        return ("A guia ja tem documento anexado, mas ele NAO cobre o que ela "
+        return ("A guia JA TINHA documentos anexados por outra pessoa (clinica ou outra "
+                "rodada) quando o robo chegou, e o robo NAO anexou nada nela. "
+                "A guia ja tem documento anexado, mas ele NAO cobre o que ela "
                 "autoriza: nao ha imagem do exame entre os anexos — a folha de "
                 "imagens nao foi gerada ou nao foi anexada. Sem ela a operadora "
                 "glosa por documentacao incompleta (3230). O QUE FAZER: conferir a "
                 "folha de imagens no PRORADIS e anexar a mao.")
     if falta == "laudo":
-        return (f"A guia ja tem documento anexado, mas FALTA o laudo de um dos exames "
+        return (f"A guia JA TINHA documentos anexados por outra pessoa (clinica ou outra "
+                f"rodada) quando o robo chegou, e o robo NAO anexou nada nela. "
+                f"A guia ja tem documento anexado, mas FALTA o laudo de um dos exames "
                 f"que ela autoriza ({lista_amigavel(sorted(exames_portal or []))}). "
                 f"Faturar assim entrega menos do que a guia autoriza e a operadora "
                 f"glosa por documentacao incompleta (3230). O QUE FAZER: conferir se "
@@ -3800,6 +3804,13 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
             _t(f"Gemini 2.5 Flash ATIVO | pool de leitura K={k_leitura} (Tesseract fora)")
         except Exception as e:
             _t(f"Gemini indisponível ({str(e)[:80]}) — roda sem leitura")
+    if gem is None and k_attach > 0 and not dry_run:
+        # Rodada REAL sem leitura nao fatura nada: aborta com a causa, e o caminho
+        # de aborto ja registra, poe o dia no retry e avisa o dono por WhatsApp
+        # (regra do dono 11/10: 'sem Gemini nada anexa — e eu devo ser avisado').
+        raise RuntimeError("Leitura automática indisponível: a chave do Gemini não está "
+                           "configurada ou foi recusada. Nada foi faturado. Falha nossa — "
+                           "conferir GEMINI_API_KEY no servidor.")
 
     anexar_on = bool(gem) and k_attach > 0
     # SINAL VERDE HUMANO (feature 13/08): guias que um usuário confirmou na tela de
@@ -4533,8 +4544,18 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                         if _ng:
                             # enviado != grudou: o POST foi aceito mas o arquivo
                             # (laudo em especial) NAO persistiu na guia. NAO e OK.
-                            item["anexar_erro"] = ("enviado mas NAO grudou na guia: "
-                                                   + ", ".join(_ng))
+                            item["anexar_erro"] = ("anexação falhou: o portal aceitou o envio "
+                                                   "mas o arquivo não apareceu na guia ("
+                                                   + ", ".join(_ng) + ")")
+                        elif not res.get("ok"):
+                            # Envio nao confirmado SEM arquivo identificado (espera
+                            # esgotou, trava de contagem, conferencia sem leitura). Antes
+                            # o erro do envio era descartado e a guia caia no painel da
+                            # CLINICA como 'Outros'. Falha nossa: fila tecnica + retry
+                            # (regra do dono 11/10: falha nossa nao chega ao cliente).
+                            item["anexar_erro"] = ("anexação falhou: o envio não foi "
+                                                   "confirmado no portal ("
+                                                   + str(res.get("erro") or "sem detalhe")[:120] + ")")
                         _t(f"[ANEX{wid}] GTO {item['gto']} -> {item['anexado']} "
                            f"({len(res.get('enviados', []))} enviados, {len(res.get('ja_anexados', []))} já tinha"
                            + (f", {len(_ng)} NAO GRUDOU: {', '.join(_ng)}" if _ng else "") + ")")
