@@ -1849,6 +1849,36 @@ def _exames_sem_laudo(exames_canon, arquivos_no_plano, apenas_esperados=False) -
     return {e for e in faltando if e in _LAUDO_ESPERADO} if apenas_esperados else faltando
 
 
+def _exames_sem_laudo_conteudo(exames_canon, arquivos_no_plano) -> set:
+    """Exames radiologicos da guia que NENHUM laudo do plano cobre, lendo o CONTEUDO.
+
+    Regra do dono (11/10): so fatura com TODOS os laudos necessarios — nunca
+    faturamento parcial — sabendo que um laudo pode cobrir varios exames. O laudo
+    da panoramica declara no titulo/cabecalho o que analisou ("Panoramica da face,
+    periapical boca completa e interproximais", "Radiografias Analisadas: ...").
+    Medido em 1057 laudos de 100 dias: ~92% das panoramicas de quem fez periapical
+    ou interproximal no mesmo dia cobrem esses exames; os outros ~8% (titulo so
+    "Radiografia Panoramica") ficam sem laudo do periapical e viram pendencia da
+    radiologia, nao faturamento parcial.
+    So conta arquivo que existe em disco; nome sem arquivo usa o rotulo do nome."""
+    from laudo_utils import exames_cobertos_pdf
+    exigidos = set()
+    for e in (exames_canon or ()):
+        if e in ("documentacao", "documentacao_completa"):
+            exigidos |= _componentes_doc(exames_canon)
+        elif not str(e).startswith("documentacao_"):
+            exigidos.add(e)
+    exigidos -= _DISPENSAM_LAUDO | {"fotografia", "modelos", "fotografias"}
+    tem = set()
+    for f in (arquivos_no_plano or []):
+        if not os.path.basename(str(f)).upper().startswith("LAUDO_"):
+            continue
+        tem |= _exame_do_laudo(f)
+        if os.path.isfile(str(f)) and str(f).lower().endswith(".pdf"):
+            tem |= exames_cobertos_pdf(str(f))
+    return exigidos - tem
+
+
 def _sem_imagem_no_plano(exames_canon, arquivos_no_plano) -> bool:
     """Guia com exame RADIOLOGICO e NENHUMA folha de imagem no plano.
 
@@ -4352,8 +4382,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                                    or item.get("exames_gto") or [])
                 _falta_cob = set()
                 if not _dec_it.get("dispensa_laudo"):
-                    _falta_cob = _exames_sem_laudo(_exames_da_guia, nomes,
-                                                   apenas_esperados=True)
+                    _falta_cob = (_exames_sem_laudo(_exames_da_guia, nomes,
+                                                    apenas_esperados=True)
+                                  | _exames_sem_laudo_conteudo(_exames_da_guia, arquivos))
                 if _entregavel_faltando(_dec_it.get("dispensa_laudo"), nomes) or _falta_cob:
                     item["anexado"] = "ERRO"
                     # A MENSAGEM PRECISA DIZER *QUAIS* EXAMES. "Conferir se o exame e

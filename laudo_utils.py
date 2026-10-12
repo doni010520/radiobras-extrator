@@ -78,3 +78,51 @@ def exames_pendentes_reais(laudo_pdf_paths: list, exames_status: list) -> dict:
         exc = canon_exames(ex or "")
         (incl if (exc and exc & cobertos) else pend).append((ex, st))
     return {"pendentes_reais": pend, "incluidos": incl, "cobertos": sorted(cobertos)}
+
+# Fim do CABECALHO num texto corrido (sem quebras de linha): a partir daqui vem o
+# corpo, onde "recomendamos radiografia periapical" NAO e exame coberto.
+_FIM_CAB = re.compile(r"an[aá]lise\s*:|achados|impress[aã]o\s+diagn|denti[cç][aã]o\s|"
+                      r"dente\(s\)|dentes\s+ausentes|interpreta[cç][aã]o|aus[eê]ncia|"
+                      r"girovers|presen[cç]a\s+de|recomend|sugere|observ|no\s+exame|"
+                      r"elemento\(s\)|tratamento\s+endod|desgaste|m[eé]sio", re.I)
+_CAB_EXPL = re.compile(r"(radiografias?\s+analisad\w*|exames?\s+realizad\w*|"
+                       r"foi\s+solicitad\w*|foram\s+solicitad\w*)\s*:?", re.I)
+
+
+def exames_cobertos_texto(texto: str) -> set:
+    """Mesma ideia de exames_cobertos, sobre o TEXTO do laudo (aceita texto corrido).
+    Junta o titulo (logo apos 'Solicitante: <nome>') e as declaracoes explicitas
+    ('Radiografias Analisadas:', 'Exame realizado:', 'Foi solicitada'), cortando no
+    inicio do corpo. Validado em 11/10 contra 1057 laudos de panoramica (100 dias)."""
+    t = re.sub(r"\s+", " ", texto or "")
+    partes = []
+    m = re.search(r"solicitante\s*:", t, re.I)
+    if m:
+        resto = t[m.end():m.end() + 400]
+        f = _FIM_CAB.search(resto)
+        partes.append(resto[:f.start()] if f else resto[:200])
+    for m in _CAB_EXPL.finditer(t[:1500]):
+        resto = t[m.end():m.end() + 300]
+        f = _FIM_CAB.search(resto)
+        partes.append(resto[:f.start()] if f else resto[:200])
+    cab = " ".join(partes)
+    out = canon_exames(cab)
+    # "Levantamento radiografico" e o nome do PRORADIS para periapical de boca toda
+    if re.search(r"levantamento", cab, re.I):
+        out.add("periapical")
+    return out
+
+
+@com_fitz
+def exames_cobertos_pdf(laudo_pdf_path: str) -> set:
+    """Exames que o laudo DECLARA cobrir (cabecalho/titulo), lendo o PDF. So a leitura
+    por texto (validada em 1057 laudos): a exames_cobertos antiga (por linhas) nao
+    corta em "Ausencia..." e contava "recomendamos radiografia periapical"."""
+    try:
+        d = fitz.open(laudo_pdf_path)
+        t = " ".join(pg.get_text() for pg in d)
+        d.close()
+    except Exception:
+        return set()
+    return exames_cobertos_texto(t)
+
