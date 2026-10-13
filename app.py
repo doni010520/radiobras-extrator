@@ -783,6 +783,9 @@ def _dia_alvo_cron(hoje):
     return (hoje - timedelta(days=4)).strftime("%d/%m/%Y")
 
 
+_auditoria_feita = {}
+
+
 def _conferir_pos_rodada(desde):
     """Pergunta ao PORTAL se as guias que acabamos de faturar ficaram completas.
 
@@ -898,6 +901,18 @@ def _faturar_cron_body():
     except Exception as e:
         # NUNCA derruba a rodada: a conferência é leitura, o faturamento já aconteceu.
         app.logger.error("Conferência pós-rodada falhou: %s", str(e)[:150])
+    # AUDITORIA DE CONTEUDO (13/10): uma vez por dia, na rodada da tarde, abre no
+    # portal o que o robo anexou nas ultimas 26h e le cada pagina. So avisa o dono
+    # do que tem problema confirmado. Desligavel com AUDITORIA_DIARIA=0.
+    try:
+        _agora = datetime.now(_TZ) if _TZ else datetime.now()
+        if (os.environ.get("AUDITORIA_DIARIA", "1") != "0" and _agora.hour >= 12
+                and _auditoria_feita.get("dia") != _agora.date()):
+            _auditoria_feita["dia"] = _agora.date()
+            import auditoria_conteudo
+            auditoria_conteudo.auditoria_diaria(log=lambda m: app.logger.info("%s", m))
+    except Exception as e:
+        app.logger.error("Auditoria diaria falhou: %s", str(e)[:150])
     try:
         _enviar_alertas_sla()      # email só dos que vencem amanhã (1 dia p/ o prazo)
     except Exception as e:

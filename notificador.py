@@ -240,6 +240,25 @@ def avisar_faturada_incompleta(itens: list, _post=None) -> bool:
     return enviar_whatsapp(chr(10).join(linhas), _post=_post)
 
 
+def avisar_auditoria(itens: list, total: int = 0, _post=None) -> bool:
+    """Auditoria diaria do CONTEUDO anexado: guia faturada pelo robo com documento de
+    outra pessoa ou faltando laudo/pedido/imagem. Uma mensagem, uma linha por guia."""
+    itens = [i for i in (itens or []) if i]
+    if not itens:
+        return False
+    linhas = ["🔎 *RadioBras — auditoria do que foi anexado*", "",
+              f"Conferi o conteúdo de {total or len(itens)} guia(s) faturada(s) pelo robô. "
+              f"{len(itens)} com problema:", ""]
+    for i in itens[:15]:
+        mot = "; ".join(i.get("motivos") or [])[:140]
+        linhas.append(f"• {i.get('paciente', '?')} — guia {i.get('gto', '?')} "
+                      f"({_nome_unidade(i.get('conta'))}, {str(i.get('dia', ''))[:5]}): {mot}")
+    if len(itens) > 15:
+        linhas.append(f"… e mais {len(itens) - 15}")
+    linhas += ["", "Prazo para acrescentar o que falta: 7 dias a partir do exame."]
+    return enviar_whatsapp(chr(10).join(linhas), _post=_post)
+
+
 def avisar_pausa(motivo: str, guias: int, minutos: int, dia: str = "", conta: str = "",
                  _post=None) -> bool:
     """APAGÃO: o mundo caiu (proxy fora, login não passa). UMA mensagem — não uma

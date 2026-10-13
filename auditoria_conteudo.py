@@ -133,8 +133,16 @@ def veredito(paciente, exames_gto, leituras, categoria=None, gto_ref=None):
     if contra and len(contra) < len(meus):
         contra = []
     for l in contra:
-        motivos_err.append(f"pedido [{l.get('idx')}] assinado por OUTRO dentista: "
-                           f"{l.get('dentista')!r} (guia: {dent_gto!r})")
+        cro_l = re.sub(r"\D", "", str(l.get("cro") or ""))
+        cro_g = re.sub(r"\D", "", str(gto.get("conselho_numero") or ""))
+        firme = gto_ref is not None or (len(cro_l) >= 4 and len(cro_g) >= 4 and cro_l != cro_g)
+        txt = (f"pedido [{l.get('idx')}] assinado por OUTRO dentista: "
+               f"{l.get('dentista')!r} (guia: {dent_gto!r})")
+        # Nome de dentista lido diferente sem os dois CROs para comparar era a maior
+        # fonte de falso alarme (titular/contratado lidos no campo 17, 11/10): so
+        # vira ERRADO com CRO do pedido e CRO da guia lidos e diferentes.
+        (motivos_err if firme else motivos_inc).append(
+            txt if firme else txt + " — sem CRO para confirmar")
 
     alvo = set(canon_exames(_ex(exames_gto)))
     laudos = [l for l in ls if l.get("tipo") == "laudo"]
@@ -201,7 +209,54 @@ def _ler(gem, blobs):
                 raise
 
 
-def auditar(dias=30, conta=None, saida=".", log=print):
+def _baixar_paginas(esteira, sess, gto):
+    blobs = []
+    for seq in range(1, 61):
+        b, m = esteira._baixar_anexo_portal(sess, gto, seq)
+        if not b:
+            break
+        blobs.append((b, m))
+    return blobs
+
+
+_PROMPT_NOME = ("Transcreva EXATAMENTE o nome do paciente escrito nesta página, letra por "
+                "letra, como está no papel. Responda só o nome, sem comentários. Se não "
+                "houver nome de paciente, responda apenas: NENHUM")
+
+
+def confirmar_outra_pessoa(gem, blobs, leituras, paciente):
+    """Antes de acusar 'documento de OUTRA pessoa', rele SO aquela pagina perguntando
+    so o nome. Leitura do lote errou nomes (TAINA lida 'Taine Ferra Falck', PAULO
+    PITOMBO lido 'Pitan', LUCAS JESUS BATISTA lido 'DA SILVA' — 11/10). Se a releitura
+    for compativel com o paciente, corrige a leitura. Devolve quantas corrigiu."""
+    from google.genai import types
+    import esteira
+    n = 0
+    for l in leituras or []:
+        p = str(l.get("paciente") or "").strip()
+        if (l.get("tipo") not in ("pedido", "laudo", "imagem", "documento") or not p
+                or len(p.split()) < 2 or _compat(p, paciente)):
+            continue
+        i = l.get("idx")
+        if not isinstance(i, int) or not (0 <= i < len(blobs)):
+            continue
+        b, m = blobs[i]
+        try:
+            r = gem.models.generate_content(
+                model=esteira._GEM_MODEL,
+                contents=[types.Part.from_bytes(data=b, mime_type=m), _PROMPT_NOME],
+                config=esteira._gem_cfg())
+            novo = (r.text or "").strip().strip('"').strip()
+        except Exception:
+            continue
+        if novo and novo.upper() != "NENHUM" and _compat(novo, paciente):
+            l["paciente_lote"] = p
+            l["paciente"] = novo
+            n += 1
+    return n
+
+
+def auditar(dias=30, conta=None, saida=".", log=print, guias=None):
     import requests
     import db
     import esteira
@@ -211,10 +266,11 @@ def auditar(dias=30, conta=None, saida=".", log=print):
     from playwright.sync_api import sync_playwright
 
     gem = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-    guias = guias_faturadas(dias, conta)
-    arq = os.path.join(saida, "auditoria_conteudo.jsonl")
+    guias = guias if guias is not None else guias_faturadas(dias, conta)
+    arq = os.path.join(saida, "auditoria_conteudo.jsonl") if saida else None
+    regs = []
     feitas = set()
-    if os.path.exists(arq):
+    if arq and os.path.exists(arq):
         for ln in open(arq, encoding="utf-8"):
             try:
                 r0 = json.loads(ln)
@@ -277,12 +333,11 @@ def auditar(dias=30, conta=None, saida=".", log=print):
                         # O acervo numera PAGINAS, nao arquivos (medido 10/10: WENDEL
                         # 197121795, 9 arquivos = 14 paginas). Baixar so ate o numero
                         # de arquivos perdia as ultimas paginas (ali estava o pedido).
-                        blobs = []
-                        for seq in range(1, 61):
-                            b, m = esteira._baixar_anexo_portal(sess, g["gto"], seq)
-                            if not b:
-                                break
-                            blobs.append((b, m))
+                        blobs = _baixar_paginas(esteira, sess, g["gto"])
+                        if len(blobs) < len(reg["nomes"]):
+                            # pagina vazia no meio = download truncado (MILENA/LUCIA
+                            # 11/10 vieram com 1 pagina): tenta de novo antes de concluir
+                            blobs = max(blobs, _baixar_paginas(esteira, sess, g["gto"]), key=len)
                         reg["baixados"] = len(blobs)
                         if not blobs:
                             raise RuntimeError("nenhum anexo baixado")
@@ -291,17 +346,57 @@ def auditar(dias=30, conta=None, saida=".", log=print):
                         reg["categoria"] = g.get("categoria")
                         reg["status"], reg["motivos"] = veredito(
                             g["paciente"], g["eg"], leit, g.get("categoria"))
+                        if reg["status"] == "ERRADO" and confirmar_outra_pessoa(
+                                gem, blobs, leit, g["paciente"]):
+                            reg["status"], reg["motivos"] = veredito(
+                                g["paciente"], g["eg"], leit, g.get("categoria"))
                     except Exception as e:
                         reg["status"], reg["motivos"] = "NAO_AUDITADA", [str(e)[:160]]
-                    with open(arq, "a", encoding="utf-8") as f:
-                        f.write(json.dumps(reg, ensure_ascii=False) + "\n")
+                    regs.append(reg)
+                    if arq:
+                        with open(arq, "a", encoding="utf-8") as f:
+                            f.write(json.dumps(reg, ensure_ascii=False) + "\n")
                     log(f"[{unid}] {g['gto']} {g['paciente'][:28]:28} {reg['status']}"
                         + (f" | {'; '.join(reg['motivos'])[:160]}" if reg["motivos"] else ""))
             try:
                 sessao["br"].close()
             except Exception:
                 pass
-    return arq
+    return regs
+
+
+def guias_faturadas_desde(horas=26):
+    """Guias que o ROBO faturou (pedido ou justificativa) em execucoes reais recentes."""
+    import db
+    from sqlalchemy import text
+    sql = """select distinct on (i.gto) i.gto, i.paciente, x.dia, x.conta,
+                    coalesce(i.exames_gto,'') eg, i.categoria
+             from execucao_itens i join execucoes x on x.id = i.execucao_id
+             where x.criado_em >= now() - make_interval(hours => :h)
+               and x.dry_run = false and i.faturado
+               and i.categoria in ('auto','justificativa')
+               and x.conta not like 'hapvida:%'
+             order by i.gto, x.criado_em desc"""
+    with db.engine.connect() as c:
+        return [dict(r) for r in c.execute(text(sql), {"h": horas}).mappings()]
+
+
+def auditoria_diaria(log=print, _auditar=None, _avisar=None):
+    """Confere o CONTEUDO do que o robo anexou nas ultimas 26h e avisa o dono so do
+    que tem problema confirmado (ERRADO ou FALTA). So leitura no portal.
+    Pedido do dono (10/10): 'como ter certeza de que o que anexamos e o que deveria'."""
+    guias = guias_faturadas_desde(26)
+    if not guias:
+        return []
+    regs = (_auditar or auditar)(guias=guias, saida=None, log=log)
+    ruins = [r for r in regs if r.get("status") in ("ERRADO", "FALTA")]
+    log(f"[auditoria diaria] {len(regs)} guia(s) conferida(s), {len(ruins)} com problema")
+    if ruins:
+        if _avisar is None:
+            import notificador
+            _avisar = notificador.avisar_auditoria
+        _avisar(ruins, total=len(regs))
+    return regs
 
 
 if __name__ == "__main__":
