@@ -2927,7 +2927,7 @@ def _erro_de_leitura_amigavel(erro) -> str:
             "O QUE FAZER: reprocessar o dia. Detalhe: " + _e[:160])
 
 
-def _motivo_sem_candidatos(n_prontuario, descartados):
+def _motivo_sem_candidatos(n_prontuario, descartados, n_gto=0):
     """Motivo quando NENHUM anexo do prontuário virou candidato a pedido. DISTINGUE:
       - prontuário REALMENTE vazio (n_prontuario==0): a clínica não anexou nada —
         espera a clínica (externo, sem retry);
@@ -2955,6 +2955,14 @@ def _motivo_sem_candidatos(n_prontuario, descartados):
                 f"Anexo(s): {'; '.join(str(d).split(':')[0] for d in desc)[:120]}")
     _suf = (f" ({len(desc)} anexo(s) não puderam ser lidos: {'; '.join(desc)[:160]})"
             if desc else "")
+    if int(n_gto or 0) > 0 and int(n_prontuario or 0) - int(n_gto) <= 0 and not desc:
+        # O UNICO documento e a propria guia (GTO). Nao ha o que reler: falta o pedido.
+        # LUCAS SANTOS DA SILVA 198305301 (09/10): saia "falha temporaria da leitura"
+        # e mandava reprocessar, 3 vezes, sem nunca poder resolver.
+        return ("NÃO FATUROU porque não há nenhum pedido do dentista anexado ao "
+                f"prontuário deste paciente: o único documento ({int(n_gto)}) é a "
+                "própria guia (GTO). O QUE FAZER: pedir à clínica que anexe o pedido "
+                "no prontuário.")
     if int(n_prontuario or 0) <= 0:
         return ("NÃO FATUROU porque não há nenhum pedido do dentista anexado ao "
                 "prontuário deste paciente. O sistema abriu o prontuário e não "
@@ -3055,6 +3063,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                            # ter pedido exame que esta guia nunca pediu)
     _disp_laudo = None   # None=nenhuma GTO lida ainda; vira False se qualquer GTO exigir laudo
     _gtos_desta = 0      # quantas GTOs do prontuário são desta guia (nº confere)
+    _n_gto_pdf = 0       # anexos que sao GTO (nao sao pedido) — p/ o motivo dizer a verdade
     for it in lista[:30]:
         ext = it["filename"].lower().rsplit(".", 1)[-1] if "." in it["filename"] else ""
         try:
@@ -3065,6 +3074,7 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
         with open(path, "wb") as f:
             f.write(blob)
         if ext == "pdf" and is_gto_pdf(path):     # pdf da GTO -> exames + justificativa
+            _n_gto_pdf += 1
             # É a GTO DESTA guia ou de outra visita do mesmo paciente? Justificativa
             # e dispensa-de-laudo só podem vir da GTO que está sendo faturada — senão
             # uma GTO antiga (outra guia, campo 49 preenchido) dispensaria a
@@ -3232,7 +3242,8 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
         # marca como 'falha temporária da leitura' (transitório: o loop re-lê), nunca
         # 'a clínica não anexou'. Trace 17/08 (KAUA/ALINE: prontuário cheio -> falso 'sem pedido').
         out["decisao"] = {"anexar": False,
-                          "motivo": _motivo_sem_candidatos(len(lista), out.get("descartados"))}
+                          "motivo": _motivo_sem_candidatos(len(lista), out.get("descartados"),
+                                                                  n_gto=_n_gto_pdf)}
         return out
     if _gem_estado["fatal"]:
         # já sabemos que a leitura está fora do ar nesta execução: falha na hora
