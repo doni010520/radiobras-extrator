@@ -1061,6 +1061,10 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
 # A ordem importa: o primeiro padrão que casar vence, então o mais específico vem
 # antes. Cada grupo carrega a AÇÃO — quem lê não precisa deduzir o que fazer.
 _GRUPOS_PENDENCIA = [
+    # DATA DO PEDIDO AJUSTADA E NAO CONFERIU (14/10): o robo reescreveu a data e a
+    # releitura nao achou UMA data legivel igual a do exame -> nao sobe.
+    ("data_ilegivel", r"data il[eé]g[ií]vel ou duplicada", "Conferência",
+     "Conferir o pedido no prontuário e anexar à mão com a data correta."),
     # EXAME AUTORIZADO E NAO REGISTRADO (13/10, regra do dono 11/10): a guia cobra um
     # exame que nao existe no PRORADIS para o paciente no dia (CINTHIA 197492516).
     ("exame_nao_registrado", r"n[ãa]o aparece no PRORADIS", "Conferência",
@@ -1811,6 +1815,7 @@ _TITULO_GRUPO = {
     "sem_laudo_do_exame": "Falta o laudo de um dos exames da guia",
     "outro_dentista": "Pedido assinado por outro dentista",
     "exame_nao_registrado": "Exame autorizado não registrado no PRORADIS",
+    "data_ilegivel": "Data do pedido ilegível após ajuste",
     "dentista_nao_confirmado": "Pedido antigo sem dentista confirmado",
     "esperando_tele": "Esperando o laudo da telerradiografia (traçado)",
     "falta_laudo": "Esperando o laudo do radiologista",

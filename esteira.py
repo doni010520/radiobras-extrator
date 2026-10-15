@@ -17,6 +17,7 @@ rodar_esteira(data, m_download, n_desc, k_leitura, log, gemini_key) -> resumo.
 import io
 import os
 import queue
+import collections
 import shutil
 import tempfile
 import threading
@@ -615,26 +616,50 @@ def _resolver_data_carimbo(data_lida, data_exame, hoje):
     return False, None, None
 
 
+def _fonte_data(tamanho):
+    for nome in ("arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(nome, tamanho)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
 def _carimbar_imagem(blob, nova_data, tipo, box_data, box_assinatura, reler_box_fn=None):
-    """Desenha nova_data numa IMAGEM de solicitacao. 'inserir' escreve na area de
-    assinatura (fallback: centro-inferior); 'atualizar' apaga a data velha (box_data,
-    retangulo branco) e reescreve. reler_box_fn() -> box_data quando falta na
-    'atualizar'. Retorna (blob_novo, True) se desenhou; (blob, False) se nao deu
-    (ex.: atualizar sem saber ONDE — nao inventa posicao). Usado na folha PRINCIPAL
-    E em CADA folha EXTRA da uniao (N3): antes so a principal era carimbada e a folha
-    extra manuscrita sem data subia SEM data (risco de glosa 'documento sem data')."""
+    """Desenha nova_data numa IMAGEM de solicitacao. 'inserir' escreve centralizado
+    logo abaixo da assinatura (fallback: centro-inferior); 'atualizar' apaga a data
+    velha (box_data, com folga) e reescreve NO MESMO LUGAR. reler_box_fn() -> box_data
+    quando falta na 'atualizar'. Retorna (blob_novo, True) se desenhou; (blob, False)
+    se nao deu (ex.: atualizar sem saber ONDE — nao inventa posicao).
+
+    14/10 (dono: "nao encaixa no local e nao remove a data antiga"): o texto agora
+    SEMPRE cabe na folha (TAISE DE JESUS 198255661 saiu '08/10/2' cortado na borda),
+    o retangulo branco cobre a data velha com folga (MARIA DAS GRACAS 198240088 ficou
+    '08/10/2026 0/26') e a foto de celular e girada pela EXIF antes de desenhar (a
+    caixa vem da imagem em pe; o desenho caia no lugar errado na foto deitada)."""
     try:
         img = Image.open(io.BytesIO(blob))
+        fmt = img.format
+        try:
+            from PIL import ImageOps
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
+        if img.mode in ("RGBA", "P", "LA", "L"):
+            img = img.convert("RGB")
         draw = ImageDraw.Draw(img)
         largura, altura = img.size
-        tamanho = max(24, int(altura * 0.025))
-        try:
-            font = ImageFont.truetype("arial.ttf", tamanho)
-        except Exception:
-            try:
-                font = ImageFont.truetype("LiberationSans-Regular.ttf", tamanho)
-            except Exception:
-                font = ImageFont.load_default()
+        margem = max(6, int(largura * 0.01))
+
+        def _medir(font):
+            b = draw.textbbox((0, 0), nova_data, font=font)
+            return b[2] - b[0], b[3] - b[1]
+
+        def _caber(x, y, w, h):
+            x = min(max(margem, x), max(margem, largura - w - margem))
+            y = min(max(margem, y), max(margem, altura - h - margem))
+            return x, y
+
         _bd = _box4(box_data)
         if tipo == "atualizar" and not _bd and reler_box_fn:
             try:
@@ -643,29 +668,78 @@ def _carimbar_imagem(blob, nova_data, tipo, box_data, box_assinatura, reler_box_
                 _bd = None
         if tipo == "atualizar" and _bd:
             ymin, xmin, ymax, xmax = _bd
-            draw.rectangle([int((xmin / 1000) * largura), int((ymin / 1000) * altura),
-                            int((xmax / 1000) * largura), int((ymax / 1000) * altura)], fill="white")
-            draw.text((int((xmin / 1000) * largura), int((ymin / 1000) * altura)),
-                      nova_data, fill="black", font=font)
+            x0, y0 = (xmin / 1000) * largura, (ymin / 1000) * altura
+            x1, y1 = (xmax / 1000) * largura, (ymax / 1000) * altura
+            bw, bh = max(1.0, x1 - x0), max(1.0, y1 - y0)
+            # folga: a caixa da leitura e aproximada e deixava pedacos da data velha
+            # mais folga a DIREITA: o fim da data manuscrita ('/26') passa da caixa
+            # (MARIA DAS GRACAS 198240088 ficou com '/26' sobrando, 15/10)
+            pl, pr, py = bw * 0.25 + 4, max(bw * 0.7, bh * 2.0) + 6, bh * 0.5 + 4
+            rx0, ry0 = max(0, int(x0 - pl)), max(0, int(y0 - py))
+            rx1, ry1 = min(largura, int(x1 + pr)), min(altura, int(y1 + py))
+            draw.rectangle([rx0, ry0, rx1, ry1], fill="white")
+            tam = int(min(max(18, bh * 0.9), max(24, altura * 0.035)))
+            font = _fonte_data(tam)
+            w, h = _medir(font)
+            while w > (rx1 - rx0) and tam > 14:          # cabe na area apagada
+                tam -= 2
+                font = _fonte_data(tam)
+                w, h = _medir(font)
+            cx, cy = (rx0 + rx1) / 2, (ry0 + ry1) / 2
+            x, y = _caber(int(cx - w / 2), int(cy - h / 2), w, h)
+            draw.text((x, y), nova_data, fill="black", font=font)
         elif tipo == "inserir":
+            font = _fonte_data(max(24, int(altura * 0.025)))
+            w, h = _medir(font)
             _ba = _box4(box_assinatura)
             if _ba:
                 ymin_a, xmin_a, ymax_a, xmax_a = _ba
-                pos_x = int(((xmin_a + xmax_a) / 2 / 1000) * largura)
-                pos_y = int((ymax_a / 1000) * altura) + 4
+                cx = ((xmin_a + xmax_a) / 2 / 1000) * largura
+                y = int((ymax_a / 1000) * altura) + 6
             else:
-                pos_x = int(largura * 0.50)
-                pos_y = int(altura * 0.85)
-            draw.text((pos_x, pos_y), nova_data, fill="black", font=font)
+                cx, y = largura * 0.50, int(altura * 0.85)
+            x, y = _caber(int(cx - w / 2), y, w, h)
+            draw.text((x, y), nova_data, fill="black", font=font)
         else:
             return blob, False
         out = io.BytesIO()
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
-        img.save(out, format=img.format if img.format else "JPEG")
+        img.save(out, format=fmt if fmt in ("JPEG", "PNG") else "JPEG")
         return out.getvalue(), True
     except Exception:
         return blob, False
+
+
+_CONFERE_DATA_PROMPT = """Este é um PEDIDO de exames odontológicos. Liste TODAS as datas escritas
+no documento (manuscritas, carimbadas ou impressas), exatamente como aparecem.
+Responda APENAS JSON (sem markdown): {"datas": ["DD/MM/AAAA", ...], "legivel": true}
+"legivel" = false se alguma data estiver sobreposta, cortada ou ilegível, OU se houver
+RESTOS de outra data perto dela (números ou barras soltos, como "/26" ou "0/26")."""
+
+
+def _conferir_data_editada(gem, blob, mime, nova_data):
+    """Depois de escrever a data: o pedido tem UMA data, legivel, igual a do exame?
+    (dono 14/10: pedido com data ilegivel ou duplicada nao pode subir). Devolve
+    (ok, detalhe). Falha de leitura -> (False, 'falha temporaria da leitura')."""
+    from google.genai import types
+    try:
+        r = gem.models.generate_content(
+            model=_GEM_MODEL, config=_gem_cfg(),
+            contents=[types.Part.from_bytes(data=blob, mime_type=mime), _CONFERE_DATA_PROMPT])
+        _contar_tokens(r)
+        t = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
+        d = json.loads(t) or {}
+    except Exception as e:
+        if _gem_fatal(e):
+            raise
+        return False, "falha temporária da leitura ao conferir a data ajustada"
+    datas = [x for x in (_parse_br_date(str(v)) for v in (d.get("datas") or [])) if x]
+    alvo = _parse_br_date(nova_data)
+    if d.get("legivel") is False:
+        return False, "a data ajustada ficou sobreposta ou ilegível"
+    if len(set(datas)) != 1 or alvo not in datas:
+        lidas = ", ".join(str(v) for v in (d.get("datas") or [])) or "nenhuma"
+        return False, f"o pedido ficou com data(s) {lidas} em vez de uma única {nova_data}"
+    return True, ""
 
 
 def _guardar_nao_lidos(pasta_dl, cands) -> int:
@@ -3563,6 +3637,22 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                 _data_ex = _parse_br_date(data_exame) if data_exame else None
                 precisa_manipular, tipo, _nova_data_carimbo = _resolver_data_carimbo(
                     data_lida, _data_ex, hoje)
+                if precisa_manipular and tipo == "inserir" and gem is not None:
+                    # A leitura em lote NAO achou data — antes o robo escrevia outra e o
+                    # pedido saia com DUAS (TAISE DE JESUS 198255661: '06/10/26' a mao +
+                    # '08/10/2' do robo). Pergunta so pela data, num anexo so.
+                    _bx2, _dt2 = _reler_box_data(gem, cands, idx)
+                    if _bx2:
+                        dec["box_data"] = _bx2
+                        _dl2 = _parse_br_date(_dt2) if _dt2 else None
+                        if _dl2:
+                            data_lida, data_lida_str = _dl2, _dt2
+                            dec["data_solicitacao"] = _dt2
+                            precisa_manipular, tipo, _nova_data_carimbo = \
+                                _resolver_data_carimbo(_dl2, _data_ex, hoje)
+                        else:
+                            # ha data mas ilegivel: SUBSTITUI no lugar dela (uma so)
+                            tipo = "atualizar"
                 if (precisa_manipular and tipo == "atualizar"
                         and not _dentista_confirmado(gem, cands, a,
                                                      out.get("dentista_gto") or "",
@@ -3601,71 +3691,38 @@ def _decidir(gem, pg, ctx, pac, pasta_dl, review_dir=None, gto=None,
                         candidato_valido = False
                 if candidato_valido and precisa_manipular and "image" in mime.lower():
                     try:
-                        img = Image.open(io.BytesIO(blob))
-                        draw = ImageDraw.Draw(img)
-                        largura, altura = img.size
                         nova_data = _nova_data_carimbo   # data do EXAME (não 'hoje')
-
-                        tamanho_fonte = max(24, int(altura * 0.025)) # Aprox 2.5% da altura da imagem
-                        try:
-                            font = ImageFont.truetype("arial.ttf", tamanho_fonte)
-                        except Exception:
-                            try:
-                                font = ImageFont.truetype("LiberationSans-Regular.ttf", tamanho_fonte)
-                            except Exception:
-                                font = ImageFont.load_default()
-            
-                        _editou = False   # a edição REALMENTE aconteceu?
-                        _bd = _box4(dec.get("box_data"))
-                        # Data vencida e a IA não devolveu ONDE a data está: em vez
-                        # de mandar direto para revisão manual (caso ESTER, 27/07),
-                        # pergunta a localização num anexo só — acerta muito mais.
-                        if tipo == 'atualizar' and not _bd:
-                            _bd2, _ = _reler_box_data(gem, cands, idx)
-                            if _bd2:
-                                _bd = _bd2
-                        if tipo == 'atualizar' and _bd:
-                            ymin, xmin, ymax, xmax = _bd
-                            # Apaga data antiga com retângulo branco
-                            draw.rectangle([int((xmin/1000)*largura), int((ymin/1000)*altura),
-                                            int((xmax/1000)*largura), int((ymax/1000)*altura)], fill="white")
-                            # Reescreve a nova data no mesmo lugar da antiga
-                            draw.text((int((xmin/1000)*largura), int((ymin/1000)*altura)), nova_data, fill="black", font=font)
-                            _editou = True
-                        elif tipo == 'inserir':
-                            # Prefere a área de assinatura informada pela IA; fallback: centro-inferior
-                            box_ass = _box4(dec.get("box_assinatura"))
-                            if box_ass:
-                                ymin_a, xmin_a, ymax_a, xmax_a = box_ass
-                                # Insere logo abaixo da área de assinatura, centralizado horizontalmente
-                                pos_x = int(((xmin_a + xmax_a) / 2 / 1000) * largura)
-                                pos_y = int((ymax_a / 1000) * altura) + 4
-                            else:
-                                # Fallback: 50% da largura, 85% da altura
-                                pos_x = int(largura * 0.50)
-                                pos_y = int(altura * 0.85)
-                            draw.text((pos_x, pos_y), nova_data, fill="black", font=font)
-                            _editou = True
-
-                        # 'atualizar' SEM box_data não caía em nenhum ramo: nada era
-                        # desenhado, mas o registro dizia "Data ajustada" e o documento
-                        # seguia pra anexação com a data VELHA. Agora vira pendência.
-                        if _editou:
-                            img_byte_arr = io.BytesIO()
-                            if img.mode in ("RGBA", "P"): img = img.convert("RGB")
-                            img.save(img_byte_arr, format=img.format if img.format else "JPEG")
-                            blob = img_byte_arr.getvalue() # Atualiza o arquivo em memória
+                        _blob2, _editou = _carimbar_imagem(
+                            blob, nova_data, tipo, dec.get("box_data"),
+                            dec.get("box_assinatura"),
+                            reler_box_fn=(lambda: _reler_box_data(gem, cands, idx)[0])
+                            if tipo == "atualizar" else None)
+                        _ok_dt, _det_dt = (_conferir_data_editada(gem, _blob2, mime, nova_data)
+                                           if (_editou and gem is not None) else (_editou, ""))
+                        if _editou and _ok_dt:
+                            blob = _blob2
                             dec["data_solicitacao"] = nova_data; dec["anexar"] = True
                             dec["motivo"] = ("Data ajustada automaticamente (a solicitação "
                                              "estava vencida e o robô reescreveu a data do "
                                              "exame). Se a guia não faturou, conferir na "
                                              "execução ou reprocessar o dia.")
+                        elif _editou:
+                            # conferida e NAO ficou uma data unica e legivel: nao sobe
+                            dec["anexar"] = False
+                            dec["motivo"] = (
+                                f"NÃO FATUROU porque, ao ajustar a data do pedido, {_det_dt}. "
+                                f"Pedido com data ilegível ou duplicada não pode ser anexado. "
+                                f"O QUE FAZER: conferir o pedido no prontuário e anexar à mão "
+                                f"com a data correta.")
+                            candidato_valido = False
                         else:
                             dec["anexar"] = False
                             dec["motivo"] = ("Solicitação com data vencida e o sistema não "
                                              "localizou onde ajustar (sem box da data) — revisar")
                             candidato_valido = False
                     except Exception as e:
+                        if _gem_fatal(e):
+                            raise
                         # Manipulação de data FALHOU -> NÃO anexa (nao pode faturar com
                         # a data nao-ajustada). Invalida o candidato tambem.
                         dec["anexar"] = False; dec["motivo"] = f"Erro ao editar imagem: {str(e)}"
@@ -3937,6 +3994,16 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                         f"processado (datas vistas: "
                         f"{sorted({g.get('liberacao') for g in gtos})[:6]}).")
                 alvos = [g for g in do_dia if "REPASSE" in g["status"].upper()]
+                # Guia fora de REPASSE sumia sem rastro (levantamento 11/10, dono:
+                # "quais sao as outras possibilidades?"). Registra quais status ficaram
+                # de fora e quantas guias, para o relatorio do dia e a decisao do dono.
+                _fora_rep = collections.Counter(
+                    str(g.get("status") or "?").strip() for g in do_dia
+                    if "REPASSE" not in str(g.get("status") or "").upper())
+                if _fora_rep:
+                    setup["status_fora_repasse"] = dict(_fora_rep)
+                    _t(f"[DESC] {sum(_fora_rep.values())} guia(s) do dia FORA de REPASSE "
+                       f"(nao processadas): {dict(_fora_rep)}")
                 # RETRY DIRECIONADO (Fase 3): quando o loop de retry chama com uma
                 # lista de gtos, processa SO essas — nao re-roda o dia inteiro (barato
                 # e nao re-tenta o externo à toa).
@@ -5019,6 +5086,7 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
         "outros": len(resultados) - len(baixados),
         "solic_auto": len(com_solic), "justificativa": len(com_justif), "revisao": n_rev,
         "anexar_on": anexar_on, "dry_run": dry_run,
+        "status_fora_repasse": setup.get("status_fora_repasse") or {},
         "anexado_ok": anx.count("OK"), "anexado_dry": anx.count("DRY"),
         "anexado_falhou": anx.count("FALHOU") + anx.count("ERRO"),
         "nao_faturadas": n_rev,
