@@ -1879,6 +1879,23 @@ def _exames_sem_laudo_conteudo(exames_canon, arquivos_no_plano) -> set:
     return exigidos - tem
 
 
+def _exames_nao_registrados(faltando, exames_proradis) -> set:
+    """Dos exames sem laudo, os que NEM EXISTEM no PRORADIS para o paciente no dia.
+    Conservador: lista do PRORADIS vazia = nao sabe (devolve vazio); periapical de
+    boca completa / levantamento conta como interproximal feito junto."""
+    nomes = [str(n) for n in (exames_proradis or []) if str(n).strip()]
+    if not nomes:
+        return set()
+    tem = set()
+    for n in nomes:
+        tem |= canon_exames(n)
+        if re.search(r"levantamento|boca\s+(toda|completa)", n, re.I):
+            tem |= {"periapical", "interproximal"}
+        if re.search(r"documenta", n, re.I):
+            tem |= {"panoramica", "telerradiografia", "fotografia", "modelo"}
+    return {e for e in (faltando or ()) if e not in tem}
+
+
 def _sem_imagem_no_plano(exames_canon, arquivos_no_plano) -> bool:
     """Guia com exame RADIOLOGICO e NENHUMA folha de imagem no plano.
 
@@ -2620,6 +2637,9 @@ def _baixa_um(pg, ctx, by_norm, g, tmp, data):
             # Vazio no fallback por nome (cod 'WL*'), onde não há analítico pra
             # comparar — aí o filtro cai na heurística antiga, como sempre fez.
             "extras_acc": res.get("accessions_extras") or [],
+            # nomes dos exames do paciente no PRORADIS (13/10): diz se um exame que a
+            # guia autoriza foi de fato registrado (caso CINTHIA 197492516)
+            "exames_proradis": res.get("exames_proradis") or [],
             "convenio_acc": res.get("accessions_convenio") or [],
             # exame achado em dia diferente do da guia: fica REGISTRADO, para a
             # operadora saber que a data não é a mesma
@@ -4430,13 +4450,25 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                         # nenhum laudo" aqui seria falso e mandaria cobrar o que ja
                         # existe.
                         _nomes_falta = lista_amigavel(sorted(_falta_cob))
-                        item["anexar_erro"] = (
-                            f"a guia autoriza {_ex_guia or '(exames ilegíveis)'}, mas "
-                            f"NÃO há o laudo de {_nomes_falta} entre os documentos — "
-                            f"faturar assim entrega menos do que a guia autoriza e a "
-                            f"operadora glosa por documentação incompleta (3230). "
-                            f"O QUE FAZER: cobrar a emissão desse laudo; o robô anexa "
-                            f"sozinho assim que ele sair no PRORADIS.")
+                        _nao_reg = _exames_nao_registrados(_falta_cob, item.get("exames_proradis"))
+                        if _nao_reg:
+                            # Regra do dono (11/10): exame autorizado e NAO feito nao fatura.
+                            item["anexar_erro"] = (
+                                f"a guia autoriza {_ex_guia or '(exames ilegíveis)'}, mas o exame de "
+                                f"{lista_amigavel(sorted(_nao_reg))} não aparece no PRORADIS para "
+                                f"este paciente neste dia (registrados: "
+                                f"{', '.join(item.get('exames_proradis') or [])}). Faturar cobraria "
+                                f"um exame que pode não ter sido feito. O QUE FAZER: confirmar se o "
+                                f"exame foi realizado; se foi, registrar no PRORADIS e emitir o "
+                                f"laudo; se não foi, a guia precisa ser corrigida.")
+                        else:
+                            item["anexar_erro"] = (
+                                f"a guia autoriza {_ex_guia or '(exames ilegíveis)'}, mas "
+                                f"NÃO há o laudo de {_nomes_falta} entre os documentos — "
+                                f"faturar assim entrega menos do que a guia autoriza e a "
+                                f"operadora glosa por documentação incompleta (3230). "
+                                f"O QUE FAZER: cobrar a emissão desse laudo; o robô anexa "
+                                f"sozinho assim que ele sair no PRORADIS.")
                     elif _falta_qual_entregavel(
                             _dec_it.get("dispensa_laudo"), nomes) == "imagem":
                         # LAUDO PRESENTE, IMAGEM AUSENTE. Sem este ramo a mensagem

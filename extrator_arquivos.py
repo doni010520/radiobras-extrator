@@ -1234,6 +1234,12 @@ def _processar_paciente(page, ctx, pac: dict, worklist: list, zip_root: str, dat
             t = extrair_tokens(h)
             t["acc"] = acc
             tokens_list.append(t)
+            try:
+                _ex_nome = extrair_exame_status(h)[0]
+                if _ex_nome and _ex_nome not in resultado.setdefault("exames_proradis", []):
+                    resultado["exames_proradis"].append(_ex_nome)
+            except Exception:
+                pass
 
     if _extras:
         resultado["notas"].append(

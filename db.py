@@ -1061,6 +1061,11 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
 # A ordem importa: o primeiro padrão que casar vence, então o mais específico vem
 # antes. Cada grupo carrega a AÇÃO — quem lê não precisa deduzir o que fazer.
 _GRUPOS_PENDENCIA = [
+    # EXAME AUTORIZADO E NAO REGISTRADO (13/10, regra do dono 11/10): a guia cobra um
+    # exame que nao existe no PRORADIS para o paciente no dia (CINTHIA 197492516).
+    ("exame_nao_registrado", r"n[ãa]o aparece no PRORADIS", "Conferência",
+     "Confirmar se o exame foi realizado. Se foi, registrar no PRORADIS e emitir o laudo "
+     "(o robô fatura sozinho depois); se não foi, a guia precisa ser corrigida."),
     # PRENOME MAL LIDO (23/08): todos os sobrenomes batem e so o primeiro nome
     # difere — ANETE ANDRADE DE MATTOS lida como 'Plunet Andrade de Mattos'. E
     # leitura, nao documento de terceiro. Vem ANTES de nome_nao_bate, que mandaria
@@ -1805,6 +1810,7 @@ _TITULO_GRUPO = {
     "sem_imagem": "Laudo pronto, mas sem a folha de imagens",
     "sem_laudo_do_exame": "Falta o laudo de um dos exames da guia",
     "outro_dentista": "Pedido assinado por outro dentista",
+    "exame_nao_registrado": "Exame autorizado não registrado no PRORADIS",
     "dentista_nao_confirmado": "Pedido antigo sem dentista confirmado",
     "esperando_tele": "Esperando o laudo da telerradiografia (traçado)",
     "falta_laudo": "Esperando o laudo do radiologista",
