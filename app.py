@@ -653,66 +653,23 @@ def _sla_status(sla):
 
 
 def _enviar_alertas_sla():
-    """Email diário das pendências dentro de 2 dias do prazo — vencidas, vence
-    amanhã (1 dia) e faltam 2 dias. `sla <= 2` (e não `== 1`) dá margem de correção
-    e é rede de segurança: se o cron pular um dia, a vencida ainda é alertada (e
-    reforçada todo dia até resolver), em vez de o aviso de '1 dia' sumir pra sempre."""
+    """Email diario de PRAZO (formato aprovado pelo dono 15/10): so as guias que alguem
+    precisa agir ate vencer, separadas por quem age, com o que fazer. Falha nossa fica
+    de fora (vai por WhatsApp ao dono); vencidas viram uma linha so."""
     if os.environ.get("ALERTA_SLA", "1") == "0":
         return
     try:
         itens = db.listar_pendencias("abertas")
     except Exception:
         return
-    urgentes = []
-    for p in itens:
-        s = _sla_dias_restantes(p.get("dia"))
-        if s is not None and s <= 2:
-            p["sla"] = s
-            p["unidade"] = _plano_nome(p.get("conta")) or (p.get("conta") or "—")
-            urgentes.append(p)
-    if not urgentes:
-        app.logger.info("SLA: nenhuma pendência dentro de 2 dias do prazo — sem email.")
+    import emails_rb
+    assunto, txt, html = emails_rb.montar_email_prazo(
+        itens, _sla_dias_restantes, lambda c: _plano_nome(c) or (c or "—"),
+        db.classificar_pendencia, db.eh_nosso)
+    if not assunto:
+        app.logger.info("SLA: nenhuma guia perto do prazo que dependa de alguém — sem email.")
         return
-    urgentes.sort(key=lambda p: p["sla"])          # vencidas primeiro
-    n_venc = sum(1 for p in urgentes if p["sla"] <= 0)
-    n_d1 = sum(1 for p in urgentes if p["sla"] == 1)
-    n_d2 = sum(1 for p in urgentes if p["sla"] == 2)
-    partes = []
-    if n_venc: partes.append(f"{n_venc} vencida(s)")
-    if n_d1: partes.append(f"{n_d1} vence(m) amanhã")
-    if n_d2: partes.append(f"{n_d2} em 2 dias")
-    resumo = " · ".join(partes)
-
-    linhas = "\n".join(
-        f"  • [{_sla_status(p['sla'])[0]}] {p['unidade']} · dia {p['dia']} · GTO {p['gto']} "
-        f"· {p.get('paciente') or '—'} — {p.get('motivo') or 'revisão'}" for p in urgentes)
-    txt = (f"ATENÇÃO: {len(urgentes)} GTO(s) NÃO FATURADA(S) no limite do prazo "
-           f"(prazo de {_prazo_dias()} dias da OdontoPrev): {resumo}.\n\n{linhas}\n\n"
-           f"Resolva no PRORADIS ou faça a correção na origem hoje, senão o prazo estoura.\n"
-           f"Painel de pendências: /pendencias")
-    rows = "".join(
-        f"<tr><td style='padding:6px 10px;color:{_sla_status(p['sla'])[1]};font-weight:700'>"
-        f"{_sla_status(p['sla'])[0]}</td>"
-        f"<td style='padding:6px 10px'>{p['unidade']}</td>"
-        f"<td style='padding:6px 10px'>{p['dia']}</td>"
-        f"<td style='padding:6px 10px'><b>{p['gto']}</b></td>"
-        f"<td style='padding:6px 10px'>{(p.get('paciente') or '—')}</td>"
-        f"<td style='padding:6px 10px'>{(p.get('motivo') or 'revisão')}</td></tr>"
-        for p in urgentes)
-    html = (f"<div style='font-family:Arial,sans-serif'>"
-            f"<h2 style='color:#b3261e'>⚠️ {len(urgentes)} GTO(s) no limite do prazo</h2>"
-            f"<p>{resumo}. Prazo de <b>{_prazo_dias()} dias</b> da OdontoPrev. Resolva hoje.</p>"
-            f"<table style='border-collapse:collapse;font-size:13px' border='1'>"
-            f"<tr style='background:#f0f0f0'><th style='padding:6px 10px'>Prazo</th>"
-            f"<th style='padding:6px 10px'>Unidade</th>"
-            f"<th style='padding:6px 10px'>Dia</th><th style='padding:6px 10px'>GTO</th>"
-            f"<th style='padding:6px 10px'>Paciente</th><th style='padding:6px 10px'>Motivo</th></tr>"
-            f"{rows}</table></div>")
-    assunto = (f"⚠️ RadioBras — {resumo} (prazo de faturamento)")
     _send_email(assunto, txt, html)
-
-
-_faturar_cron_running = threading.Event()
 
 
 def _faturar_cron_rodar():
@@ -1155,56 +1112,29 @@ def alerta_testar_email():
 
 
 def _email_resumo_faturamentos(dias: int = 7):
-    """(assunto, txt, html) com os faturamentos REAIS dos últimos `dias`
-    (execuções não-dry-run do banco). Retorna (None, None, None) se não houver."""
+    """(assunto, txt, html) do resumo da semana, contado POR GUIA (formato aprovado
+    pelo dono 15/10). (None, None, None) se nao houve execucao real."""
+    import emails_rb
     hoje = datetime.now(_TZ).date() if _TZ else datetime.now().date()
-    limite = hoje - timedelta(days=dias)
-    execs = []
-    for e in db.listar_execucoes(200):
-        if e.get("dry_run"):
-            continue
-        c = e.get("criado_em")
-        if not c:
-            continue
-        cd = c.astimezone(_TZ).date() if (_TZ and c.tzinfo) else c.date()
-        if cd < limite:
-            continue
-        e["quando"] = cd
-        e["unidade"] = _plano_nome(e.get("conta")) or (e.get("conta") or "—")
-        execs.append(e)
-    if not execs:
-        return None, None, None
-    execs.sort(key=lambda e: (e["quando"], e["unidade"]))
-    tot_fat = sum(e.get("faturadas", 0) or 0 for e in execs)
-    tot_pend = sum(e.get("pendentes", 0) or 0 for e in execs)
-    assunto = (f"RadioBras — Faturamentos da semana: {tot_fat} GTO(s) faturada(s) "
-               f"em {len(execs)} execução(ões)")
-    intro = (f"Resumo dos faturamentos reais dos últimos {dias} dias "
-             f"({limite.strftime('%d/%m')} a {hoje.strftime('%d/%m/%Y')}):")
-    total = (f"TOTAL: {tot_fat} GTO(s) faturada(s) · {tot_pend} pendência(s) "
-             f"· {len(execs)} execução(ões).")
-    linhas = "\n".join(
-        f"  • {e['quando'].strftime('%d/%m')} · {e['unidade']} · dia do exame {e.get('dia') or '—'} "
-        f"— {e.get('faturadas', 0)} faturada(s), {e.get('pendentes', 0)} pendente(s)"
-        for e in execs)
-    txt = f"{intro}\n\n{total}\n\n{linhas}\n\nPainel: /relatorios · Pendências: /pendencias"
-    rows = "".join(
-        f"<tr><td style='padding:6px 10px'>{e['quando'].strftime('%d/%m')}</td>"
-        f"<td style='padding:6px 10px'>{e['unidade']}</td>"
-        f"<td style='padding:6px 10px'>{e.get('dia') or '—'}</td>"
-        f"<td style='padding:6px 10px;text-align:center'><b>{e.get('faturadas', 0)}</b></td>"
-        f"<td style='padding:6px 10px;text-align:center'>{e.get('pendentes', 0)}</td></tr>"
-        for e in execs)
-    html = (f"<div style='font-family:Arial,sans-serif;max-width:680px'>"
-            f"<h2 style='color:#0b6b4f'>Faturamentos da semana</h2>"
-            f"<p>{intro}</p>"
-            f"<p style='font-size:15px'><b>{total}</b></p>"
-            f"<table style='border-collapse:collapse;font-size:13px' border='1'>"
-            f"<tr style='background:#f0f0f0'><th style='padding:6px 10px'>Rodou em</th>"
-            f"<th style='padding:6px 10px'>Unidade</th><th style='padding:6px 10px'>Dia do exame</th>"
-            f"<th style='padding:6px 10px'>Faturadas</th><th style='padding:6px 10px'>Pendentes</th></tr>"
-            f"{rows}</table></div>")
-    return assunto, txt, html
+    inicio = (hoje - timedelta(days=dias)).strftime("%d/%m")
+    destinos = emails_rb.classificar_guias(emails_rb.linhas_da_semana(dias))
+    # guia que o ROBO faturou em semana anterior e so foi revista nesta (ja_anexada)
+    # nao e 'documento de outra pessoa' nem atividade da semana: sai do resumo
+    try:
+        import completar
+        _robo = completar.gtos_faturadas_pelo_robo(
+            [g for (_c, g), d in destinos.items() if d == "outra_pessoa"])
+        destinos = {k: d for k, d in destinos.items()
+                    if not (d == "outra_pessoa" and k[1] in _robo)}
+    except Exception:
+        pass
+    try:
+        pend = db.listar_pendencias("abertas")
+    except Exception:
+        pend = []
+    return emails_rb.montar_resumo_semana(
+        destinos, pend, lambda c: _plano_nome(c) or (c or "—"), _sla_dias_restantes,
+        db.classificar_pendencia, db.eh_nosso, inicio, hoje.strftime("%d/%m"))
 
 
 def _enviar_resumo_faturamentos():
