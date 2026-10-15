@@ -9,15 +9,21 @@ import tempfile
 import replay_harness as rh
 
 
+COMPLETAR = "--completar-gemini" in sys.argv
+
+
 def tocar_um(pasta_cassete: str) -> dict:
     import esteira
     c = rh.Cassete(pasta_cassete)
     m = c.meta
-    with rh.instalar("tocar", c):
+    with rh.instalar("completar" if COMPLETAR else "tocar", c):
         r = esteira.rodar_esteira(m["dia"], 1, 1, 1, log=lambda s: None,
                                   gemini_key="replay", review_dir=tempfile.mkdtemp(),
                                   k_attach=1, dry_run=True, conta=m["conta"],
                                   senha_portal="replay")
+    if COMPLETAR and not c.faltas:
+        c.trilha = c.trilha_gravada      # a trilha gravada continua a da rodada real
+        c.salvar()
     if c.faltas:
         # o robo engole excecao (except Exception) e transformaria a falta em
         # categoria "erro" calada: aqui ela derruba a comparacao.

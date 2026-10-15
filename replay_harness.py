@@ -233,9 +233,28 @@ def gemini_cliente(modo, cassete, real_cls):
 
         def generate_content(self, model=None, contents=None, config=None, **kw):
             k = chave_gemini(model, contents)
-            if modo == "tocar":
-                v = cassete.proximo("gemini", k,
-                                    "| envio=" + " ".join(descricao_envio(contents))[:300])
+            if modo in ("tocar", "completar"):
+                try:
+                    v = cassete.proximo("gemini", k,
+                                        "| envio=" + " ".join(descricao_envio(contents))[:300])
+                except ReplayFaltando:
+                    if modo != "completar" or self._real is None:
+                        raise
+                    # COMPLETAR (15/10): leitura NOVA que o cassete nao tem (o codigo
+                    # passou a perguntar algo a mais). O portal segue o GRAVADO; so
+                    # esta pergunta vai ao Gemini de verdade e fica gravada.
+                    with cassete._lock:
+                        cassete.faltas.pop()
+                    cassete.gravar("gemini_envio", k, descricao_envio(contents))
+                    try:
+                        r = self._real.generate_content(model=model, contents=contents,
+                                                        config=config, **kw)
+                        v = {"text": getattr(r, "text", None)}
+                    except Exception as e:
+                        v = {"exc": f"{type(e).__name__}: {e}"}
+                    cassete.anexar("gemini", k, v)
+                    with cassete._lock:
+                        cassete._idx[("gemini", str(k))] = len(cassete._dados["gemini"][str(k)])
                 if "exc" in v:
                     raise RuntimeError(v["exc"])
                 return _Resp(v["text"])
@@ -254,7 +273,12 @@ def gemini_cliente(modo, cassete, real_cls):
             # Guarda o CLIENTE real, nao so o .models: sem referencia o cliente e
             # coletado, fecha a conexao e toda chamada vira "Cannot send a request,
             # as the client has been closed" (gravacao de 09/10).
-            self._real = real_cls(*a, **k) if modo == "gravar" else None
+            if modo == "gravar":
+                self._real = real_cls(*a, **k)
+            elif modo == "completar" and os.environ.get("GEMINI_API_KEY"):
+                self._real = real_cls(api_key=os.environ["GEMINI_API_KEY"])
+            else:
+                self._real = None
             self.models = _Models(self._real.models if self._real else None)
 
     return _Cliente
@@ -287,7 +311,7 @@ def sessao_classe(modo, cassete, real_cls):
 
         def _faz(self, metodo, url, **kw):
             k = _chave_http(metodo, url, kw)
-            if modo == "tocar":
+            if modo in ("tocar", "completar"):
                 v = cassete.proximo("http", k)
                 if "exc" in v:
                     raise RuntimeError(v["exc"])
@@ -370,10 +394,10 @@ def instalar(modo: str, cassete: Cassete):
     ('tocar'); restaura ao sair. A lista de costuras e a tabela do plano da Fase 1."""
     import esteira as E
     import google.genai as G
-    assert modo in ("gravar", "tocar")
+    assert modo in ("gravar", "tocar", "completar")
     orig = {n: getattr(E, n) for n in _COSTURAS}
     orig_client, orig_sess = G.Client, E.requests.Session
-    tocar = modo == "tocar"
+    tocar = modo in ("tocar", "completar")
 
     def _listar_gtos(pg):
         if tocar:
