@@ -144,6 +144,19 @@ def _baixar_do_proradis(guias, dest, log):
     return out
 
 
+def gtos_faturadas_pelo_robo(gtos) -> set:
+    """GTOs em que o ROBO anexou documento (auto/justificativa faturada) alguma vez."""
+    gtos = [str(g) for g in (gtos or []) if g]
+    if not gtos:
+        return set()
+    from sqlalchemy import text
+    sql = """select distinct i.gto from execucao_itens i join execucoes x on x.id = i.execucao_id
+             where i.gto = any(:g) and x.dry_run = false and i.faturado
+               and i.categoria in ('auto','justificativa')"""
+    with db.engine.connect() as c:
+        return {str(r[0]) for r in c.execute(text(sql), {"g": gtos})}
+
+
 def rodada(incompletas, log=None):
     """Completa as guias incompletas que ainda estao no prazo. (completadas, erros).
 
@@ -155,6 +168,15 @@ def rodada(incompletas, log=None):
     from extrator_odontoprev import (login_odonto, abrir_consultar_gtos,
                                      consultar_periodo)
     _log = log or (lambda m: None)
+    # Regra do dono (15/10): guia que OUTRA pessoa (a clinica) comecou a anexar e
+    # deixou pela metade NAO e completada pelo robo — so vira pendencia. O robo so
+    # completa guia que ELE MESMO faturou e ficou incompleta por falha nossa.
+    _robo = gtos_faturadas_pelo_robo([g.get("gto") for g in (incompletas or [])])
+    _de_outros = [g for g in (incompletas or []) if str(g.get("gto")) not in _robo]
+    if _de_outros:
+        _log(f"[completar] {len(_de_outros)} guia(s) anexada(s) por outra pessoa — "
+             f"nao completo (fica a pendencia)")
+    incompletas = [g for g in (incompletas or []) if str(g.get("gto")) in _robo]
     alvos = [g for g in (incompletas or []) if no_prazo(g.get("dia", ""))]
     fora = len(incompletas or []) - len(alvos)
     if fora:
