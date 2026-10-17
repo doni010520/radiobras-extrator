@@ -36,7 +36,8 @@ from esteira import (_escolher_solicitacao, _ler_lote_com_resgate, _marcar_orige
 from fitz_seguro import com_fitz
 
 MAX_CANDIDATOS = 15
-_LEVANTAMENTO = re.compile(r"LEVANTAMENT|SERIOGRAF|BOCA\s+TODA|TODOS\s+OS\s+DENTES|"
+# "periapical DE BOCA completa" é o texto impresso mais comum (Lunare, Dr. Thiago — set/26)
+_LEVANTAMENTO = re.compile(r"LEVANTAMENT|SERIOGRAF|BOCA\s+TODA|BOCA\s+COMPLET|TODOS\s+OS\s+DENTES|"
                            r"PERIAPICA\w*\s+COMPLET|COMPLET\w*\s+PERIAPICA", re.I)
 
 # alvo de cobertura por código (só os que exigem pedido)
