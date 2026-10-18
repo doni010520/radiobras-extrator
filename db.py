@@ -1061,6 +1061,11 @@ def salvar_execucao(resumo: dict, log_linhas=None) -> int:
 # A ordem importa: o primeiro padrão que casar vence, então o mais específico vem
 # antes. Cada grupo carrega a AÇÃO — quem lê não precisa deduzir o que fazer.
 _GRUPOS_PENDENCIA = [
+    # DOC COMPLETA SEM FOLHA/TRACADO (18/10): 3 meses de demonstrativo — sem fotos,
+    # tele ou traçado/análise a glosa sobe de 7,6% para 29%.
+    ("doc_incompleta", r"documenta[çc][ãa]o ortod[ôo]ntica completa INCOMPLETA", "Radiologista",
+     "Gerar no PRORADIS o que falta (fotos, folha da tele/panorâmica ou traçado com análise); "
+     "o robô anexa sozinho na próxima rodada."),
     # DATA DO PEDIDO AJUSTADA E NAO CONFERIU (14/10): o robo reescreveu a data e a
     # releitura nao achou UMA data legivel igual a do exame -> nao sobe.
     ("data_ilegivel", r"data il[eé]g[ií]vel ou duplicada", "Conferência",
@@ -1814,6 +1819,7 @@ _TITULO_GRUPO = {
     "sem_imagem": "Laudo pronto, mas sem a folha de imagens",
     "sem_laudo_do_exame": "Falta o laudo de um dos exames da guia",
     "outro_dentista": "Pedido assinado por outro dentista",
+    "doc_incompleta": "Documentação completa sem fotos/tele/traçado",
     "exame_nao_registrado": "Exame autorizado não registrado no PRORADIS",
     "data_ilegivel": "Data do pedido ilegível após ajuste",
     "dentista_nao_confirmado": "Pedido antigo sem dentista confirmado",

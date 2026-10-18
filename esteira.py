@@ -4483,6 +4483,32 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                     _falta_cob = (_exames_sem_laudo(_exames_da_guia, nomes,
                                                     apenas_esperados=True)
                                   | _exames_sem_laudo_conteudo(_exames_da_guia, arquivos))
+                # DOC COMPLETA POR CONTEUDO (18/10): folhas e traçado, não só laudos.
+                _falta_doc = []
+                if not _falta_cob and not _dec_it.get("dispensa_laudo"):
+                    import doc_completa as _dc
+                    if _dc.aplica(_exames_da_guia):
+                        try:
+                            _falta_doc = _dc.faltas(
+                                _exames_da_guia, arquivos,
+                                lambda fs: _dc.classificar_folhas_gemini(gem, fs))
+                        except Exception as _e_dc:
+                            # leitura falhou = falha nossa (retry), nunca fatura às cegas
+                            item["anexado"] = "ERRO"
+                            item["anexar_erro"] = (f"anexação falhou: a conferência da documentação "
+                                                   f"ortodôntica não conseguiu ler as folhas "
+                                                   f"({str(_e_dc)[:100]}) — o robô tenta de novo")
+                            _t(f"[ANEX{wid}] GTO {item['gto']} conferência doc completa falhou: {str(_e_dc)[:90]}")
+                            with _lock:
+                                resultados.append(item)
+                            continue
+                if _falta_doc:
+                    item["anexado"] = "ERRO"
+                    item["anexar_erro"] = _dc.mensagem(_falta_doc)
+                    _t(f"[ANEX{wid}] GTO {item['gto']} NÃO ANEXADA: doc completa sem {_falta_doc}")
+                    with _lock:
+                        resultados.append(item)
+                    continue
                 if _entregavel_faltando(_dec_it.get("dispensa_laudo"), nomes) or _falta_cob:
                     item["anexado"] = "ERRO"
                     # A MENSAGEM PRECISA DIZER *QUAIS* EXAMES. "Conferir se o exame e
