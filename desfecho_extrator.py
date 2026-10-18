@@ -236,6 +236,92 @@ def _resolver_pagamento(lote_r, consultar_um) -> dict:
     return out
 
 
+# ── Demonstrativo POR PERÍODO via API (18/10) ────────────────────────────────
+# A tela por guia nunca gravou um PAGO sequer (48 mil linhas, todas AGUARDANDO ou
+# GLOSADA). A própria tela do portal chama esta API, que devolve o MÊS de pagamento
+# inteiro: cada guia, cada evento, liberado/glosado/data/código e a observação do
+# auditor. Mês corrente responde "período inválido" (ainda não fechou).
+_API_FIN = "https://dentista-credenciado.odontoprev.com.br/v1/financeiro/pesquisar-periodo"
+
+
+def ler_periodo(j: dict) -> dict:
+    """JSON do pesquisar-periodo -> {gto: demo} no formato de classificar_desfecho."""
+    out = {}
+    for dent in (j or {}).get("pesquisaFichasDentista") or []:
+        for fi in dent.get("fichasConsolidadas") or []:
+            g = str(fi.get("nrFicha"))
+            evs = [e for e in fi.get("eventosValores") or [] if e.get("codStatusEvento") != "CANCELADO"]
+            if not evs:
+                continue
+            lib = round(sum(e.get("valorLiberado") or 0 for e in evs), 2)
+            glo = [e for e in evs if (e.get("valorLiberado") or 0) <= 0]
+            datas = sorted(e["dataPagamento"] for e in evs if e.get("dataPagamento"))
+            gd = ((glo[0].get("pagamentoGlosadoDTO") or {}).get("glosa") or {}) if glo else {}
+            d = out.setdefault(g, {"tem_dados": True, "liberado": 0.0, "glosado": 0.0, "bruto": 0.0,
+                                   "pago": False, "data_repasse": None, "glosa_cod": "", "glosa_motivo": "",
+                                   "negado": False})
+            d["liberado"] = round(d["liberado"] + lib, 2)
+            d["glosado"] = round(d["glosado"] + sum(e.get("valorEventoGlosa") or 0 for e in glo), 2)
+            # evento NEGADO costuma vir com valor 0 (informado 0): o valor não prova a
+            # glosa, o status do evento prova
+            d["negado"] = d["negado"] or bool(glo)
+            d["bruto"] = round(d["liberado"] + d["glosado"], 2)
+            if datas:
+                d["pago"], d["data_repasse"] = d["liberado"] > 0, datetime.strptime(
+                    datas[-1], "%Y-%m-%d").strftime("%d/%m/%Y")
+            if gd and not d["glosa_cod"]:
+                d["glosa_cod"], d["glosa_motivo"] = str(gd.get("codigo") or ""), gd.get("descricao") or ""
+    return out
+
+
+def demo_por_periodo(pw, conta, desde: date, hoje: date, log=print) -> dict:
+    """{gto: demo} de todos os meses de pagamento de `desde` até o mês passado."""
+    import requests
+    tok = {"v": None}
+    b, c, page = login_odonto(pw, conta, db.get_portal_senha(conta))
+    try:
+        page.on("request", lambda r: tok.__setitem__("v", r.headers.get("authorization"))
+                if "dentista-credenciado" in r.url
+                and (r.headers.get("authorization") or "").lower().startswith("bearer") else None)
+        page.goto("https://credenciado.odontoprev.com.br/portal/demonstrativoPagamento")
+        page.wait_for_timeout(6000)
+    finally:
+        try:
+            b.close()
+        except Exception:
+            pass
+    if not tok["v"]:
+        raise RuntimeError("sem token do portal financeiro")
+    s = requests.Session()
+    s.headers.update({"Authorization": tok["v"], "User-Agent": "Mozilla/5.0",
+                      "Origin": "https://credenciado.odontoprev.com.br",
+                      "Referer": "https://credenciado.odontoprev.com.br/"})
+    out = {}
+    y, m = desde.year, desde.month
+    while (y, m) < (hoje.year, hoje.month):
+        prox = date(y + (m == 12), 1 if m == 12 else m + 1, 1)
+        fim = date.fromordinal(prox.toordinal() - 1)
+        r = s.get(_API_FIN, params={"codDentistasSelecionados": conta,
+                                    "dataFinal": fim.strftime("%Y-%m-%d")}, timeout=180)
+        if r.ok:
+            for g, d in ler_periodo(r.json()).items():
+                if g in out:     # guia em dois meses (recurso pago depois): soma
+                    a = out[g]
+                    a["liberado"] = round(a["liberado"] + d["liberado"], 2)
+                    a["glosado"] = d["glosado"]          # o mês mais novo manda na glosa
+                    a["negado"] = d["negado"]
+                    a["bruto"] = round(a["liberado"] + a["glosado"], 2)
+                    a["pago"] = a["pago"] or d["pago"]
+                    a["data_repasse"] = d["data_repasse"] or a["data_repasse"]
+                else:
+                    out[g] = d
+            log(f"[{conta}] demonstrativo {fim:%m/%Y}: {len(out)} guia(s) acumuladas")
+        else:
+            log(f"[{conta}] demonstrativo {fim:%m/%Y}: HTTP {r.status_code}")
+        y, m = prox.year, prox.month
+    return out
+
+
 def _como_recursar(glosa_cod):
     return COMO_RECURSAR.get(glosa_cod, COMO_RECURSAR_GENERICO)
 
@@ -275,7 +361,25 @@ def extrair_desfechos_conta(pw, conta, unidade, guias, dia_str, hoje=None, log=p
                 "data_repasse": (demo or {}).get("data_repasse")}
 
     itens = []
+    api_ok = False
     if checar_demo:
+        try:
+            datas = [_parse_br(g.get("dia_faturado")) for g in guias]
+            desde = min([d for d in datas if d] or [hoje.replace(day=1)])
+            demos = demo_por_periodo(pw, conta, desde.replace(day=1), hoje, log=log)
+            # evento negado pelo demonstrativo é GLOSA mesmo sem valor e sem estar no
+            # relatorio: o motivo vem da propria API
+            for gt, d in demos.items():
+                if d.get("negado") and gt not in glosa_por_ficha:
+                    glosa_por_ficha[gt] = {"glosa_cod": d.get("glosa_cod", ""),
+                                           "glosa_motivo": d.get("glosa_motivo", "")}
+            itens = [_mk(g, demos.get(str(g["gto"]))) for g in guias]
+            api_ok = True
+            log(f"[{unidade}] demonstrativo por período: {sum(1 for i in itens if i['status'] == 'PAGA')} "
+                f"paga(s) de {len(itens)}")
+        except Exception as e:
+            log(f"[{unidade}] demonstrativo por período falhou ({str(e)[:80]}) — usando a tela por guia")
+    if checar_demo and not api_ok:
         b, c, page = login_odonto(pw, conta, senha)
         try:
             _abrir_topo(page, "Financeiro"); _clicar_subitem(page, "DEMONSTRATIVO")
@@ -303,7 +407,7 @@ def extrair_desfechos_conta(pw, conta, unidade, guias, dia_str, hoje=None, log=p
                 b.close()
             except Exception:
                 pass
-    else:
+    elif not checar_demo:
         # MODO RÁPIDO: sem Demonstrativo (repasse ainda não processou). Classifica só
         # GLOSADA (relatório) x AGUARDANDO. O update diário completo preenche o pago.
         itens = [_mk(g, None) for g in guias]
