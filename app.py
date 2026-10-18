@@ -672,18 +672,53 @@ def _enviar_alertas_sla():
     _send_email(assunto, txt, html)
 
 
+# VIGIA DO CRON (18/10): a rodada das 17h de 15/10 travou no meio e o robô ficou
+# 2 dias sem faturar em silêncio — o agendador chamava a rodada SINCRONAMENTE e a
+# trava "já em execução" barrava todas as seguintes. Agora a rodada roda em thread
+# própria, guarda quando começou, e passado o limite a trava é liberada (com aviso).
+# (a definição abaixo foi apagada por engano em 183fc5f, 15/10 — o cron morreu em
+# NameError engolido pelo agendador até 18/10; test_nomes_definidos.py agora pega isso)
+_faturar_cron_running = threading.Event()
+_CRON_TRAVADO_S = int(os.environ.get("CRON_TRAVADO_H", "3")) * 3600
+_cron_estado = {"inicio": None, "geracao": 0, "avisado": None}
+
+
+def _cron_travado(agora_mono, inicio_mono, limite_s) -> bool:
+    return inicio_mono is not None and (agora_mono - inicio_mono) > limite_s
+
+
 def _faturar_cron_rodar():
     """Roda D-4 nas 3 unidades + reprocessa os dias com pendência aberta dentro do
     prazo. Faturamento REAL (anexa). Idempotente: já faturado é pulado; pendência
     resolvida no PRORADIS é faturada agora e fecha sozinha."""
     if _faturar_cron_running.is_set():
-        app.logger.info("Cron faturar já em execução — pulando disparo.")
-        return
+        ini = _cron_estado["inicio"]
+        if not _cron_travado(time.monotonic(), ini, _CRON_TRAVADO_S):
+            app.logger.info("Cron faturar já em execução — pulando disparo.")
+            return
+        horas = (time.monotonic() - ini) / 3600
+        app.logger.error("Cron faturar TRAVADO há %.1fh — liberando a trava.", horas)
+        if _cron_estado["avisado"] != ini:
+            _cron_estado["avisado"] = ini
+            try:
+                import notificador
+                notificador.enviar_whatsapp(
+                    f"⚠️ *RadioBras — rodada automática travada*\n\nA rodada começou há "
+                    f"{horas:.0f}h e não terminou. Liberei para a próxima rodar. "
+                    f"Não precisa fazer nada; o Claude investiga.")
+            except Exception:
+                pass
     _faturar_cron_running.set()
+    _cron_estado["geracao"] += 1
+    minha = _cron_estado["geracao"]
+    _cron_estado["inicio"] = time.monotonic()
     try:
         _faturar_cron_body()
     finally:
-        _faturar_cron_running.clear()
+        # uma rodada travada que acordar depois NÃO pode soltar a trava da atual
+        if _cron_estado["geracao"] == minha:
+            _faturar_cron_running.clear()
+            _cron_estado["inicio"] = None
 
 
 # Tempo máximo que uma reserva vale sem ser liberada. É rede de segurança para o
@@ -931,7 +966,8 @@ def _faturar_scheduler():
             _slot = _slot_devido(agora.replace(tzinfo=None), _last, _horas_do_cron())
             if _slot is not None:
                 app.logger.info("Cron faturar iniciando (janela %sh)…", _slot)
-                _faturar_cron_rodar()
+                # thread própria: o agendador segue vivo e o vigia consegue agir
+                threading.Thread(target=_faturar_cron_rodar, daemon=True).start()
         except Exception as e:
             app.logger.error("Faturar scheduler: %s", e)
         _glosa_stop.wait(1800)  # re-checa a cada 30 min
@@ -2882,6 +2918,8 @@ def api_diag():
             "cron_ligado": os.environ.get("FATURAR_CRON", "0") == "1",
             "cron_ultima": ult.isoformat() if ult else None,
             "cron_rodou_hoje": _faturar_rodou_hoje(),
+            "cron_rodando_ha_min": (round((time.monotonic() - _cron_estado["inicio"]) / 60)
+                                    if _cron_estado["inicio"] else None),
             "prazo_dias": _prazo_dias(),
             "pendencias_abertas": db.contar_pendencias_abertas(),
             "alerta_sla_ligado": os.environ.get("ALERTA_SLA", "1") != "0",
