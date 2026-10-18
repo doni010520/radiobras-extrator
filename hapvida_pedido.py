@@ -130,6 +130,56 @@ def _data_da_leitura(a) -> _dt.date | None:
     return _parse_br_date(a.get("data_solicitacao")) or _data_upload(a.get("arquivo_origem"))
 
 
+# ── nome abreviado no pedido manuscrito (decisão do dono 17/10) ──────────────
+# Histórico set/26 Centro: 22 de 59 pendências eram "nome abreviado/ilegível" em
+# pedido escrito à mão ("Jorge Pimentel" p/ JORGE PIMENTEL DOS SANTOS) — a clínica
+# anexou e a Hapvida PAGOU. Aceita SÓ com as três provas juntas: 1º nome + 1
+# sobrenome batem (tolerando 1-2 letras de grafia), pedido de até 30 dias antes do
+# exame e o exame pedido cobrindo a guia. Outro nome (MATHEUS na guia da DEBORA)
+# continua recusado.
+NOME_PARCIAL_MAX_DIAS = 30
+_PARTICULAS = {"DE", "DA", "DO", "DOS", "DAS", "E"}
+
+
+def _tok_parecido(a: str, b: str) -> bool:
+    from difflib import SequenceMatcher
+    return a == b or (min(len(a), len(b)) >= 4 and SequenceMatcher(None, a, b).ratio() >= 0.8)
+
+
+def nome_parcial(lido, nome_guia) -> bool:
+    """1º nome igual (ou quase) E pelo menos um sobrenome do lido presente no da guia."""
+    tl = [t for t in re.sub(r"[^A-Z ]", " ", _sem_acento(lido).upper()).split() if t not in _PARTICULAS]
+    tg = [t for t in re.sub(r"[^A-Z ]", " ", _sem_acento(nome_guia).upper()).split() if t not in _PARTICULAS]
+    if len(tl) < 2 or len(tg) < 2 or not _tok_parecido(tl[0], tg[0]):
+        return False
+    return any(_tok_parecido(s, t) for s in tl[1:] for t in tg[1:])
+
+
+_DATA_PROMPT = (
+    "Leia SÓ a data em que este pedido de exame foi emitido/assinado (perto da assinatura, do carimbo "
+    "ou em 'Salvador, __ de __ de ____'). Formato brasileiro: DIA primeiro, depois MÊS, depois ANO com "
+    "4 dígitos; ano escrito com 2 dígitos ('26') vira 2026. Olhe cada algarismo do ano com atenção "
+    "('6' manuscrito parece '0'). Não invente: sem data legível, devolva vazio. "
+    'Responda JSON {"data": "DD/MM/AAAA"}')
+
+
+def _reler_data(gem, cand) -> _dt.date | None:
+    """2ª leitura SÓ da data, quando a 1ª deu pedido vencido (FABIO 08/09/2026 lido
+    2020; MARIA DA GLORIA '04 de 09' lido 09/04)."""
+    import json as _json
+    from google.genai import types
+    from esteira import _GEM_MODEL, _gem_cfg, _contar_tokens
+    try:
+        fn, mime, blob, _ = cand
+        r = gem.models.generate_content(model=_GEM_MODEL, config=_gem_cfg(),
+                                        contents=[types.Part.from_bytes(data=blob, mime_type=mime), _DATA_PROMPT])
+        _contar_tokens(r)
+        t = re.sub(r"^```json|^```|```$", "", (r.text or "").strip(), flags=re.M).strip()
+        return _parse_br_date((_json.loads(t) or {}).get("data"))
+    except Exception:
+        return None
+
+
 def _para_portal(fn: str, mime: str, blob: bytes, destino: str, i: int) -> str:
     """Grava o pedido num formato que o portal aceita. PDF de 1 página -> PNG."""
     if mime == "application/pdf":
@@ -186,7 +236,7 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
     data, _ = _ler_lote_com_resgate(gem, cands, contents)   # erro fatal sobe -> 'erro'
     leituras = (data.get("anexos") if isinstance(data, dict) else data) or []
 
-    def _escolher():
+    def _escolher(nome_ok=False):
         for x in leituras:                        # GTO escaneada nunca é pedido
             if isinstance(x, dict) and x.get("tipo") == "solicitacao" and leitura_de_guia(x):
                 x["tipo"] = "outro"
@@ -194,7 +244,8 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
         marcar_levantamento(leituras)
         det = {}
         r = _escolher_solicitacao(leituras, nome, alvo, len(cands), "", det, "",
-                                  prontuario_confirmado=False, nome_confirmado=nome_confirmado)
+                                  prontuario_confirmado=False,
+                                  nome_confirmado=nome_confirmado or nome_ok)
         return r + (det,)
 
     idx, a, motivo, det = _escolher()
@@ -203,6 +254,16 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
             _reler_exames_focado(gem, cands, leituras, nome)
         _reler_nao_classificados(gem, cands, leituras, nome_gto=nome)
         idx, a, motivo, det = _escolher()
+
+    parcial = False
+    if idx is None and motivo == "PACIENTE_INCOMPATIVEL" and any(
+            isinstance(x, dict) and x.get("tipo") == "solicitacao"
+            and nome_parcial(x.get("paciente_lido") or "", nome) for x in leituras):
+        i2, a2, m2, d2 = _escolher(nome_ok=True)
+        esc2 = [x for x in leituras if isinstance(x, dict) and x.get("idx") in (d2.get("idxs") or [i2])]
+        # o escolhido sem a trava do nome TEM de ser o pedido de nome parcial — nunca o de outra pessoa
+        if i2 is not None and esc2 and all(nome_parcial(x.get("paciente_lido") or "", nome) for x in esc2):
+            idx, a, motivo, det, parcial = i2, a2, m2, d2, True
 
     if idx is None:
         if motivo == "NAO_COBRE":
@@ -238,6 +299,21 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
         # à mão saiu 26/10/2009). Pedido antigo de verdade (ALICE, 2023/2025) fica
         # dentro dos 5 anos e continua vencido.
         d_ped = d_up
+    if d_ped and (d_exame - d_ped).days > max_dias():
+        ci = a.get("idx") if isinstance(a.get("idx"), int) else idx
+        d2 = _reler_data(gem, cands[ci]) if 0 <= ci < len(cands) else None
+        if d2 and d2 <= d_exame + _dt.timedelta(days=1) and (d_exame - d2).days <= max_dias():
+            det["data_relida"] = f"{d_ped:%d/%m/%Y} -> {d2:%d/%m/%Y}"
+            d_ped = d2
+    if parcial:
+        d_papel = _parse_br_date(a.get("data_solicitacao"))
+        if det.get("data_relida"):
+            d_papel = d_ped
+        if not (d_papel and d_papel <= d_exame + _dt.timedelta(days=1)
+                and (d_exame - d_papel).days <= NOME_PARCIAL_MAX_DIAS):
+            txt, resp = _MOTIVOS["PACIENTE_INCOMPATIVEL"]
+            return Pedido(motivo=txt, responsavel=resp, detalhe=det)
+        det["nome_parcial"] = a.get("paciente_lido")
     if d_ped and (d_exame - d_ped).days > max_dias():
         return Pedido(motivo=(f"Pedido do dentista com data vencida: o mais recente é de {d_ped:%d/%m/%Y}, "
                               f"mais de {max_dias()} dias antes do exame. Falta o pedido atual."),

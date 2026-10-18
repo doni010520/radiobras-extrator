@@ -121,7 +121,11 @@ def decidir_guia(guia: dict, ja_anexada: bool, paciente: dict | None,
         return Decisao(CODIGO_DESCONHECIDO, responsavel="Conferência",
                        motivo=f"Exame fora da regra do robô ({', '.join(desconhecidos)}): conferir manualmente.")
 
-    pac = paciente or {"nome": guia.get("nome"), "nascimento": ""}
+    pac = dict(paciente or {"nascimento": ""})
+    if not (pac.get("nome") or "").strip():
+        # tela do paciente voltou sem nome (MAGNOLIA/FLAVIA set/26): vale o nome da lista
+        # do dia — truncado, mas nomes_compativeis aceita o truncado contra o completo
+        pac["nome"] = guia.get("nome")
     if not proradis or not proradis.get("encontrado"):
         return Decisao(NAO_ACHADO, responsavel="Cadastro",
                        motivo=f"Exame de {pac.get('nome')} do dia {guia.get('dia')} não foi encontrado no PRORADIS.")
