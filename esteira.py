@@ -4492,6 +4492,9 @@ def rodar_esteira(data, m_download=6, n_desc=3, k_leitura=5, log=None, gemini_ke
                             _falta_doc = _dc.faltas(
                                 _exames_da_guia, arquivos,
                                 lambda fs: _dc.classificar_folhas_gemini(gem, fs))
+                            if not _falta_doc:
+                                _t(f"[ANEX{wid}] GTO {item['gto']} doc completa conferida: "
+                                   f"pan, tele, traçado/análise e fotos presentes")
                         except Exception as _e_dc:
                             # leitura falhou = falha nossa (retry), nunca fatura às cegas
                             item["anexado"] = "ERRO"
