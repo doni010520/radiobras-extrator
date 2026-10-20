@@ -299,8 +299,8 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
         # à mão saiu 26/10/2009). Pedido antigo de verdade (ALICE, 2023/2025) fica
         # dentro dos 5 anos e continua vencido.
         d_ped = d_up
+    ci = a.get("idx") if isinstance(a.get("idx"), int) else idx
     if d_ped and (d_exame - d_ped).days > max_dias():
-        ci = a.get("idx") if isinstance(a.get("idx"), int) else idx
         d2 = _reler_data(gem, cands[ci]) if 0 <= ci < len(cands) else None
         if d2 and d2 <= d_exame + _dt.timedelta(days=1) and (d_exame - d2).days <= max_dias():
             det["data_relida"] = f"{d_ped:%d/%m/%Y} -> {d2:%d/%m/%Y}"
@@ -309,8 +309,17 @@ def escolher_pedido(gem, arquivos: list, nome: str, codigos, dia: str, destino: 
         d_papel = _parse_br_date(a.get("data_solicitacao"))
         if det.get("data_relida"):
             d_papel = d_ped
-        if not (d_papel and d_papel <= d_exame + _dt.timedelta(days=1)
-                and (d_exame - d_papel).days <= NOME_PARCIAL_MAX_DIAS):
+
+        def _recente(d):
+            return bool(d and d <= d_exame + _dt.timedelta(days=1)
+                        and (d_exame - d).days <= NOME_PARCIAL_MAX_DIAS)
+        if not _recente(d_papel) and not det.get("data_relida") and 0 <= ci < len(cands):
+            # JEFERSON 08/09: '21/08/26' manuscrito lido '21/08/96' -> relê só a data
+            d2 = _reler_data(gem, cands[ci])
+            if _recente(d2):
+                det["data_relida"] = f"{d_papel:%d/%m/%Y} -> {d2:%d/%m/%Y}" if d_papel else f"-> {d2:%d/%m/%Y}"
+                d_papel = d_ped = d2
+        if not _recente(d_papel):
             txt, resp = _MOTIVOS["PACIENTE_INCOMPATIVEL"]
             return Pedido(motivo=txt, responsavel=resp, detalhe=det)
         det["nome_parcial"] = a.get("paciente_lido")
